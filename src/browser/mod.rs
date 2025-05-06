@@ -1,4 +1,7 @@
-use color_eyre::Result;
+use eyre::{
+    Context as _,
+    Result,
+};
 use futures::StreamExt as _;
 use playwright::{
     api::{
@@ -7,11 +10,12 @@ use playwright::{
     },
     Playwright,
 };
+use url::Url;
 
 pub struct WebBrowser {
     _playwright: Playwright,
-    pub browser: playwright::api::Browser,
-    pub context: playwright::api::BrowserContext,
+    browser: playwright::api::Browser,
+    context: playwright::api::BrowserContext,
 }
 
 impl WebBrowser {
@@ -20,14 +24,16 @@ impl WebBrowser {
         url: impl AsRef<str>,
         use_fake_media: bool,
         fake_video_file: Option<String>,
-    ) -> Result<(), playwright::Error> {
-        let browser = Self::start_browser(cookie.as_ref(), use_fake_media, fake_video_file.clone()).await?;
-        let page = browser.visit_hyper(url.as_ref()).await?;
+    ) -> Result<()> {
+        let url = Url::parse(url.as_ref()).context("failed to parse url")?;
+        let browser = Self::start_browser(&url, cookie, use_fake_media, fake_video_file).await?;
+        let page = browser.visit_hyper(url).await?;
         browser.run_until_page_close(page).await?;
         Ok(())
     }
 
     pub async fn start_browser(
+        url: &Url,
         cookie: impl AsRef<str>,
         use_fake_media: bool,
         fake_video_file: Option<String>,
@@ -69,8 +75,11 @@ impl WebBrowser {
             .build()
             .await?;
 
-        let cookie = Cookie::with_domain_path("hyper_session", cookie.as_ref(), "latest.dev.hyper.video", "/");
-        context.add_cookies(&[cookie]).await?;
+        let cookie = cookie.as_ref();
+        if !cookie.is_empty() {
+            let cookie = Cookie::with_domain_path("hyper_session", cookie, url.domain().unwrap_or(""), "/");
+            context.add_cookies(&[cookie]).await?;
+        }
 
         Ok(Self {
             _playwright: playwright,
@@ -79,6 +88,7 @@ impl WebBrowser {
         })
     }
 
+    #[expect(unused)]
     pub async fn close(self) -> Result<(), playwright::Error> {
         self.context.close().await?;
         self.browser.close().await?;
@@ -90,13 +100,7 @@ impl WebBrowser {
 
         info!("page created");
 
-        // page.goto_builder("https://latest.dev.hyper.video/KX7-0QQ-95Y")
-        //     .goto()
-        //     .await?;
         page.goto_builder(url.as_ref()).goto().await?;
-
-        // info!("page loaded");
-        // page.wait_for_timeout(5000.0).await;
 
         info!("joining...");
         page.click_builder(r#"button[type="submit"]"#).click().await?;

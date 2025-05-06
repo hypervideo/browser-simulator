@@ -1,26 +1,50 @@
 [package]
 name = "hyper-video-client-simulator"
 version = "0.1.0"
-authors = ["Hyper <info@hyper.video>"]
+authors = ["hyper.video <info@hyper.video>"]
 edition = "2021"
 repository = "https://github.com/hypervideo/hyper.video"
 
 [dependencies]
+better-panic = "0.3.0"
 chrono = "0.4.40"
-clap = { version = "4.5.37", features = ["derive", "env"] }
+clap = { version = "4.5.37", features = ["derive", "env", "cargo", "string"] }
 color-eyre = "0.6.3"
-crossterm = "0.28.1"
-dirs = "6.0.0"
+config = { version = "0.14.0", default-features = false, features = ["yaml", "convert-case", "async"] }
+crossterm = { version = "0.28.1", features = ["serde", "event-stream"] }
+derive_more = { version = "2.0.1", default-features = false, features = ["deref", "deref_mut", "debug", "display"] }
+directories = "5.0.1"
 eyre = "0.6.12"
 futures = "0.3.31"
+human-panic = "2.0.2"
+lazy_static = "1.5.0"
+libc = "0.2.161"
 playwright = "0.0.20"
-ratatui = "0.29.0"
+pretty_assertions = "1.4.1"
+ratatui = { version = "0.29.0", features = ["serde", "macros"] }
 scopeguard = "1.2.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { version = "1.0.211", features = ["derive"] }
+serde_json = "1.0.132"
+serde_yml = "0.0.12"
+signal-hook = "0.3.17"
+strip-ansi-escapes = "0.2.0"
+strum = { version = "0.26.3", features = ["derive"] }
 tokio = { version = "1.44.2", default-features = false, features = ["macros", "rt-multi-thread", "sync"] }
-tracing = { version = "0.1.41" }
-tracing-appender = "0.2"
+tokio-util = "0.7.12"
+tracing = "0.1.41"
 tracing-error = "0.2.0"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "registry", "fmt"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "serde"] }
+tui-input = "0.12.0"
+url = "2.5.4"
 which = "7.0.3"
+
+[package.metadata.cargo-udeps.ignore]
+normal = [
+  "human-panic",
+  # Used in tests
+  "pretty_assertions",
+]
+development = [
+  # Used conditionally in development mode.
+  "better-panic",
+]

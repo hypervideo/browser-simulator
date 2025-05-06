@@ -1,11 +1,16 @@
 #[macro_use]
-extern crate scopeguard;
-
-#[macro_use]
 extern crate tracing;
 
+mod action;
 mod app;
-pub mod args;
-pub mod browser;
-pub mod config;
-pub mod tui;
+mod browser;
+mod components;
+mod config;
+mod errors;
+mod logging;
+mod tui;
+
+pub use app::App;
+pub use config::Args;
+pub use errors::init as init_errors;
+pub use logging::init as init_logging;

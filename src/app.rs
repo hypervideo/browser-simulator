@@ -1,468 +1,197 @@
 use crate::{
-    browser::WebBrowser,
+    action::Action,
+    components::{
+        browser_start::BrowserStart,
+        fps::FpsCounter,
+        modal::{
+            TextInputModal,
+            TextModalAction,
+        },
+        Component,
+    },
     config::Config,
+    tui::{
+        Event,
+        Tui,
+    },
 };
 use color_eyre::Result;
-use crossterm::event::{
-    self,
-    Event,
+use crossterm::event::KeyEvent;
+use ratatui::prelude::Rect;
+use serde::{
+    Deserialize,
+    Serialize,
 };
-use ratatui::{
-    crossterm::event::KeyCode,
-    layout::{
-        Constraint,
-        Direction,
-        Layout,
-        Rect,
-    },
-    style::{
-        Color,
-        Modifier,
-        Style,
-        Stylize as _,
-    },
-    widgets::{
-        Block,
-        Clear,
-        Paragraph,
-    },
-    Frame,
-};
-use std::time::Duration;
+use tokio::sync::mpsc;
 
-#[derive(Debug)]
-pub(crate) struct Model {
+pub struct App {
     config: Config,
-    selected: SelectedField,
-    editing: Option<EditingState>,
-    pub(crate) running_state: RunningState,
+    components: Vec<Box<dyn Component>>,
+    should_quit: bool,
+    should_suspend: bool,
+    last_tick_key_events: Vec<KeyEvent>,
+    mode: Mode,
 }
 
-impl Model {
-    // Accept the prepared config object
-    pub(crate) fn new(config: Config) -> Self {
-        Self {
-            config,
-            selected: Default::default(),
-            editing: None,
-            running_state: Default::default(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct EditingState {
-    field: SelectedField,
-    buffer: String,
-}
-
-impl EditingState {
-    fn title(&self) -> &'static str {
-        match self.field {
-            SelectedField::Url => "Edit URL",
-            SelectedField::Cookie => "Edit Cookie",
-            SelectedField::FakeVideoFile => "Edit Fake Video File", // new
-            SelectedField::Start | SelectedField::FakeMedia | SelectedField::FakeVideo => "",
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-enum SelectedField {
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Mode {
     #[default]
-    Url,
-    Cookie,
-    FakeMedia,
-    FakeVideo,
-    FakeVideoFile,
-    Start,
+    BrowserStart,
+    TextInputModal,
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) enum RunningState {
-    #[default]
-    Running,
-    Done,
-}
+type ActionSender = mpsc::UnboundedSender<Action>;
+type ActionReceiver = mpsc::UnboundedReceiver<Action>;
 
-#[derive(PartialEq)]
-pub(crate) enum Message {
-    Quit,
-    MoveUp,
-    MoveDown,
-    StartEdit,
-    CancelEdit,
-    ConfirmEdit,
-    EditChar(char),
-    EditBackspace,
-    DeleteCookie,
-    StartBrowser,
-    ToggleFakeMedia,
-    ToggleFakeVideo,
-    DeleteFakeVideoFile,
-}
-
-pub(crate) fn view(model: &mut Model, frame: &mut Frame) {
-    // Dynamically create constraints based on UI elements
-    let mut constraints = vec![
-        Constraint::Length(3), // URL
-        Constraint::Length(3), // Cookie
-        Constraint::Length(3), // Fake-media checkbox
-        Constraint::Length(3), // Fake-video checkbox
-    ];
-    if model.config.fake_video_file.is_some() {
-        constraints.push(Constraint::Length(3)); // Fake-video-file editor
+impl App {
+    pub fn new(args: crate::Args) -> Result<Self> {
+        Ok(Self {
+            components: vec![Box::new(BrowserStart::new()), Box::new(FpsCounter::default())],
+            should_quit: false,
+            should_suspend: false,
+            config: Config::new(args)?,
+            last_tick_key_events: Vec::new(),
+            mode: Mode::BrowserStart,
+        })
     }
-    constraints.push(Constraint::Length(1)); // Spacer before Start
-    constraints.push(Constraint::Length(3)); // Start button
 
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints) // Use the dynamic constraints
-        .split(frame.area());
+    pub async fn run(&mut self) -> Result<()> {
+        let mut tui = Tui::new()?
+            // .mouse(true) // uncomment this line to enable mouse support
+            .tick_rate(1.0)
+            .frame_rate(60.0);
+        tui.enter()?;
 
-    let mut current_row_index = 0;
+        let (action_tx, mut action_rx) = mpsc::unbounded_channel();
 
-    // --- URL ---
-    let url = model.config.url.clone();
-    let url_widget =
-        Paragraph::new(url)
-            .block(Block::bordered().title("URL"))
-            .style(if model.selected == SelectedField::Url {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default()
-            });
-    frame.render_widget(url_widget, rows[current_row_index]);
-    current_row_index += 1;
-
-    // Cookie
-    let mut cookie = model.config.cookie.clone();
-    if cookie.is_empty() {
-        cookie = "<empty>".to_string();
-    } else if cookie.len() > 30 {
-        cookie.truncate(30);
-        cookie.push_str("...");
-    }
-    let cookie_widget = Paragraph::new(cookie)
-        .block(Block::bordered().title("Cookie (x to clear)"))
-        .style(if model.selected == SelectedField::Cookie {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        });
-    frame.render_widget(cookie_widget, rows[current_row_index]);
-    current_row_index += 1;
-
-    // --- Fake Media Checkbox ---
-    let fake_media_txt = format!("{} Use fake media", if model.config.fake_media { "[x]" } else { "[ ]" });
-    let fake_media_widget =
-        Paragraph::new(fake_media_txt)
-            .block(Block::bordered())
-            .style(if model.selected == SelectedField::FakeMedia {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default()
-            });
-    frame.render_widget(fake_media_widget, rows[current_row_index]);
-    current_row_index += 1;
-
-    // --- Fake Video Checkbox ---
-    let fake_video_txt = format!(
-        "{} Enable fake video source",
-        if model.config.fake_video_file.is_some() {
-            "[x]"
-        } else {
-            "[ ]"
+        for component in self.components.iter_mut() {
+            component.register_action_handler(action_tx.clone())?;
         }
-    );
-    let fake_video_widget =
-        Paragraph::new(fake_video_txt)
-            .block(Block::bordered())
-            .style(if model.selected == SelectedField::FakeVideo {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default()
-            });
-    frame.render_widget(fake_video_widget, rows[current_row_index]);
-    current_row_index += 1;
+        for component in self.components.iter_mut() {
+            component.register_config_handler(self.config.clone())?;
+        }
+        for component in self.components.iter_mut() {
+            component.init(tui.size()?)?;
+        }
 
-    // --- Fake Video File Input (Conditional) ---
-    if let Some(path) = &model.config.fake_video_file {
-        let display = if path.is_empty() { "<empty>" } else { path };
-        let vf_widget = Paragraph::new(display)
-            .block(Block::bordered().title("Fake video file (x to clear)"))
-            .style(if model.selected == SelectedField::FakeVideoFile {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default()
-            });
-        frame.render_widget(vf_widget, rows[current_row_index]);
-        current_row_index += 1;
-    }
-
-    // Skip the spacer row index
-    current_row_index += 1;
-
-    // --- Start Button ---
-    let start_widget = Paragraph::new("Start Browser")
-        .block(Block::bordered().border_style(Style::new().white()))
-        .style(if model.selected == SelectedField::Start {
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow)
-        } else {
-            Style::default().add_modifier(Modifier::BOLD)
-        });
-    frame.render_widget(start_widget, rows[current_row_index]);
-
-    // popup
-    if let Some(edit) = &model.editing {
-        let area = centered_rect(60, 20, frame.area());
-        frame.render_widget(Clear, area); // nettoie la zone
-        let popup = Paragraph::new(edit.buffer.as_str()).block(Block::bordered().title(edit.title()));
-        frame.render_widget(popup, area);
-    }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
-}
-
-/// Convert Event to Message
-///
-/// We don't need to pass in a `model` to this function in this example
-/// but you might need it as your project evolves
-pub(crate) fn handle_event(model: &Model) -> Result<Option<Message>> {
-    if event::poll(Duration::from_millis(250))? {
-        if let Event::Key(key) = event::read()? {
-            if key.kind == event::KeyEventKind::Press {
-                return Ok(handle_key(model, key));
+        let action_tx = action_tx.clone();
+        loop {
+            self.handle_events(&mut tui, action_tx.clone()).await?;
+            self.handle_actions(&mut tui, action_tx.clone(), &mut action_rx)?;
+            if self.should_suspend {
+                tui.suspend()?;
+                action_tx.send(Action::Resume)?;
+                action_tx.send(Action::ClearScreen)?;
+                // tui.mouse(true);
+                tui.enter()?;
+            } else if self.should_quit {
+                tui.stop()?;
+                break;
             }
         }
+        tui.exit()?;
+
+        Ok(())
     }
-    Ok(None)
-}
 
-fn handle_key(model: &Model, key: event::KeyEvent) -> Option<Message> {
-    let editing = model.editing.is_some();
-    match key.code {
-        // global
-        KeyCode::Char('q') if !editing => Some(Message::Quit),
-        KeyCode::Char('x')
-            if !editing && model.selected == SelectedField::Cookie && !model.config.cookie.is_empty() =>
-        {
-            Some(Message::DeleteCookie)
+    async fn handle_events(&mut self, tui: &mut Tui, action_tx: ActionSender) -> Result<()> {
+        let Some(event) = tui.next_event().await else {
+            return Ok(());
+        };
+        let action_tx = action_tx.clone();
+        match event {
+            Event::Quit => action_tx.send(Action::Quit)?,
+            Event::Tick => action_tx.send(Action::Tick)?,
+            Event::Render => action_tx.send(Action::Render)?,
+            Event::Resize(x, y) => action_tx.send(Action::Resize(x, y))?,
+            Event::Key(key) => self.handle_key_event(key, action_tx.clone())?,
+            _ => {}
         }
-
-        // navigation
-        KeyCode::Up if !editing => Some(Message::MoveUp),
-        KeyCode::Down if !editing => Some(Message::MoveDown),
-
-        // start editing or start browser or toggle
-        KeyCode::Enter if !editing && model.selected == SelectedField::Start => Some(Message::StartBrowser),
-        KeyCode::Enter if !editing && model.selected == SelectedField::FakeMedia => Some(Message::ToggleFakeMedia),
-        KeyCode::Enter if !editing && model.selected == SelectedField::FakeVideo => Some(Message::ToggleFakeVideo),
-        KeyCode::Enter
-            if !editing
-                && matches!(
-                    model.selected,
-                    SelectedField::Url | SelectedField::Cookie | SelectedField::FakeVideoFile
-                ) =>
-        {
-            Some(Message::StartEdit)
-        } // Edit URL/Cookie/FakeVideoFile
-
-        // delete fake video file
-        KeyCode::Char('x')
-            if !editing && model.selected == SelectedField::FakeVideoFile && model.config.fake_video_file.is_some() =>
-        {
-            Some(Message::DeleteFakeVideoFile)
+        for component in self.components.iter_mut() {
+            if let Some(action) = component.handle_events(Some(event.clone()))? {
+                action_tx.send(action)?;
+            }
         }
-
-        // Popup
-        KeyCode::Esc if editing => Some(Message::CancelEdit),
-        KeyCode::Enter if editing => Some(Message::ConfirmEdit),
-        KeyCode::Backspace if editing => Some(Message::EditBackspace),
-        KeyCode::Char(c) if editing => Some(Message::EditChar(c)),
-
-        _ => None,
+        Ok(())
     }
-}
 
-pub(crate) fn update(model: &mut Model, msg: Message) -> Option<Message> {
-    match msg {
-        Message::Quit => {
-            model.running_state = RunningState::Done;
-        }
+    fn handle_key_event(&mut self, key: KeyEvent, action_tx: ActionSender) -> Result<()> {
+        let action_tx = action_tx.clone();
+        let Some(keymap) = self.config.keybindings.get(&self.mode) else {
+            return Ok(());
+        };
+        match keymap.get(&vec![key]) {
+            Some(action) => {
+                info!("Got action: {action:?}");
+                action_tx.send(action.clone())?;
+            }
+            _ => {
+                // If the key was not handled as a single key action,
+                // then consider it for multi-key combinations.
+                self.last_tick_key_events.push(key);
 
-        Message::MoveUp => {
-            model.selected = match model.selected {
-                SelectedField::Cookie => SelectedField::Url,
-                SelectedField::FakeMedia => SelectedField::Cookie,
-                SelectedField::FakeVideo => SelectedField::FakeMedia,
-                SelectedField::FakeVideoFile => SelectedField::FakeVideo,
-                SelectedField::Start => {
-                    if model.config.fake_video_file.is_some() {
-                        SelectedField::FakeVideoFile // Go to file input if visible
-                    } else {
-                        SelectedField::FakeVideo // Otherwise go to video checkbox
-                    }
+                // Check for multi-key combinations
+                if let Some(action) = keymap.get(&self.last_tick_key_events) {
+                    info!("Got action: {action:?}");
+                    action_tx.send(action.clone())?;
                 }
-                other => other, // Url stays Url
-            };
+            }
         }
+        Ok(())
+    }
 
-        Message::MoveDown => {
-            model.selected = match model.selected {
-                SelectedField::Url => SelectedField::Cookie,
-                SelectedField::Cookie => SelectedField::FakeMedia,
-                SelectedField::FakeMedia => SelectedField::FakeVideo,
-                SelectedField::FakeVideo => {
-                    if model.config.fake_video_file.is_some() {
-                        SelectedField::FakeVideoFile // Go to file input if visible
-                    } else {
-                        SelectedField::Start // Otherwise skip to Start
-                    }
+    fn handle_actions(&mut self, tui: &mut Tui, action_tx: ActionSender, action_rx: &mut ActionReceiver) -> Result<()> {
+        while let Ok(mut action) = action_rx.try_recv() {
+            if action != Action::Tick && action != Action::Render {
+                debug!("{action:?}");
+            }
+            match &action {
+                Action::Tick => {}
+                Action::Quit => self.should_quit = true,
+                Action::Suspend => self.should_suspend = true,
+                Action::Resume => self.should_suspend = false,
+                Action::ClearScreen => tui.terminal.clear()?,
+                Action::Resize(w, h) => self.handle_resize(tui, *w, *h)?,
+                Action::Render => self.render(tui)?,
+                Action::TextModal(TextModalAction::ShowTextModal { title, content }) => {
+                    let modal = TextInputModal::new(title, content);
+                    self.components.push(Box::new(modal));
+                    self.mode = Mode::TextInputModal;
                 }
-                SelectedField::FakeVideoFile => SelectedField::Start,
-                SelectedField::Start => SelectedField::Url, /* Loop back to top */
+                Action::TextModal(TextModalAction::TextModalSubmit(content)) => {
+                    self.components.retain(|component| !component.is_modal());
+                    self.mode = Mode::BrowserStart;
+                    action = Action::TextModal(TextModalAction::TextModalSubmit(content.to_string()));
+                }
+                Action::TextModal(TextModalAction::TextModalCancel) => {
+                    self.components.retain(|component| !component.is_modal());
+                    self.mode = Mode::BrowserStart;
+                }
+                _ => {}
             };
-        }
-
-        // Edit
-        Message::StartEdit => {
-            if model.editing.is_none() {
-                let buffer = match model.selected {
-                    SelectedField::Url => model.config.url.clone(),
-                    SelectedField::Cookie => model.config.cookie.clone(),
-                    SelectedField::FakeVideoFile => model.config.fake_video_file.clone().unwrap_or_default(),
-                    _ => String::new(), // Should not happen for Start/FakeMedia/FakeVideo
+            for component in self.components.iter_mut() {
+                if let Some(action) = component.update(action.clone())? {
+                    action_tx.send(action)?
                 };
-                model.editing = Some(EditingState {
-                    field: model.selected,
-                    buffer,
-                });
             }
         }
+        Ok(())
+    }
 
-        Message::CancelEdit => {
-            model.editing = None;
-        }
+    fn handle_resize(&mut self, tui: &mut Tui, w: u16, h: u16) -> Result<()> {
+        tui.resize(Rect::new(0, 0, w, h))?;
+        self.render(tui)?;
+        Ok(())
+    }
 
-        Message::ConfirmEdit => {
-            if let Some(edit) = model.editing.take() {
-                match edit.field {
-                    SelectedField::Url => model.config.url = edit.buffer,
-                    SelectedField::Cookie => model.config.cookie = edit.buffer,
-                    SelectedField::FakeVideoFile => {
-                        // Set to None if the buffer is empty or only whitespace
-                        model.config.fake_video_file = if edit.buffer.trim().is_empty() {
-                            None
-                        } else {
-                            Some(edit.buffer)
-                        };
-                    }
-                    _ => {} // Should not happen for Start/FakeMedia/FakeVideo
-                }
-                // Save config immediately after edit confirmation
-                if let Err(e) = model.config.save() {
-                    error!(?e, "Failed to save config after edit");
-                    // Optionally, inform the user via TUI state
+    fn render(&mut self, tui: &mut Tui) -> Result<()> {
+        tui.draw(|frame| {
+            for component in self.components.iter_mut() {
+                if let Err(err) = component.draw(frame, frame.area()) {
+                    error!("Failed to draw: {:?}", err);
                 }
             }
-        }
-
-        Message::EditChar(c) => {
-            if let Some(edit) = &mut model.editing {
-                edit.buffer.push(c);
-            }
-        }
-
-        Message::DeleteCookie => {
-            model.config.cookie.clear(); // supprime le cookie
-            if let Err(e) = model.config.save() {
-                error!(?e, "Failed to save config after deleting cookie");
-                // TODO: inform the user via TUI state
-            }
-        }
-
-        Message::EditBackspace => {
-            if let Some(edit) = &mut model.editing {
-                edit.buffer.pop();
-            }
-        }
-
-        Message::ToggleFakeMedia => {
-            model.config.fake_media = !model.config.fake_media;
-            if let Err(e) = model.config.save() {
-                error!(?e, "Failed to save config after toggling fake media");
-            }
-        }
-        Message::ToggleFakeVideo => {
-            if model.config.fake_video_file.is_some() {
-                model.config.fake_video_file = None;
-                // If toggling off, ensure selection moves if it was on FakeVideoFile
-                if model.selected == SelectedField::FakeVideoFile {
-                    model.selected = SelectedField::FakeVideo;
-                }
-            } else {
-                // Default to empty string, user needs to edit it
-                model.config.fake_video_file = Some(String::new());
-            }
-            if let Err(e) = model.config.save() {
-                error!(?e, "Failed to save config after toggling fake video");
-            }
-        }
-        Message::DeleteFakeVideoFile => {
-            model.config.fake_video_file = None;
-            // Ensure selection moves if it was on FakeVideoFile
-            if model.selected == SelectedField::FakeVideoFile {
-                model.selected = SelectedField::FakeVideo;
-            }
-            if let Err(e) = model.config.save() {
-                error!(?e, "Failed to save config after deleting fake video file");
-            }
-        }
-
-        // Start Browser / Playwright
-        Message::StartBrowser => {
-            if model.editing.is_some() {
-                return None;
-            }
-            let config = model.config.clone();
-            info!(
-                "Starting browser with URL: {}, Cookie: ..., Use fake media: {}, Fake video: {}",
-                config.url,
-                config.fake_media,
-                config.fake_video_file.as_deref().unwrap_or("<none>")
-            );
-            tokio::spawn(async move {
-                if let Err(err) = WebBrowser::hyper_hyper(
-                    config.cookie,
-                    config.url,
-                    config.fake_media,
-                    config.fake_video_file.clone(),
-                )
-                .await
-                {
-                    error!("Failed to start browser: {:?}", err);
-                }
-            });
-        }
-    };
-    None
+        })?;
+        Ok(())
+    }
 }
