@@ -3,6 +3,7 @@ use crate::{
     components::{
         browser_start::BrowserStart,
         fps::FpsCounter,
+        logs::Logs,
         modal::{
             TextInputModal,
             TextModalAction,
@@ -14,10 +15,18 @@ use crate::{
         Event,
         Tui,
     },
+    LogCollector,
 };
 use color_eyre::Result;
 use crossterm::event::KeyEvent;
-use ratatui::prelude::Rect;
+use ratatui::{
+    layout::{
+        Constraint,
+        Direction,
+        Layout,
+    },
+    prelude::Rect,
+};
 use serde::{
     Deserialize,
     Serialize,
@@ -27,6 +36,7 @@ use tokio::sync::mpsc;
 pub struct App {
     config: Config,
     components: Vec<Box<dyn Component>>,
+    logs: Box<dyn Component>,
     should_quit: bool,
     should_suspend: bool,
     last_tick_key_events: Vec<KeyEvent>,
@@ -44,9 +54,10 @@ type ActionSender = mpsc::UnboundedSender<Action>;
 type ActionReceiver = mpsc::UnboundedReceiver<Action>;
 
 impl App {
-    pub fn new(args: crate::Args) -> Result<Self> {
+    pub fn new(args: crate::Args, log_collector: LogCollector) -> Result<Self> {
         Ok(Self {
             components: vec![Box::new(BrowserStart::new()), Box::new(FpsCounter::default())],
+            logs: Box::new(Logs::new(log_collector)),
             should_quit: false,
             should_suspend: false,
             config: Config::new(args)?,
@@ -73,6 +84,10 @@ impl App {
         for component in self.components.iter_mut() {
             component.init(tui.size()?)?;
         }
+
+        self.logs.register_action_handler(action_tx.clone())?;
+        self.logs.register_config_handler(self.config.clone())?;
+        self.logs.init(tui.size()?)?;
 
         let action_tx = action_tx.clone();
         loop {
@@ -107,11 +122,17 @@ impl App {
             Event::Key(key) => self.handle_key_event(key, action_tx.clone())?,
             _ => {}
         }
+
         for component in self.components.iter_mut() {
             if let Some(action) = component.handle_events(Some(event.clone()))? {
                 action_tx.send(action)?;
             }
         }
+
+        if let Some(action) = self.logs.handle_events(Some(event))? {
+            action_tx.send(action)?;
+        }
+
         Ok(())
     }
 
@@ -174,6 +195,9 @@ impl App {
                     action_tx.send(action)?
                 };
             }
+            if let Some(action) = self.logs.update(action.clone())? {
+                action_tx.send(action)?
+            };
         }
         Ok(())
     }
@@ -186,10 +210,38 @@ impl App {
 
     fn render(&mut self, tui: &mut Tui) -> Result<()> {
         tui.draw(|frame| {
-            for component in self.components.iter_mut() {
-                if let Err(err) = component.draw(frame, frame.area()) {
+            let is_modal = self.mode == Mode::TextInputModal;
+
+            if is_modal {
+                // Draw the modal first
+                let modal = self.components.last_mut().unwrap();
+                if let Err(err) = modal.draw(frame, frame.area()) {
                     error!("Failed to draw: {:?}", err);
                 }
+                return;
+            }
+
+            // Split the screen: main content and logs
+            let constraints = vec![
+                Constraint::Min(20), // Main content (BrowserStart, FpsCounter)
+                Constraint::Min(0),  // Logs
+            ];
+            let areas = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(constraints)
+                .split(frame.area());
+
+            let main_area = areas[0];
+            let log_area = areas[1];
+
+            for component in self.components.iter_mut() {
+                if let Err(err) = component.draw(frame, main_area) {
+                    error!("Failed to draw: {:?}", err);
+                }
+            }
+
+            if let Err(err) = self.logs.draw(frame, log_area) {
+                error!("Failed to draw logs: {:?}", err);
             }
         })?;
         Ok(())

@@ -21,6 +21,10 @@ pub struct Args {
     /// Optional path passed to `--use-file-for-fake-video-capture`.
     #[clap(long = "fake-video-file", value_name = "FILE")]
     pub fake_video_file: Option<String>,
+
+    /// Enables the displaying of logs in the TUI.
+    #[clap(long = "verbose", action)]
+    pub verbose: Option<bool>,
 }
 
 mod config_ext {
@@ -50,6 +54,9 @@ mod config_ext {
             }
             if let Some(fake_video_file) = &self.fake_video_file {
                 cache.insert("fake_video_file".to_string(), fake_video_file.clone().into());
+            }
+            if let Some(verbose) = self.verbose {
+                cache.insert("verbose".to_string(), verbose.into());
             }
             Ok(cache)
         }

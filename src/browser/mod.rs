@@ -10,7 +10,21 @@ use playwright::{
     },
     Playwright,
 };
+use std::path::PathBuf;
 use url::Url;
+
+fn get_binary() -> Result<PathBuf> {
+    if let Ok(chromium) = which::which("chromium") {
+        debug!(?chromium, "found chromium at");
+        return Ok(chromium);
+    } else {
+        debug!("chromium not found, falling back to google-chrome");
+    }
+
+    let chrome = which::which("google-chrome").context("google chrome not found")?;
+    debug!(?chrome, "found google-chrome at");
+    Ok(chrome)
+}
 
 pub struct WebBrowser {
     _playwright: Playwright,
@@ -41,8 +55,7 @@ impl WebBrowser {
         let playwright = Playwright::initialize().await?;
 
         // playwright.prepare()?; // Install browsers
-        let chromium = which::which("chromium").expect("chromium not found");
-        debug!(?chromium, "found chromium at");
+        let binary = get_binary().expect("binary not found");
 
         let mut chrome_args = Vec::new();
         if use_fake_media {
@@ -61,7 +74,7 @@ impl WebBrowser {
             .chromium()
             .launcher()
             .args(&chrome_args) // Use the constructed args
-            .executable(&chromium)
+            .executable(&binary)
             .headless(false)
             .timeout(0.0)
             .launch()
@@ -100,10 +113,13 @@ impl WebBrowser {
 
         info!("page created");
 
-        page.goto_builder(url.as_ref()).goto().await?;
+        page.goto_builder(url.as_ref()).timeout(300_000.0).goto().await?;
 
         info!("joining...");
-        page.click_builder(r#"button[type="submit"]"#).click().await?;
+        page.click_builder(r#"button[type="submit"]"#)
+            .timeout(300_000.0)
+            .click()
+            .await?;
 
         Ok(page)
     }
@@ -116,24 +132,24 @@ impl WebBrowser {
                     use playwright::api::page::Event::*;
                     match event {
                         Close => break,
-                        _ => {} /* Crash => todo!(),
-                                 * Console(console_message) => todo!(),
-                                 * Dialog => todo!(),
-                                 * DomContentLoaded => todo!(),
-                                 * Download(download) => todo!(),
-                                 * FrameAttached(frame) => todo!(),
-                                 * FrameDetached(frame) => todo!(),
-                                 * FrameNavigated(frame) => todo!(),
-                                 * Load => todo!(),
-                                 * PageError => todo!(),
-                                 * Popup(page) => todo!(),
-                                 * Request(request) => todo!(),
-                                 * RequestFailed(request) => todo!(),
-                                 * RequestFinished(request) => todo!(),
-                                 * Response(response) => todo!(),
-                                 * WebSocket(web_socket) => todo!(),
-                                 * Worker(worker) => todo!(),
-                                 * Video(video) => todo!(), */
+                        Crash => trace!("browser event: Crash"),
+                        Console(_console_message) => trace!("browser event: Console"),
+                        Dialog => trace!("browser event: Dialog"),
+                        DomContentLoaded => trace!("browser event: DomContentLoaded"),
+                        Download(_download) => trace!("browser event: Download"),
+                        FrameAttached(_frame) => trace!("browser event: FrameAttached"),
+                        FrameDetached(_frame) => trace!("browser event: FrameDetached"),
+                        FrameNavigated(_frame) => trace!("browser event: FrameNavigated"),
+                        Load => trace!("browser event: Load"),
+                        PageError => trace!("browser event: PageError"),
+                        Popup(_page) => trace!("browser event: Popup"),
+                        Request(_request) => trace!("browser event: Request"),
+                        RequestFailed(_request) => trace!("browser event: RequestFailed"),
+                        RequestFinished(_request) => trace!("browser event: RequestFinished"),
+                        Response(_response) => trace!("browser event: Response"),
+                        WebSocket(_web_socket) => trace!("browser event: WebSocket"),
+                        Worker(_worker) => trace!("browser event: Worker"),
+                        Video(_video) => trace!("browser event: Video"),
                     }
                 }
                 Err(e) => {

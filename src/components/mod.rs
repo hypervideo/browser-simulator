@@ -19,6 +19,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 pub mod browser_start;
 pub mod fps;
+pub mod logs;
 pub mod modal;
 
 /// `Component` is a trait that represents a visual and interactive element of the user interface.

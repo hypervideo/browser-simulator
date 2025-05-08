@@ -10,6 +10,6 @@ use hyper_video_client_simulator::{
 #[tokio::main]
 async fn main() -> Result<()> {
     init_errors()?;
-    init_logging()?;
-    App::new(Args::parse())?.run().await
+    let log_collector = init_logging()?;
+    App::new(Args::parse(), log_collector)?.run().await
 }

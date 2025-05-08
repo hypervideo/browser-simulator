@@ -30,6 +30,8 @@ pub struct Config {
     pub(crate) fake_media: bool,
     #[serde(default)]
     pub(crate) fake_video_file: Option<String>,
+    #[serde(default)]
+    pub(crate) verbose: bool,
 }
 
 impl Config {
