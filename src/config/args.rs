@@ -24,7 +24,12 @@ pub struct Args {
 
     /// Enables the displaying of logs in the TUI.
     #[clap(long = "verbose", action)]
-    pub verbose: Option<bool>,
+    pub verbose: bool,
+
+    /// Enables debug mode.
+    ///  - adds `.with_head()` when starting the browser
+    #[clap(long = "debug", action)]
+    pub debug: bool,
 }
 
 mod config_ext {
@@ -55,8 +60,8 @@ mod config_ext {
             if let Some(fake_video_file) = &self.fake_video_file {
                 cache.insert("fake_video_file".to_string(), fake_video_file.clone().into());
             }
-            if let Some(verbose) = self.verbose {
-                cache.insert("verbose".to_string(), verbose.into());
+            if self.verbose {
+                cache.insert("verbose".to_string(), true.into());
             }
             Ok(cache)
         }

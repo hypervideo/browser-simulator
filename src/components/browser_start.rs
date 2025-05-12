@@ -4,7 +4,10 @@ use super::{
 };
 use crate::{
     action::Action,
-    config::Config,
+    config::{
+        BrowserConfig,
+        Config,
+    },
 };
 use color_eyre::Result;
 use crossterm::event::KeyCode;
@@ -270,21 +273,20 @@ impl Component for BrowserStart {
                     return Ok(None);
                 }
                 let config = self.config.clone();
+                let mut browser_config = BrowserConfig::from(&config);
+                static INSTANCE_ID: std::sync::OnceLock<std::sync::atomic::AtomicUsize> = std::sync::OnceLock::new();
+                browser_config.instance_id = INSTANCE_ID
+                    .get_or_init(|| std::sync::atomic::AtomicUsize::new(0))
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
                 info!(
                     "Starting browser with URL: {}, Cookie: ..., Use fake media: {}, Fake video: {}",
-                    config.url,
-                    config.fake_media,
-                    config.fake_video_file.as_deref().unwrap_or("<none>")
+                    browser_config.url,
+                    browser_config.fake_media,
+                    browser_config.fake_video_file.as_deref().unwrap_or("<none>")
                 );
                 tokio::spawn(async move {
-                    if let Err(err) = crate::browser::WebBrowser::hyper_hyper(
-                        config.cookie,
-                        config.url,
-                        config.fake_media,
-                        config.fake_video_file.clone(),
-                    )
-                    .await
-                    {
+                    if let Err(err) = crate::browser::join::Join::new(browser_config).run().await {
                         error!("Failed to start browser: {:?}", err);
                     }
                 });

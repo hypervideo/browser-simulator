@@ -1,6 +1,7 @@
 mod app_config;
 mod args;
 mod keybindings;
+mod browser_config;
 
 use app_config::AppConfig;
 pub(crate) use app_config::{
@@ -8,6 +9,7 @@ pub(crate) use app_config::{
     get_data_dir,
 };
 pub use args::Args;
+pub use browser_config::BrowserConfig;
 use color_eyre::Result;
 use eyre::Context as _;
 use keybindings::KeyBindings;
@@ -32,6 +34,8 @@ pub struct Config {
     pub(crate) fake_video_file: Option<String>,
     #[serde(default)]
     pub(crate) verbose: bool,
+    #[serde(default)]
+    pub(crate) debug: bool,
 }
 
 impl Config {

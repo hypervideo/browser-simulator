@@ -45,6 +45,7 @@ impl Logs {
 
 impl Component for Logs {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
+        #[allow(clippy::single_match)]
         match action {
             Action::Render => self.render_tick()?,
             _ => {}
