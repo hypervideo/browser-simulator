@@ -1,7 +1,6 @@
 use super::Component;
 use crate::{
     action::Action,
-    config::Config,
     LogCollector,
 };
 use color_eyre::Result;
@@ -12,7 +11,6 @@ use ratatui::{
         Style,
     },
     widgets::{
-        Block,
         List,
         ListItem,
     },
@@ -41,9 +39,21 @@ impl Logs {
         }
         Ok(())
     }
+
+    pub fn count(&self) -> usize {
+        self.log_collector.get_logs().len()
+    }
 }
 
 impl Component for Logs {
+    fn suspend(&mut self) -> Result<()> {
+        self.draw = false;
+        Ok(())
+    }
+    fn resume(&mut self) -> Result<()> {
+        self.draw = true;
+        Ok(())
+    }
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         #[allow(clippy::single_match)]
         match action {
@@ -52,13 +62,7 @@ impl Component for Logs {
         }
         Ok(None)
     }
-
-    fn register_config_handler(&mut self, config: Config) -> Result<()> {
-        self.draw = config.verbose;
-        Ok(())
-    }
-
-    fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+    fn draw(&mut self, frame: &mut Frame<'_>, area: Rect) -> Result<()> {
         if !self.draw {
             return Ok(());
         }
@@ -75,9 +79,7 @@ impl Component for Logs {
             .rev()
             .map(|log| ListItem::new(log.as_str()))
             .collect();
-        let log_widget = List::new(log_items)
-            .block(Block::new().title(format!("Logs ({} total)", total_logs)))
-            .highlight_style(Style::default().fg(Color::Cyan));
+        let log_widget = List::new(log_items).highlight_style(Style::default().fg(Color::Cyan));
         frame.render_widget(log_widget, area);
         Ok(())
     }

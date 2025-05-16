@@ -22,14 +22,10 @@ pub struct Args {
     #[clap(long = "fake-video-file", value_name = "FILE")]
     pub fake_video_file: Option<String>,
 
-    /// Enables the displaying of logs in the TUI.
-    #[clap(long = "verbose", action)]
-    pub verbose: bool,
-
-    /// Enables debug mode.
+    /// Enables headless mode.
     ///  - adds `.with_head()` when starting the browser
-    #[clap(long = "debug", action)]
-    pub debug: bool,
+    #[clap(long = "headless", action)]
+    pub headless: Option<bool>,
 }
 
 mod config_ext {
@@ -60,8 +56,8 @@ mod config_ext {
             if let Some(fake_video_file) = &self.fake_video_file {
                 cache.insert("fake_video_file".to_string(), fake_video_file.clone().into());
             }
-            if self.verbose {
-                cache.insert("verbose".to_string(), true.into());
+            if let Some(headless) = &self.headless {
+                cache.insert("headless".to_string(), (*headless).into());
             }
             Ok(cache)
         }

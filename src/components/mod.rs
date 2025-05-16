@@ -21,12 +21,21 @@ pub mod browser_start;
 pub mod fps;
 pub mod logs;
 pub mod modal;
+pub mod participants;
 
 /// `Component` is a trait that represents a visual and interactive element of the user interface.
 ///
 /// Implementors of this trait can be registered with the main application loop and will be able to
 /// receive events, update state, and be rendered on the screen.
 pub trait Component {
+    /// Suspend the component, pausing its activity.
+    fn suspend(&mut self) -> Result<()> {
+        Ok(())
+    }
+    /// Resume the component, allowing it to continue its activity.
+    fn resume(&mut self) -> Result<()> {
+        Ok(())
+    }
     /// Register an action handler that can send actions for processing if necessary.
     ///
     /// # Arguments
@@ -132,9 +141,9 @@ pub trait Component {
     /// # Returns
     ///
     /// * `Result<()>` - An Ok result or an error.
-    fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()>;
-
-    fn is_modal(&self) -> bool {
-        false
+    fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+        let _ = frame; // to appease clippy
+        let _ = area; // to appease clippy
+        Ok(())
     }
 }

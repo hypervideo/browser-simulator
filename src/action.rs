@@ -1,6 +1,7 @@
 use crate::components::{
     browser_start,
     modal,
+    participants,
 };
 use serde::{
     Deserialize,
@@ -17,6 +18,9 @@ pub enum Action {
     Suspend,
     Resume,
     Quit,
+    BrowserStart,
+    Participants,
+    Logs,
     ClearScreen,
     Error(String),
     Help,
@@ -28,6 +32,10 @@ pub enum Action {
     #[allow(clippy::enum_variant_names)]
     #[serde(with = "singleton_map_recursive")]
     BrowserStartAction(browser_start::BrowserStartAction),
+
+    #[allow(clippy::enum_variant_names)]
+    #[serde(with = "singleton_map_recursive")]
+    ParticipantsAction(participants::ParticipantsAction),
 }
 
 #[cfg(test)]

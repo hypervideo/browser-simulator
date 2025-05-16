@@ -40,6 +40,7 @@ pub struct TextInputModal {
 impl TextInputModal {
     pub fn new(title: impl ToString, content: impl ToString) -> Self {
         let input = Input::new(content.to_string());
+        debug!("TextInputModal new: {:?}", input);
         Self {
             input,
             title: title.to_string(),
@@ -48,7 +49,7 @@ impl TextInputModal {
 }
 
 impl Component for TextInputModal {
-    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::prelude::Rect) -> Result<()> {
+    fn draw(&mut self, frame: &mut ratatui::Frame<'_>, area: ratatui::prelude::Rect) -> Result<()> {
         // keep 2 for borders and 1 for cursor
         let width = area.width.max(3) - 3;
         let scroll = self.input.visual_scroll(width as usize);
@@ -89,10 +90,6 @@ impl Component for TextInputModal {
         };
 
         Ok(action)
-    }
-
-    fn is_modal(&self) -> bool {
-        true
     }
 }
 

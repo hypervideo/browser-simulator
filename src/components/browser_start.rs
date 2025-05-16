@@ -4,10 +4,8 @@ use super::{
 };
 use crate::{
     action::Action,
-    config::{
-        BrowserConfig,
-        Config,
-    },
+    browser::participant::ParticipantStore,
+    config::Config,
 };
 use color_eyre::Result;
 use crossterm::event::KeyCode;
@@ -29,7 +27,7 @@ impl EditingState {
             SelectedField::Url => "Edit URL",
             SelectedField::Cookie => "Edit Cookie",
             SelectedField::FakeVideoFile => "Edit Fake Video File", // new
-            SelectedField::Start | SelectedField::FakeMedia | SelectedField::FakeVideo => "",
+            SelectedField::Start | SelectedField::FakeMedia | SelectedField::FakeVideo | SelectedField::Headless => "",
         }
     }
 }
@@ -42,6 +40,7 @@ enum SelectedField {
     FakeMedia,
     FakeVideo,
     FakeVideoFile,
+    Headless,
     Start,
 }
 
@@ -54,6 +53,7 @@ pub(crate) enum BrowserStartAction {
     StartBrowser,
     ToggleFakeMedia,
     ToggleFakeVideo,
+    ToggleHeadless,
     DeleteFakeVideoFile,
 }
 
@@ -65,20 +65,32 @@ pub struct BrowserStart {
     config: Config,
     selected: SelectedField,
     editing: Option<EditingState>,
+    suspended: bool,
+    participant_store: ParticipantStore,
 }
 
 impl BrowserStart {
-    pub fn new() -> Self {
+    pub fn new(participant_store: ParticipantStore) -> Self {
         Self {
             command_tx: None,
             config: Config::default(),
             selected: SelectedField::Url,
             editing: None,
+            suspended: false,
+            participant_store,
         }
     }
 }
 
 impl Component for BrowserStart {
+    fn suspend(&mut self) -> Result<()> {
+        self.suspended = true;
+        Ok(())
+    }
+    fn resume(&mut self) -> Result<()> {
+        self.suspended = false;
+        Ok(())
+    }
     fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> Result<()> {
         self.command_tx = Some(tx);
         Ok(())
@@ -90,6 +102,10 @@ impl Component for BrowserStart {
     }
 
     fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<Option<Action>> {
+        if self.suspended {
+            return Ok(None);
+        }
+
         let editing = self.editing.is_some();
         let action = match key.code {
             KeyCode::Char('x')
@@ -111,6 +127,9 @@ impl Component for BrowserStart {
             }
             KeyCode::Enter if !editing && self.selected == SelectedField::FakeVideo => {
                 Some(BrowserStartAction::ToggleFakeVideo)
+            }
+            KeyCode::Enter if !editing && self.selected == SelectedField::Headless => {
+                Some(BrowserStartAction::ToggleHeadless)
             }
             KeyCode::Enter
                 if !editing
@@ -138,6 +157,10 @@ impl Component for BrowserStart {
     }
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
+        if self.suspended {
+            return Ok(None);
+        }
+
         let action = match action {
             Action::TextModal(TextModalAction::TextModalCancel) => {
                 self.editing = None;
@@ -153,7 +176,10 @@ impl Component for BrowserStart {
                             // Set to None if the buffer is empty or only whitespace
                             self.config.fake_video_file = if content.trim().is_empty() { None } else { Some(content) };
                         }
-                        SelectedField::FakeMedia | SelectedField::FakeVideo | SelectedField::Start => {}
+                        SelectedField::FakeMedia
+                        | SelectedField::FakeVideo
+                        | SelectedField::Headless
+                        | SelectedField::Start => {}
                     }
                     // Save config immediately after edit confirmation
                     if let Err(e) = self.config.save() {
@@ -175,13 +201,14 @@ impl Component for BrowserStart {
                     SelectedField::FakeMedia => SelectedField::Cookie,
                     SelectedField::FakeVideo => SelectedField::FakeMedia,
                     SelectedField::FakeVideoFile => SelectedField::FakeVideo,
-                    SelectedField::Start => {
+                    SelectedField::Headless => {
                         if self.config.fake_video_file.is_some() {
                             SelectedField::FakeVideoFile // Go to file input if visible
                         } else {
                             SelectedField::FakeVideo // Otherwise go to video checkbox
                         }
                     }
+                    SelectedField::Start => SelectedField::Headless,
                     other => other, // Url stays Url
                 };
             }
@@ -195,10 +222,11 @@ impl Component for BrowserStart {
                         if self.config.fake_video_file.is_some() {
                             SelectedField::FakeVideoFile // Go to file input if visible
                         } else {
-                            SelectedField::Start // Otherwise skip to Start
+                            SelectedField::Headless // Otherwise skip to Start
                         }
                     }
-                    SelectedField::FakeVideoFile => SelectedField::Start,
+                    SelectedField::FakeVideoFile => SelectedField::Headless,
+                    SelectedField::Headless => SelectedField::Start,
                     other => other, // Start stays Start
                 };
             }
@@ -256,6 +284,13 @@ impl Component for BrowserStart {
                 }
             }
 
+            BrowserStartAction::ToggleHeadless => {
+                self.config.headless = !self.config.headless;
+                if let Err(e) = self.config.save() {
+                    error!(?e, "Failed to save config after toggling headless mode");
+                }
+            }
+
             BrowserStartAction::DeleteFakeVideoFile => {
                 self.config.fake_video_file = None;
                 // Ensure selection moves if it was on FakeVideoFile
@@ -272,31 +307,22 @@ impl Component for BrowserStart {
                 if self.editing.is_some() {
                     return Ok(None);
                 }
-                let config = self.config.clone();
-                let mut browser_config = BrowserConfig::from(&config);
-                static INSTANCE_ID: std::sync::OnceLock<std::sync::atomic::AtomicUsize> = std::sync::OnceLock::new();
-                browser_config.instance_id = INSTANCE_ID
-                    .get_or_init(|| std::sync::atomic::AtomicUsize::new(0))
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-                info!(
-                    "Starting browser with URL: {}, Cookie: ..., Use fake media: {}, Fake video: {}",
-                    browser_config.url,
-                    browser_config.fake_media,
-                    browser_config.fake_video_file.as_deref().unwrap_or("<none>")
-                );
-                tokio::spawn(async move {
-                    if let Err(err) = crate::browser::join::Join::new(browser_config).run().await {
-                        error!("Failed to start browser: {:?}", err);
-                    }
-                });
+                if let Err(e) = self.participant_store.spawn(&self.config) {
+                    error!(?e, "Failed to spawn participant");
+                    return Ok(None);
+                }
             }
         };
 
         Ok(None)
     }
 
-    fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+    fn draw(&mut self, frame: &mut Frame<'_>, area: Rect) -> Result<()> {
+        if self.suspended {
+            return Ok(());
+        }
+
         // Dynamically create constraints based on UI elements
         let mut constraints = vec![
             Constraint::Length(3), // URL
@@ -307,6 +333,7 @@ impl Component for BrowserStart {
         if self.config.fake_video_file.is_some() {
             constraints.push(Constraint::Length(3)); // Fake-video-file editor
         }
+        constraints.push(Constraint::Length(3)); // Headless checkbox
         constraints.push(Constraint::Length(1)); // Spacer before Start
         constraints.push(Constraint::Length(3)); // Start button
 
@@ -392,6 +419,19 @@ impl Component for BrowserStart {
             frame.render_widget(vf_widget, rows[current_row_index]);
             current_row_index += 1;
         }
+
+        // --- Headless Checkbox ---
+        let headless_txt = format!("{} Headless", if self.config.headless { "[x]" } else { "[ ]" });
+        let headless_widget =
+            Paragraph::new(headless_txt)
+                .block(Block::bordered())
+                .style(if self.selected == SelectedField::Headless {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                });
+        frame.render_widget(headless_widget, rows[current_row_index]);
+        current_row_index += 1;
 
         // Skip the spacer row index
         current_row_index += 1;

@@ -1,7 +1,8 @@
 mod app_config;
 mod args;
-mod keybindings;
 mod browser_config;
+mod keybindings;
+mod participant_config;
 
 use app_config::AppConfig;
 pub(crate) use app_config::{
@@ -13,6 +14,7 @@ pub use browser_config::BrowserConfig;
 use color_eyre::Result;
 use eyre::Context as _;
 use keybindings::KeyBindings;
+pub use participant_config::ParticipantConfig;
 use serde::{
     Deserialize,
     Serialize,
@@ -33,9 +35,7 @@ pub struct Config {
     #[serde(default)]
     pub(crate) fake_video_file: Option<String>,
     #[serde(default)]
-    pub(crate) verbose: bool,
-    #[serde(default)]
-    pub(crate) debug: bool,
+    pub(crate) headless: bool,
 }
 
 impl Config {
@@ -102,6 +102,13 @@ impl Config {
             if self.fake_video_file.as_ref() != Some(path) {
                 info!(old = ?self.fake_video_file, new = %path, "Updating fake_video_file from args");
                 self.fake_video_file = Some(path.clone());
+                changed = true;
+            }
+        }
+        if let Some(headless) = args.headless {
+            if self.headless != headless {
+                info!(old = %self.headless, new = %headless, "Updating headless from args");
+                self.headless = headless;
                 changed = true;
             }
         }
