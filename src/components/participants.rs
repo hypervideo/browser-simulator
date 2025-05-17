@@ -25,13 +25,6 @@ use ratatui::{
     },
     Frame,
 };
-use std::sync::{
-    atomic::{
-        AtomicBool,
-        Ordering,
-    },
-    Arc,
-};
 use strum::Display;
 
 #[derive(Debug, Clone, PartialEq, Eq, Display, serde::Serialize, serde::Deserialize)]
@@ -59,12 +52,15 @@ impl Participants {
             table_state: TableState::default(),
         }
     }
+
     fn render_tick(&mut self) -> Result<()> {
         Ok(())
     }
+
     pub fn len(&self) -> usize {
         self.participants.len()
     }
+
     pub fn move_up(&mut self) {
         let keys = self.participants.keys();
         if let Some(key) = &self.selected {
@@ -80,6 +76,7 @@ impl Participants {
             self.selected = self.participants.keys().last().cloned();
         }
     }
+
     pub fn move_down(&mut self) {
         let keys = self.participants.keys();
         if let Some(key) = &self.selected {
@@ -103,6 +100,7 @@ impl Component for Participants {
         self.suspended = true;
         Ok(())
     }
+
     fn resume(&mut self) -> Result<()> {
         self.draw = true;
         self.suspended = false;
@@ -133,9 +131,11 @@ impl Component for Participants {
         let selected = self.selected.is_some();
 
         let action = match key.code {
-            KeyCode::Char('x') | KeyCode::Delete if selected => {
+            KeyCode::Backspace | KeyCode::Delete if selected => {
                 if let Some(participant) = self.participants.remove(&self.selected.clone().unwrap()) {
-                    participant.close();
+                    tokio::spawn(async move {
+                        participant.close().await;
+                    });
                     self.selected = None;
                 }
 
@@ -199,7 +199,7 @@ impl Component for Participants {
             "[x] Running".to_string(),
             "[j/l] Joined".to_string(),
             "[m] Muted".to_string(),
-            "[v] Invisible".to_string(),
+            "[v] Video active".to_string(),
         ];
 
         // Prepare table data
@@ -217,17 +217,18 @@ impl Component for Participants {
             .iter()
             .map(|participant| {
                 let created = format_duration(chrono::Utc::now() - participant.created);
-                let opened = format_atomic_bool(participant.running.clone());
-                let joined = format_atomic_bool(participant.joined.clone());
-                let muted = format_atomic_bool(participant.muted.clone());
-                let invisible = format_atomic_bool(participant.invisible.clone());
+                let state = participant.state.borrow();
+                let opened = format_bool(state.running);
+                let joined = format_bool(state.joined);
+                let muted = format_bool(state.muted);
+                let video = format_bool(state.video_activated);
                 let cells = vec![
                     Cell::from(participant.name.clone()),
                     Cell::from(created),
                     Cell::from(opened),
                     Cell::from(joined),
                     Cell::from(muted),
-                    Cell::from(invisible),
+                    Cell::from(video),
                 ];
                 let style = if Some(&participant.name) == self.selected.as_ref() {
                     Style::default().bg(Color::Cyan)
@@ -273,8 +274,8 @@ fn format_duration(value: TimeDelta) -> String {
     }
 }
 
-fn format_atomic_bool(value: Arc<AtomicBool>) -> String {
-    if value.load(Ordering::Relaxed) {
+fn format_bool(value: bool) -> String {
+    if value {
         "[x]".to_string()
     } else {
         "[ ]".to_string()

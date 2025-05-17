@@ -29,8 +29,6 @@ pub struct Config {
     #[serde(default)]
     pub(crate) url: String,
     #[serde(default)]
-    pub(crate) cookie: String,
-    #[serde(default)]
     pub(crate) fake_media: bool,
     #[serde(default)]
     pub(crate) fake_video_file: Option<String>,
@@ -80,14 +78,6 @@ impl Config {
             if self.url != *url {
                 info!(old = %self.url, new = %url, "Updating URL from args");
                 self.url = url.clone();
-                changed = true;
-            }
-        }
-        if let Some(cookie) = &args.cookie {
-            // Avoid logging the full cookie
-            if self.cookie != *cookie {
-                info!(old_len = %self.cookie.len(), new_len = %cookie.len(), "Updating cookie from args");
-                self.cookie = cookie.clone();
                 changed = true;
             }
         }

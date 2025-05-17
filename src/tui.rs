@@ -167,21 +167,25 @@ impl Tui {
                 break;
             }
         }
+
         cancellation_token.cancel();
     }
 
     pub fn stop(&self) -> Result<()> {
         self.cancel();
-        let mut counter = 0;
+
+        const MAX_WAIT: Duration = Duration::from_millis(1500);
+        const ABORT_DURATION: Duration = Duration::from_millis(1200);
+
+        let now = std::time::Instant::now();
         while !self.task.is_finished() {
-            std::thread::sleep(Duration::from_millis(1));
-            counter += 1;
-            if counter > 50 {
-                self.task.abort();
-            }
-            if counter > 100 {
+            std::thread::sleep(Duration::from_millis(10));
+            if now.elapsed() > MAX_WAIT {
                 error!("Failed to abort task in 100 milliseconds for unknown reason");
                 break;
+            }
+            if now.elapsed() > ABORT_DURATION {
+                self.task.abort();
             }
         }
         Ok(())

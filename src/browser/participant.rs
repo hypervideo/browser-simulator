@@ -11,6 +11,7 @@ use crate::config::{
 use chromiumoxide::{
     browser::Browser,
     cdp::browser_protocol::target::CreateTargetParams,
+    Handler,
     Page,
 };
 use eyre::{
@@ -21,10 +22,6 @@ use futures::StreamExt as _;
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{
-            AtomicBool,
-            Ordering::Relaxed,
-        },
         Arc,
         Mutex,
     },
@@ -32,12 +29,19 @@ use std::{
     vec::IntoIter,
 };
 use tokio::{
-    sync::mpsc::{
-        unbounded_channel,
-        UnboundedReceiver,
-        UnboundedSender,
+    sync::{
+        mpsc::{
+            unbounded_channel,
+            UnboundedReceiver,
+            UnboundedSender,
+        },
+        watch,
     },
     task::JoinHandle,
+};
+use tokio_util::sync::{
+    CancellationToken,
+    DropGuard,
 };
 
 pub enum ParticipantMessage {
@@ -50,26 +54,28 @@ pub enum ParticipantMessage {
 
 /// Store for all the participants that we will expose to the TUI
 /// for displaying and control.
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct ParticipantStore {
     inner: Arc<Mutex<HashMap<String, Participant>>>,
 }
 
 impl ParticipantStore {
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self::default()
     }
 
     pub fn spawn(&self, config: &Config) -> Result<()> {
-        let participant = Participant::new(config)?;
+        let participant = Participant::with_app_config(config)?;
         self.add(participant);
         Ok(())
     }
 
     pub fn len(&self) -> usize {
         self.inner.lock().unwrap().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     fn sorted(&self) -> IntoIter<Participant> {
@@ -105,12 +111,17 @@ impl ParticipantStore {
 pub struct Participant {
     pub name: String,
     pub created: chrono::DateTime<chrono::Utc>,
-    pub running: Arc<AtomicBool>,
-    pub joined: Arc<AtomicBool>,
-    pub muted: Arc<AtomicBool>,
-    pub invisible: Arc<AtomicBool>,
-    _handle: Arc<JoinHandle<()>>,
+    pub state: watch::Receiver<ParticipantState>,
+    _participant_task_guard: Arc<DropGuard>,
     sender: UnboundedSender<ParticipantMessage>,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct ParticipantState {
+    pub running: bool,
+    pub joined: bool,
+    pub muted: bool,
+    pub video_activated: bool,
 }
 
 impl PartialEq for Participant {
@@ -120,53 +131,57 @@ impl PartialEq for Participant {
 }
 
 impl Participant {
-    pub fn new(config: &Config) -> Result<Self> {
-        let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
+    pub fn with_app_config(config: &Config) -> Result<Self> {
         let participant_config = ParticipantConfig::new(config)?;
-        let name = participant_config.name.clone();
-        let name_cloned = name.clone();
-        let running = Arc::new(AtomicBool::new(true));
-        let running_cloned = running.clone();
-        let joined = Arc::new(AtomicBool::new(false));
-        let joined_cloned = joined.clone();
-        let muted = Arc::new(AtomicBool::new(false));
-        let muted_cloned = muted.clone();
-        let invisible = Arc::new(AtomicBool::new(false));
-        let invisible_cloned = invisible.clone();
+        Self::with_participant_config(participant_config)
+    }
 
-        let handle = tokio::task::spawn(async move {
-            if let Err(err) = ParticipantInner::spawn(
-                participant_config,
-                receiver,
-                running_cloned,
-                joined_cloned,
-                muted_cloned,
-                invisible_cloned,
-            )
-            .await
-            {
-                error!(name_cloned, "Failed to create participant: {}", err)
+    pub fn with_participant_config(participant_config: ParticipantConfig) -> Result<Self> {
+        let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
+
+        let name = participant_config.username.clone();
+        let task_cancellation_token = CancellationToken::new();
+        let task_cancellation_guard = task_cancellation_token.clone().drop_guard();
+        let (state_sender, state_receiver) = watch::channel(Default::default());
+
+        tokio::task::spawn({
+            let name = name.clone();
+            async move {
+                tokio::select! {
+                    biased;
+                    _ = task_cancellation_token.cancelled() => {},
+
+                    result = ParticipantInner::run(
+                        participant_config,
+                        receiver,
+                        state_sender,
+                    ) => {
+                        if let Err(err) = result {
+                            error!(?name, "Failed to create participant: {err}")
+                        }
+                    }
+                };
+
+                debug!(?name, "Participant task canceled");
             }
         });
 
         Ok(Self {
             name,
             created: chrono::Utc::now(),
-            running,
-            joined,
-            muted,
-            invisible,
-            _handle: Arc::new(handle),
+            state: state_receiver,
+            _participant_task_guard: Arc::new(task_cancellation_guard),
             sender,
         })
     }
 
     pub fn join(&self) {
-        if !self.running.load(Relaxed) {
+        let state = self.state.borrow();
+        if !state.running {
             debug!(self.name, "Already closed the browser");
             return;
         }
-        if self.joined.load(Relaxed) {
+        if state.joined {
             debug!(self.name, "Already joined");
             return;
         }
@@ -176,11 +191,12 @@ impl Participant {
     }
 
     pub fn leave(&self) {
-        if !self.running.load(Relaxed) {
+        let state = self.state.borrow();
+        if !state.running {
             debug!(self.name, "Already closed the browser");
             return;
         }
-        if !self.joined.load(Relaxed) {
+        if !state.joined {
             debug!(self.name, "Not in the space yet");
             return;
         }
@@ -189,22 +205,28 @@ impl Participant {
             .expect("Was not able to send ParticipantMessage::Leave message")
     }
 
-    pub fn close(self) {
-        if !self.running.load(Relaxed) {
+    pub async fn close(mut self) {
+        if !self.state.borrow().running {
             debug!(self.name, "Already closed the browser");
             return;
         }
+
         self.sender
             .send(ParticipantMessage::Close)
-            .expect("Was not able to send ParticipantMessage::Close message")
+            .expect("Was not able to send ParticipantMessage::Close message");
+
+        if let Err(err) = self.state.wait_for(|state| !state.running).await {
+            error!("Failed to wait for participant to close: {err}");
+        };
     }
 
     pub fn toggle_audio(&self) {
-        if !self.running.load(Relaxed) {
+        let state = self.state.borrow();
+        if !state.running {
             debug!(self.name, "Already closed the browser");
             return;
         }
-        if !self.joined.load(Relaxed) {
+        if !state.joined {
             debug!(self.name, "Cannot toggle audio, not in the space yet");
             return;
         }
@@ -214,11 +236,12 @@ impl Participant {
     }
 
     pub fn toggle_video(&self) {
-        if !self.running.load(Relaxed) {
+        let state = self.state.borrow();
+        if !state.running {
             debug!(self.name, "Already closed the browser");
             return;
         }
-        if !self.joined.load(Relaxed) {
+        if !state.joined {
             debug!(self.name, "Cannot toggle video, not in the space yet");
             return;
         }
@@ -236,90 +259,104 @@ impl Participant {
 #[derive(Debug)]
 struct ParticipantInner {
     participant_config: ParticipantConfig,
-    browser: Browser,
     page: Option<Page>,
-    handle: JoinHandle<()>,
-    receiver: UnboundedReceiver<ParticipantMessage>,
-    running: Arc<AtomicBool>,
-    joined: Arc<AtomicBool>,
-    muted: Arc<AtomicBool>,
-    invisible: Arc<AtomicBool>,
+    state: watch::Sender<ParticipantState>,
     auth: AuthToken,
 }
 
 impl ParticipantInner {
-    async fn new(
+    async fn run(
         participant_config: ParticipantConfig,
         receiver: UnboundedReceiver<ParticipantMessage>,
-        running: Arc<AtomicBool>,
-        joined: Arc<AtomicBool>,
-        muted: Arc<AtomicBool>,
-        invisible: Arc<AtomicBool>,
-    ) -> Result<Self> {
-        let (browser, mut handler) = create_browser(&BrowserConfig::from(&participant_config)).await?;
-        let name = participant_config.name.clone();
-
-        let handle = tokio::task::spawn(async move {
-            while let Some(event) = handler.next().await {
-                if let Err(err) = event {
-                    error!(name, "error in browser handler: {err:?}");
-                }
-            }
-        });
-
-        let base_url = participant_config.url.origin().unicode_serialization();
-        let mut auth = AuthToken::fetch_token(&base_url).await?;
-        auth.set_name(&participant_config.name, &base_url).await?;
-
-        Ok(Self {
-            participant_config,
-            browser,
-            page: None,
-            handle,
-            receiver,
-            running,
-            joined,
-            muted,
-            invisible,
-            auth,
-        })
-    }
-
-    async fn spawn(
-        participant_config: ParticipantConfig,
-        receiver: UnboundedReceiver<ParticipantMessage>,
-        running: Arc<AtomicBool>,
-        joined: Arc<AtomicBool>,
-        muted: Arc<AtomicBool>,
-        invisible: Arc<AtomicBool>,
+        state: watch::Sender<ParticipantState>,
     ) -> Result<()> {
-        let running_clone = running.clone();
+        let auth =
+            AuthToken::fetch_token_and_set_name(participant_config.base_url(), &participant_config.username).await?;
 
-        let participant = Self::new(participant_config, receiver, running, joined, muted, invisible)
+        let (browser, handler) = create_browser(&BrowserConfig::from(&participant_config)).await?;
+
+        let browser_event_task_handle = Self::drive_browser_events(&participant_config.username, handler);
+
+        let participant = Self {
+            participant_config,
+            page: None,
+            state: state.clone(),
+            auth,
+        };
+
+        participant
+            .handle_actions(browser, receiver)
             .await
-            .inspect_err(|_| {
-                running_clone.store(false, Relaxed);
-            })?;
-        participant.handle_actions().await.inspect_err(|_| {
-            running_clone.store(false, Relaxed);
-        })?;
+            .context("failed to handle actions")?;
+
+        browser_event_task_handle.await?;
 
         Ok(())
     }
 
-    async fn handle_actions(mut self) -> Result<()> {
-        self.join().await?;
+    fn drive_browser_events(name: impl ToString, mut handler: Handler) -> JoinHandle<()> {
+        let name = name.to_string();
+        tokio::task::spawn(async move {
+            while let Some(event) = handler.next().await {
+                if let Err(err) = event {
+                    if err.to_string().contains("ResetWithoutClosingHandshake") {
+                        error!(name, "Browser unexpectedly closed");
+                        break;
+                    }
+                    error!(name, "error in browser handler: {err:?}");
+                }
+            }
+            debug!(name, "Browser event handler stopped");
+        })
+    }
 
-        while let Some(message) = self.receiver.recv().await {
+    #[instrument(level = "debug", skip(self, browser, receiver), fields(name = %self.participant_config.username))]
+    async fn handle_actions(
+        mut self,
+        mut browser: Browser,
+        mut receiver: UnboundedReceiver<ParticipantMessage>,
+    ) -> Result<()> {
+        self.state.send_modify(|state| {
+            state.running = true;
+        });
+
+        self.join(&mut browser).await?;
+
+        let mut detached_event = browser
+            .event_listener::<chromiumoxide::cdp::browser_protocol::target::EventDetachedFromTarget>()
+            .await
+            .expect("failed to create event listener");
+
+        loop {
+            let message = tokio::select! {
+                biased;
+
+                // Event is fired when the page is closed by the user
+                Some(_) = detached_event.next() => {
+                    warn!(self.participant_config.username, "Browser unexpectedly closed");
+                    match browser.kill().await {
+                        Some(Ok(_)) => debug!("browser killed"),
+                        Some(Err(err)) => error!("failed to kill browser: {err}"),
+                        None => debug!("browser process not found"),
+                    }
+                    break;
+                }
+
+                Some(message) = receiver.recv() => {
+                    message
+                }
+
+            };
+
             match message {
                 ParticipantMessage::Join => {
-                    self.join().await?;
+                    self.join(&mut browser).await?;
                 }
                 ParticipantMessage::Leave => {
                     self.leave().await?;
                 }
                 ParticipantMessage::Close => {
-                    self.close().await?;
+                    self.close(browser).await?;
                     return Ok(());
                 }
                 ParticipantMessage::ToggleAudio => {
@@ -331,63 +368,46 @@ impl ParticipantInner {
             }
         }
 
-        Ok(())
-    }
-
-    async fn close(mut self) -> Result<()> {
-        debug!(self.participant_config.name, "Closing the browser...");
-
-        if let Err(err) = self.leave().await {
-            error!(
-                self.participant_config.name,
-                "Failed leaving space while closing browser: {}", err
-            );
-        }
-
-        self.browser.wait().await?;
-        let _ = self.handle.await;
-
-        info!(self.participant_config.name, "Closed the browser");
-
-        self.running.store(false, Relaxed);
+        self.state.send_modify(|state| {
+            state.running = false;
+        });
 
         Ok(())
     }
 
     async fn set_cookie(&self, page: &Page) -> Result<()> {
-        let domain = self.participant_config.url.host_str().unwrap_or("localhost");
+        let domain = self.participant_config.session_url.host_str().unwrap_or("localhost");
         let cookie = self.auth.as_browser_cookie_for(domain)?;
 
         page.set_cookies(vec![cookie]).await.context("failed to set cookie")?;
 
-        debug!(self.participant_config.name, "Set cookie");
+        debug!(self.participant_config.username, "Set cookie");
 
         Ok(())
     }
 
-    async fn join(&mut self) -> Result<()> {
+    async fn join(&mut self, browser: &mut Browser) -> Result<()> {
         // Create page
-        let page = self
-            .browser
+        let page = browser
             .new_page(
                 CreateTargetParams::builder()
-                    .url(self.participant_config.url.to_string())
+                    .url(self.participant_config.session_url.to_string())
                     .build()
                     .map_err(|e| eyre::eyre!(e))?,
             )
             .await
             .context("failed to create new page")?;
 
-        debug!(self.participant_config.name, "Created new page");
+        debug!(self.participant_config.username, "Created new page");
 
         self.set_cookie(&page).await?;
 
         // Navigate and interact (similar to WebBrowser)
-        page.goto(self.participant_config.url.to_string())
+        page.goto(self.participant_config.session_url.to_string())
             .await
             .context("failed to wait for navigation response")?;
 
-        debug!(self.participant_config.name, "Navigated to page");
+        debug!(self.participant_config.username, "Navigated to page");
 
         // Find the input box to enter the name
         let input = wait_for_element(&page, r#"[data-testid="trigger-join-name"]"#, Duration::from_secs(30))
@@ -401,11 +421,11 @@ impl ParticipantInner {
             .await
             .context("failed to empty current name")?;
         input
-            .type_str(&self.participant_config.name)
+            .type_str(&self.participant_config.username)
             .await
             .context("failed to insert name")?;
 
-        debug!(self.participant_config.name, "Set the name of the participant");
+        debug!(self.participant_config.username, "Set the name of the participant");
 
         // Find the join button and click it
         wait_for_element(
@@ -418,7 +438,7 @@ impl ParticipantInner {
         .await
         .context("failed to click submit button")?;
 
-        debug!(self.participant_config.name, "Clicked on the join button");
+        debug!(self.participant_config.username, "Clicked on the join button");
 
         // Ensure we have joined the space.
         wait_for_element(&page, r#"[data-testid="trigger-leave-call"]"#, Duration::from_secs(30))
@@ -427,28 +447,63 @@ impl ParticipantInner {
 
         self.page = Some(page);
 
-        info!(self.participant_config.name, "Joined the space");
+        info!(self.participant_config.username, "Joined the space");
 
-        self.joined.store(true, Relaxed);
+        self.state.send_modify(|state| {
+            state.joined = true;
+        });
 
         Ok(())
     }
 
     async fn leave(&self) -> Result<()> {
         if let Some(page) = &self.page {
-            page.find_element(r#"button[data-testid="trigger-leave-call"]"#)
+            info!(self.participant_config.username, "Leaving the space...");
+
+            let leave_button = page
+                .find_element(r#"button[data-testid="trigger-leave-call"]"#)
                 .await
-                .context("Could not find the leave space button")?
+                .context("Could not find the leave space button")?;
+
+            debug!("Clicking on the leave space button");
+
+            leave_button
                 .click()
                 .await
                 .context("Could not click on the leave space button")?;
 
-            info!(self.participant_config.name, "Left the space");
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-            self.joined.store(false, Relaxed);
-            self.muted.store(false, Relaxed);
-            self.invisible.store(false, Relaxed);
+            info!(self.participant_config.username, "Left the space");
+
+            self.state.send_modify(|state| {
+                state.joined = false;
+                state.muted = false;
+                state.video_activated = false;
+            });
         }
+
+        Ok(())
+    }
+
+    async fn close(self, mut browser: Browser) -> Result<()> {
+        debug!(self.participant_config.username, "Closing the browser...");
+
+        if let Err(err) = self.leave().await {
+            error!(
+                self.participant_config.username,
+                "Failed leaving space while closing browser: {}", err
+            );
+        }
+
+        if let Some(page) = self.page {
+            page.close().await.context("failed to close browser")?;
+        }
+
+        browser.close().await?;
+        browser.wait().await?;
+
+        info!(self.participant_config.username, "Closed the browser");
 
         Ok(())
     }
@@ -462,10 +517,11 @@ impl ParticipantInner {
                 .await
                 .context("Could not click on the toggle audio button")?;
 
-            info!(self.participant_config.name, "Toggled audio");
+            info!(self.participant_config.username, "Toggled audio");
 
-            let muted = self.muted.load(Relaxed);
-            self.muted.store(!muted, Relaxed);
+            self.state.send_modify(|state| {
+                state.muted = !state.muted;
+            });
         }
 
         Ok(())
@@ -480,10 +536,11 @@ impl ParticipantInner {
                 .await
                 .context("Could not click on the toggle camera button")?;
 
-            info!(self.participant_config.name, "Toggled camera");
+            info!(self.participant_config.username, "Toggled camera");
 
-            let invisible = self.invisible.load(Relaxed);
-            self.invisible.store(!invisible, Relaxed);
+            self.state.send_modify(|state| {
+                state.video_activated = !state.video_activated;
+            });
         }
 
         Ok(())

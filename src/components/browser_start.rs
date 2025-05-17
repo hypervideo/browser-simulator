@@ -25,7 +25,6 @@ impl EditingState {
     fn title(&self) -> &'static str {
         match self.field {
             SelectedField::Url => "Edit URL",
-            SelectedField::Cookie => "Edit Cookie",
             SelectedField::FakeVideoFile => "Edit Fake Video File", // new
             SelectedField::Start | SelectedField::FakeMedia | SelectedField::FakeVideo | SelectedField::Headless => "",
         }
@@ -36,7 +35,6 @@ impl EditingState {
 enum SelectedField {
     #[default]
     Url,
-    Cookie,
     FakeMedia,
     FakeVideo,
     FakeVideoFile,
@@ -49,12 +47,11 @@ pub(crate) enum BrowserStartAction {
     MoveUp,
     MoveDown,
     StartEdit,
-    DeleteCookie,
     StartBrowser,
     ToggleFakeMedia,
     ToggleFakeVideo,
     ToggleHeadless,
-    DeleteFakeVideoFile,
+    DeleteSelectedField,
 }
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -108,11 +105,7 @@ impl Component for BrowserStart {
 
         let editing = self.editing.is_some();
         let action = match key.code {
-            KeyCode::Char('x')
-                if !editing && self.selected == SelectedField::Cookie && !self.config.cookie.is_empty() =>
-            {
-                Some(BrowserStartAction::DeleteCookie)
-            }
+            KeyCode::Delete | KeyCode::Backspace if !editing => Some(BrowserStartAction::DeleteSelectedField),
 
             // navigation
             KeyCode::Up if !editing => Some(BrowserStartAction::MoveUp),
@@ -132,23 +125,10 @@ impl Component for BrowserStart {
                 Some(BrowserStartAction::ToggleHeadless)
             }
             KeyCode::Enter
-                if !editing
-                    && matches!(
-                        self.selected,
-                        SelectedField::Url | SelectedField::Cookie | SelectedField::FakeVideoFile
-                    ) =>
+                if !editing && matches!(self.selected, SelectedField::Url | SelectedField::FakeVideoFile) =>
             {
                 Some(BrowserStartAction::StartEdit)
             } // Edit URL/Cookie/FakeVideoFile
-
-            // delete fake video file
-            KeyCode::Delete | KeyCode::Backspace
-                if !editing
-                    && self.selected == SelectedField::FakeVideoFile
-                    && self.config.fake_video_file.is_some() =>
-            {
-                Some(BrowserStartAction::DeleteFakeVideoFile)
-            }
 
             _ => None,
         };
@@ -171,7 +151,6 @@ impl Component for BrowserStart {
                 if let Some(edit) = self.editing.take() {
                     match edit.field {
                         SelectedField::Url => self.config.url = content,
-                        SelectedField::Cookie => self.config.cookie = content,
                         SelectedField::FakeVideoFile => {
                             // Set to None if the buffer is empty or only whitespace
                             self.config.fake_video_file = if content.trim().is_empty() { None } else { Some(content) };
@@ -197,8 +176,7 @@ impl Component for BrowserStart {
         match action {
             BrowserStartAction::MoveUp => {
                 self.selected = match self.selected {
-                    SelectedField::Cookie => SelectedField::Url,
-                    SelectedField::FakeMedia => SelectedField::Cookie,
+                    SelectedField::FakeMedia => SelectedField::Url,
                     SelectedField::FakeVideo => SelectedField::FakeMedia,
                     SelectedField::FakeVideoFile => SelectedField::FakeVideo,
                     SelectedField::Headless => {
@@ -215,8 +193,7 @@ impl Component for BrowserStart {
 
             BrowserStartAction::MoveDown => {
                 self.selected = match self.selected {
-                    SelectedField::Url => SelectedField::Cookie,
-                    SelectedField::Cookie => SelectedField::FakeMedia,
+                    SelectedField::Url => SelectedField::FakeMedia,
                     SelectedField::FakeMedia => SelectedField::FakeVideo,
                     SelectedField::FakeVideo => {
                         if self.config.fake_video_file.is_some() {
@@ -235,7 +212,6 @@ impl Component for BrowserStart {
             BrowserStartAction::StartEdit if self.editing.is_none() => {
                 let content = match self.selected {
                     SelectedField::Url => self.config.url.clone(),
-                    SelectedField::Cookie => self.config.cookie.clone(),
                     SelectedField::FakeVideoFile => self.config.fake_video_file.clone().unwrap_or_default(),
                     _ => String::new(),
                 };
@@ -253,8 +229,19 @@ impl Component for BrowserStart {
                 return Ok(None);
             }
 
-            BrowserStartAction::DeleteCookie => {
-                self.config.cookie.clear(); // supprime le cookie
+            BrowserStartAction::DeleteSelectedField => {
+                match self.selected {
+                    SelectedField::Url => self.config.url.clear(),
+                    SelectedField::FakeMedia => self.config.fake_media = false,
+                    SelectedField::FakeVideoFile => {
+                        self.config.fake_video_file = None;
+                        // Ensure selection moves if it was on FakeVideoFile
+                        if self.selected == SelectedField::FakeVideoFile {
+                            self.selected = SelectedField::FakeVideo;
+                        }
+                    }
+                    _ => return Ok(None),
+                }
                 if let Err(e) = self.config.save() {
                     error!(?e, "Failed to save config after deleting cookie");
                     // TODO: inform the user via TUI state
@@ -291,17 +278,6 @@ impl Component for BrowserStart {
                 }
             }
 
-            BrowserStartAction::DeleteFakeVideoFile => {
-                self.config.fake_video_file = None;
-                // Ensure selection moves if it was on FakeVideoFile
-                if self.selected == SelectedField::FakeVideoFile {
-                    self.selected = SelectedField::FakeVideo;
-                }
-                if let Err(e) = self.config.save() {
-                    error!(?e, "Failed to save config after deleting fake video file");
-                }
-            }
-
             // Start Browser / Playwright
             BrowserStartAction::StartBrowser => {
                 if self.editing.is_some() {
@@ -326,7 +302,6 @@ impl Component for BrowserStart {
         // Dynamically create constraints based on UI elements
         let mut constraints = vec![
             Constraint::Length(3), // URL
-            Constraint::Length(3), // Cookie
             Constraint::Length(3), // Fake-media checkbox
             Constraint::Length(3), // Fake-video checkbox
         ];
@@ -346,33 +321,14 @@ impl Component for BrowserStart {
 
         // --- URL ---
         let url = self.config.url.clone();
-        let url_widget =
-            Paragraph::new(url)
-                .block(Block::bordered().title("URL"))
-                .style(if self.selected == SelectedField::Url {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                });
-        frame.render_widget(url_widget, rows[current_row_index]);
-        current_row_index += 1;
-
-        // Cookie
-        let mut cookie = self.config.cookie.clone();
-        if cookie.is_empty() {
-            cookie = "<empty>".to_string();
-        } else if cookie.len() > 30 {
-            cookie.truncate(30);
-            cookie.push_str("...");
-        }
-        let cookie_widget = Paragraph::new(cookie)
-            .block(Block::bordered().title("Cookie (x to clear)"))
-            .style(if self.selected == SelectedField::Cookie {
+        let url_widget = Paragraph::new(url)
+            .block(Block::bordered().title("URL (<del> to clear)"))
+            .style(if self.selected == SelectedField::Url {
                 Style::default().fg(Color::Yellow)
             } else {
                 Style::default()
             });
-        frame.render_widget(cookie_widget, rows[current_row_index]);
+        frame.render_widget(url_widget, rows[current_row_index]);
         current_row_index += 1;
 
         // --- Fake Media Checkbox ---
@@ -410,7 +366,7 @@ impl Component for BrowserStart {
         if let Some(path) = &self.config.fake_video_file {
             let display = if path.is_empty() { "<empty>" } else { path };
             let vf_widget = Paragraph::new(display)
-                .block(Block::bordered().title("Fake video file (x to clear)"))
+                .block(Block::bordered().title("Fake video file (<del> to clear)"))
                 .style(if self.selected == SelectedField::FakeVideoFile {
                     Style::default().fg(Color::Yellow)
                 } else {

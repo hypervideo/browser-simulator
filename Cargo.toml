@@ -32,7 +32,8 @@ serde_yml = "0.0.12"
 signal-hook = "0.3.17"
 strip-ansi-escapes = "0.2.0"
 strum = { version = "0.26.3", features = ["derive"] }
-tokio = { version = "1.44.2", default-features = false, features = ["macros", "rt-multi-thread", "sync"] }
+temp-dir = "0.1.16"
+tokio = { version = "1.44.2", default-features = false, features = ["macros", "rt-multi-thread", "sync", "signal"] }
 tokio-util = "0.7.12"
 tracing = "0.1.41"
 tracing-error = "0.2.0"

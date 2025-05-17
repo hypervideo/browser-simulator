@@ -1,11 +1,14 @@
 #[macro_use]
 extern crate tracing;
 
+#[macro_use]
+extern crate scopeguard;
+
 mod action;
 mod app;
-mod browser;
+pub mod browser;
 mod components;
-mod config;
+pub mod config;
 mod errors;
 mod logging;
 mod tui;

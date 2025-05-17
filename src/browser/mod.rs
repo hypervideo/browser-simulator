@@ -1,9 +1,6 @@
 use crate::config::BrowserConfig;
 use chromiumoxide::{
-    browser::{
-        self,
-        BrowserConfig as OxideBrowserConfig,
-    },
+    browser,
     Browser,
     Element,
     Handler,
@@ -52,21 +49,21 @@ async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Hand
         }
     }
 
-    let mut browser_config_builder = OxideBrowserConfig::builder();
+    let mut config = browser::BrowserConfig::builder();
 
     if !browser_config.headless {
-        browser_config_builder = browser_config_builder.with_head();
+        config = config.with_head();
     }
 
-    let browser_config = browser_config_builder
-        .user_data_dir(format!("./tmp/chromiumoxide-{}", &browser_config.name))
+    let config = config
+        .user_data_dir(&browser_config.user_data_dir)
         .chrome_executable(binary)
         .args(&chrome_args)
         .build()
         .map_err(|e| eyre::eyre!(e))
         .context("failed to build browser config")?;
 
-    browser::Browser::launch(browser_config)
+    browser::Browser::launch(config)
         .await
         .context("failed to launch browser")
 }
@@ -75,7 +72,7 @@ async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Hand
 /// Then we add a loop to check if the element is present in the DOM.
 /// In some cases when the processing power is low, the navigation might be completed,
 /// but the page is still rendering the elements.
-pub async fn wait_for_element(page: &Page, selector: &str, timeout: Duration) -> Result<Element> {
+async fn wait_for_element(page: &Page, selector: &str, timeout: Duration) -> Result<Element> {
     let now = std::time::Instant::now();
 
     loop {

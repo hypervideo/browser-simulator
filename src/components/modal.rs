@@ -131,7 +131,7 @@ mod layout {
     pub fn render_popup(popup: impl Widget, frame: &mut Frame) -> Rect {
         let area = center(
             frame.area(),
-            Constraint::Percentage(20),
+            Constraint::Max(120),
             Constraint::Length(3), // top and bottom border + content
         );
         frame.render_widget(Clear, area);

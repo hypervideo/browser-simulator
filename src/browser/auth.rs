@@ -37,6 +37,13 @@ impl AuthToken {
             .expect("failed to create cookie header")
     }
 
+    pub(crate) async fn fetch_token_and_set_name(base_url: impl AsRef<str>, name: impl AsRef<str>) -> Result<Self> {
+        let base_url = base_url.as_ref();
+        let mut auth = AuthToken::fetch_token(base_url).await?;
+        auth.set_name(name, base_url).await?;
+        Ok(auth)
+    }
+
     pub(crate) async fn fetch_token(server_base_url: impl AsRef<str>) -> Result<Self> {
         let server_base_url = server_base_url.as_ref();
 
