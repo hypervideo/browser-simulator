@@ -258,9 +258,9 @@ impl Component for Participants {
                     Cell::from(video),
                 ];
                 let style = if Some(&participant.name) == self.selected.as_ref() {
-                    Style::default().fg(Color::Yellow)
+                    theme.text_selected
                 } else {
-                    Style::default()
+                    theme.text_default
                 };
                 Row::new(cells).style(style).height(1)
             })

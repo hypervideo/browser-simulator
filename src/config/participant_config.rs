@@ -1,3 +1,4 @@
+use crate::media::FakeMedia;
 use eyre::{
     Context as _,
     Result,
@@ -12,8 +13,7 @@ use url::Url;
 pub struct ParticipantConfig {
     pub username: String,
     pub session_url: Url,
-    pub fake_media: bool,
-    pub fake_video_file: Option<String>,
+    pub fake_media: FakeMedia,
     pub headless: bool,
 }
 
@@ -29,8 +29,7 @@ impl ParticipantConfig {
         Ok(Self {
             username: name,
             session_url: url,
-            fake_media: config.fake_media,
-            fake_video_file: config.fake_video_file.clone(),
+            fake_media: config.fake_media(),
             headless: config.headless,
         })
     }

@@ -197,7 +197,7 @@ impl App {
         tui.draw(|frame| {
             // Set uniform background and foreground colors
             frame.render_widget(
-                ratatui::widgets::Block::default().style(crate::tui::theme::Theme::default().default_style),
+                ratatui::widgets::Block::default().style(crate::tui::theme::Theme::default().default),
                 frame.area(),
             );
 

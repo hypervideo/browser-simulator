@@ -1,4 +1,10 @@
-use crate::config::BrowserConfig;
+use crate::{
+    config::BrowserConfig,
+    media::{
+        FakeMedia,
+        FakeMediaFiles,
+    },
+};
 use chromiumoxide::{
     browser,
     Browser,
@@ -39,20 +45,48 @@ async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Hand
 
     // Build browser config with fake media args
     let mut chrome_args = vec!["--no-startup-window".to_string()];
-    if browser_config.fake_media {
-        chrome_args.extend([
-            "--use-fake-ui-for-media-stream".to_string(),
-            "--use-fake-device-for-media-stream".to_string(),
-        ]);
-        if let Some(path) = &browser_config.fake_video_file {
-            chrome_args.push(format!("--use-file-for-fake-video-capture={}", path));
+    match &browser_config.fake_media {
+        FakeMedia::None => {}
+        FakeMedia::Bultin => {
+            chrome_args.extend([
+                "--use-fake-ui-for-media-stream".to_string(),
+                "--use-fake-device-for-media-stream".to_string(),
+            ]);
+        }
+        FakeMedia::FileOrUrl(file_or_url) => {
+            chrome_args.extend([
+                "--use-fake-ui-for-media-stream".to_string(),
+                "--use-fake-device-for-media-stream".to_string(),
+            ]);
+
+            let fake_media = tokio::task::block_in_place(move || {
+                match file_or_url
+                    .parse()
+                    .and_then(|input| FakeMediaFiles::from_file_or_url(input, &browser_config.cache_dir))
+                {
+                    Ok(media) => Some(media),
+                    Err(err) => {
+                        error!("Unable to read custom fake media from {file_or_url:?}: {err}");
+                        None
+                    }
+                }
+            });
+
+            if let Some(media) = fake_media {
+                if let Some(audio) = media.audio {
+                    chrome_args.push(format!("--use-file-for-fake-audio-capture={}", audio.display()));
+                }
+                if let Some(video) = media.video {
+                    chrome_args.push(format!("--use-file-for-fake-video-capture={}", video.display()));
+                }
+            }
         }
     }
 
     let mut config = browser::BrowserConfig::builder();
 
     if !browser_config.headless {
-        config = config.with_head();
+        config = config.with_head().window_size(1920, 1080).viewport(None) // Fill the entire window
     }
 
     let config = config

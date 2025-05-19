@@ -1,5 +1,6 @@
 use crate::tui::{
     layout,
+    theme::Theme,
     Action,
     ActivateAction,
     Component,
@@ -55,6 +56,8 @@ impl Component for NavTabs {
     }
 
     fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::prelude::Rect) -> Result<()> {
+        let theme = Theme::default();
+
         let [header_area, _main_area] = layout::header_and_main_area(area)?;
         let [header_area] = *Layout::default()
             .direction(Direction::Vertical)
@@ -76,7 +79,7 @@ impl Component for NavTabs {
         let tabs = Tabs::new(tab_titles)
             .select(selected_tab)
             .style(Style::default().fg(Color::Gray))
-            .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            .highlight_style(theme.text_selected.add_modifier(Modifier::BOLD))
             .block(ratatui::widgets::Block::new().borders(ratatui::widgets::Borders::BOTTOM))
             .divider(" | ");
 

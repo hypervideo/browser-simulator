@@ -17,6 +17,7 @@ crossterm = { version = "0.28.1", features = ["serde", "event-stream"] }
 derive_more = { version = "2.0.1", default-features = false, features = ["deref", "deref_mut", "debug", "display"] }
 directories = "5.0.1"
 eyre = "0.6.12"
+ffmpeg-sidecar = "2.0.5"
 futures = "0.3.31"
 human-panic = "2.0.2"
 lazy_static = "1.5.0"
@@ -24,11 +25,12 @@ libc = "0.2.161"
 pretty_assertions = "1.4.1"
 random_name_generator = "0.3.6"
 ratatui = { version = "0.29.0", features = ["serde", "macros"] }
-reqwest = { version = "0.12.15", features = ["cookies", "json"] }
+reqwest = { version = "0.12.15", features = ["cookies", "json", "blocking"] }
 scopeguard = "1.2.0"
 serde = { version = "1.0.211", features = ["derive"] }
 serde_json = "1.0.132"
 serde_yml = "0.0.12"
+sha1 = "0.10.6"
 signal-hook = "0.3.17"
 strip-ansi-escapes = "0.2.0"
 strum = { version = "0.26.3", features = ["derive"] }

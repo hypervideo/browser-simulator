@@ -7,6 +7,7 @@ use hyper_video_client_simulator::{
     },
     config::ParticipantConfig,
     init_errors,
+    media::FakeMedia,
 };
 use std::time::Duration;
 use url::Url;
@@ -30,8 +31,7 @@ async fn run(Args { url }: Args) -> Result<()> {
         ParticipantConfig {
             username: "browser-simulator example".to_string(),
             session_url: url.clone(),
-            fake_media: true,
-            fake_video_file: None,
+            fake_media: FakeMedia::Bultin,
             headless: false,
         },
         None,

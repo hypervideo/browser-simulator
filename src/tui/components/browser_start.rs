@@ -3,7 +3,10 @@ use crate::{
     config::Config,
     tui::{
         layout::header_and_two_main_areas,
-        widgets,
+        widgets::{
+            self,
+            ListInput,
+        },
         Action,
         ActivateAction,
         Component,
@@ -31,7 +34,6 @@ enum SelectedField {
     #[default]
     Url,
     FakeMedia,
-    FakeVideoFile,
     Headless,
     Start,
 }
@@ -41,9 +43,8 @@ impl SelectedField {
         match self {
             SelectedField::Url => " URL to a hyper.video session. <enter> to edit, <del> to clear. ",
             SelectedField::FakeMedia => {
-                " Use a test video and audio stream instead of real media devices. <enter> to toggle. "
+                " Use audio and video from a file or a generated test stream. <enter> to edit, <del> to clear. "
             }
-            SelectedField::FakeVideoFile => " Use audio and video from a file. <enter> to edit, <del> to clear. ",
             SelectedField::Headless => " Run the browser in headless mode? <enter> to toggle. ",
             SelectedField::Start => " Start a new browser session and join a hyper.video session. <enter> to start. ",
         }
@@ -54,11 +55,17 @@ impl SelectedField {
 pub(crate) enum BrowserStartAction {
     MoveUp,
     MoveDown,
-    StartEdit,
+    StartEditText,
+    StartSelectFakeMedia,
     StartBrowser,
-    ToggleFakeMedia,
     ToggleHeadless,
     DeleteSelectedField,
+}
+
+#[derive(Debug, Clone)]
+enum FakeMediaWithDescriptionItem {
+    Add,
+    Select,
 }
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -71,6 +78,7 @@ pub struct BrowserStart {
     config: Config,
     selected: SelectedField,
     editing: Option<EditingState>,
+    fake_media_builtin_list: Option<ListInput<FakeMediaWithDescriptionItem>>,
     participant_store: ParticipantStore,
 }
 
@@ -82,6 +90,7 @@ impl BrowserStart {
             command_tx: None,
             config: Config::default(),
             selected: SelectedField::Url,
+            fake_media_builtin_list: None,
             editing: None,
             participant_store,
         }
@@ -114,11 +123,11 @@ impl Component for BrowserStart {
                     let content = editing.editor.finish();
                     match editing.field {
                         SelectedField::Url => self.config.url = content,
-                        SelectedField::FakeVideoFile => {
-                            // Set to None if the buffer is empty or only whitespace
-                            self.config.fake_video_file = if content.trim().is_empty() { None } else { Some(content) };
+                        SelectedField::FakeMedia => {
+                            let index = self.config.add_custom_fake_media(content);
+                            self.config.fake_media_selected = index;
                         }
-                        SelectedField::FakeMedia | SelectedField::Headless | SelectedField::Start => {}
+                        SelectedField::Headless | SelectedField::Start => {}
                     }
                     // Save config immediately after edit confirmation
                     if let Err(e) = self.config.save() {
@@ -139,6 +148,55 @@ impl Component for BrowserStart {
             }
         }
 
+        if let Some(mut list) = self.fake_media_builtin_list.take() {
+            match key.code {
+                KeyCode::Delete | KeyCode::Backspace => {
+                    if let Some(index) = list.finish().and_then(|(index, _)| (index > 0).then(|| index - 1)) {
+                        if index >= 2 {
+                            self.config.fake_media_sources.remove(index);
+                        }
+                    }
+
+                    return Ok(Some(Action::BrowserStartAction(
+                        BrowserStartAction::StartSelectFakeMedia,
+                    )));
+                }
+
+                KeyCode::Enter => {
+                    let content = list.finish();
+                    if let Some((index, media)) = content {
+                        match media {
+                            FakeMediaWithDescriptionItem::Add => {
+                                return Ok(Some(Action::BrowserStartAction(BrowserStartAction::StartEditText)));
+                            }
+                            FakeMediaWithDescriptionItem::Select => {
+                                self.config.fake_media_selected = Some(index - 1);
+                            }
+                        }
+                    } else {
+                        self.config.fake_media_selected = None;
+                    };
+
+                    if let Err(e) = self.config.save() {
+                        error!(?e, "Failed to save config after edit");
+                    }
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+
+                _ => {}
+            }
+
+            let handled = list.handle_key_event(key);
+            self.fake_media_builtin_list = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
         let action = match key.code {
             KeyCode::Delete | KeyCode::Backspace => Some(BrowserStartAction::DeleteSelectedField),
 
@@ -148,10 +206,15 @@ impl Component for BrowserStart {
 
             // start editing or start browser or toggle
             KeyCode::Enter if self.selected == SelectedField::Start => Some(BrowserStartAction::StartBrowser),
-            KeyCode::Enter if self.selected == SelectedField::FakeMedia => Some(BrowserStartAction::ToggleFakeMedia),
             KeyCode::Enter if self.selected == SelectedField::Headless => Some(BrowserStartAction::ToggleHeadless),
-            KeyCode::Enter if matches!(self.selected, SelectedField::Url | SelectedField::FakeVideoFile) => {
-                Some(BrowserStartAction::StartEdit)
+            KeyCode::Enter if self.selected == SelectedField::FakeMedia => {
+                Some(BrowserStartAction::StartSelectFakeMedia)
+            }
+            KeyCode::Enter if self.selected == SelectedField::Url => Some(BrowserStartAction::StartEditText),
+
+            KeyCode::Esc if self.fake_media_builtin_list.is_some() => {
+                self.fake_media_builtin_list = None;
+                None
             }
 
             _ => None,
@@ -192,8 +255,7 @@ impl Component for BrowserStart {
             BrowserStartAction::MoveUp => {
                 self.selected = match self.selected {
                     SelectedField::FakeMedia => SelectedField::Url,
-                    SelectedField::FakeVideoFile => SelectedField::FakeMedia,
-                    SelectedField::Headless => SelectedField::FakeVideoFile,
+                    SelectedField::Headless => SelectedField::FakeMedia,
                     SelectedField::Start => SelectedField::Headless,
                     other => other, // Url stays Url
                 };
@@ -202,23 +264,23 @@ impl Component for BrowserStart {
             BrowserStartAction::MoveDown => {
                 self.selected = match self.selected {
                     SelectedField::Url => SelectedField::FakeMedia,
-                    SelectedField::FakeMedia => SelectedField::FakeVideoFile,
-                    SelectedField::FakeVideoFile => SelectedField::Headless,
+                    SelectedField::FakeMedia => SelectedField::Headless,
                     SelectedField::Headless => SelectedField::Start,
                     SelectedField::Start => return Ok(Some(Action::Activate(ActivateAction::Participants))),
                 };
             }
 
             // Edit
-            BrowserStartAction::StartEdit if self.editing.is_none() => {
+            BrowserStartAction::StartEditText if self.editing.is_none() => {
                 let (title, placeholder, content) = match self.selected {
                     SelectedField::Url => ("Edit URL", "URL to a hyper.video session", self.config.url.clone()),
-                    SelectedField::FakeVideoFile => (
-                        "Edit path to video file",
-                        "",
-                        self.config.fake_video_file.clone().unwrap_or_default(),
-                    ),
-                    _ => ("", "", String::new()),
+                    SelectedField::FakeMedia => {
+                        let content = self.config.fake_media().to_string();
+                        ("Edit Fake Media", "Fake media from file", content)
+                    }
+                    _ => {
+                        return Ok(None);
+                    }
                 };
 
                 let state = EditingState {
@@ -229,29 +291,39 @@ impl Component for BrowserStart {
                 return Ok(Some(Action::UpdateGlobalKeybindings(Default::default())));
             }
 
-            BrowserStartAction::StartEdit => {
+            BrowserStartAction::StartEditText => {
+                return Ok(None);
+            }
+
+            BrowserStartAction::StartSelectFakeMedia => {
+                let items = [("<add...>".to_string(), FakeMediaWithDescriptionItem::Add)]
+                    .into_iter()
+                    .chain(
+                        self.config
+                            .fake_media_sources
+                            .clone()
+                            .into_iter()
+                            .map(|media| (media.description().to_string(), FakeMediaWithDescriptionItem::Select)),
+                    );
+                self.fake_media_builtin_list = Some(ListInput::new(
+                    "Fake Media Files",
+                    items,
+                    self.config.fake_media_selected.map(|index| index + 1),
+                ));
                 return Ok(None);
             }
 
             BrowserStartAction::DeleteSelectedField => {
                 match self.selected {
                     SelectedField::Url => self.config.url.clear(),
-                    SelectedField::FakeMedia => self.config.fake_media = false,
-                    SelectedField::FakeVideoFile => {
-                        self.config.fake_video_file = None;
+                    SelectedField::FakeMedia => {
+                        self.config.fake_media_selected = Some(0);
                     }
                     _ => return Ok(None),
                 }
                 if let Err(e) = self.config.save() {
                     error!(?e, "Failed to save config after deleting cookie");
                     // TODO: inform the user via TUI state
-                }
-            }
-
-            BrowserStartAction::ToggleFakeMedia => {
-                self.config.fake_media = !self.config.fake_media;
-                if let Err(e) = self.config.save() {
-                    error!(?e, "Failed to save config after toggling fake media");
                 }
             }
 
@@ -289,7 +361,6 @@ impl Component for BrowserStart {
             .border_style(theme.border(self.focused))
             .title("Browser controls")
             .title_bottom(Line::from(self.selected.selected_help()).centered());
-
         frame.render_widget(&block, area);
 
         let area = block.inner(area);
@@ -300,8 +371,7 @@ impl Component for BrowserStart {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1), // URL
-                Constraint::Length(1), // Fake-media checkbox
-                Constraint::Length(1), // Fake-video-file editor
+                Constraint::Length(1), // Fake-media
                 Constraint::Length(1), // Headless checkbox
                 Constraint::Length(2), // Start button
             ])
@@ -310,11 +380,9 @@ impl Component for BrowserStart {
         let mut current_row_index = 0;
 
         // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-        let form_labels = ["URL:", "Fake media:", "Fake video:", "Fake video file:", "Headless:"];
-        let max_length = form_labels.iter().map(|s| s.len()).max().unwrap_or(0) + 1;
-
-        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
         // render individual form widgets for the browser controls
+        let form_labels = ["URL:", "Fake media:", "Headless:"];
+        let max_length = form_labels.iter().map(|s| s.len()).max().unwrap_or(0) + 1;
 
         // --- URL ---
         let url_widget = widgets::label_and_text(
@@ -326,36 +394,30 @@ impl Component for BrowserStart {
             },
             max_length,
             self.focused && self.selected == SelectedField::Url,
+            &theme,
         );
         frame.render_widget(url_widget, rows[current_row_index]);
         current_row_index += 1;
 
         // --- Fake Media Checkbox ---
-        let fake_media_widget = widgets::label_and_bool(
+        let content = self.config.fake_media().to_string();
+        let fake_media_widget = widgets::label_and_text(
             form_labels[1],
-            self.config.fake_media,
+            content,
             max_length,
             self.focused && self.selected == SelectedField::FakeMedia,
+            &theme,
         );
         frame.render_widget(fake_media_widget, rows[current_row_index]);
         current_row_index += 1;
 
-        // --- Fake Video File Input (Conditional) ---
-        let vf_widget = widgets::label_and_text(
-            form_labels[3],
-            self.config.fake_video_file.as_deref().unwrap_or("<empty>"),
-            max_length,
-            self.focused && self.selected == SelectedField::FakeVideoFile,
-        );
-        frame.render_widget(vf_widget, rows[current_row_index]);
-        current_row_index += 1;
-
         // --- Headless Checkbox ---
         let headless_widget = widgets::label_and_bool(
-            form_labels[4],
+            form_labels[2],
             self.config.headless,
             max_length,
             self.focused && self.selected == SelectedField::Headless,
+            &theme,
         );
         frame.render_widget(headless_widget, rows[current_row_index]);
         current_row_index += 1;
@@ -363,7 +425,7 @@ impl Component for BrowserStart {
         // --- Start Button ---
         let start_widget = Paragraph::new("Start Browser")
             .style(if self.focused && self.selected == SelectedField::Start {
-                Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow)
+                theme.text_selected.add_modifier(Modifier::BOLD)
             } else {
                 Style::default().add_modifier(Modifier::BOLD)
             })
@@ -372,6 +434,10 @@ impl Component for BrowserStart {
 
         if let Some(editing) = &mut self.editing {
             editing.editor.draw(frame, area)?;
+        }
+
+        if let Some(fake_media_list) = &mut self.fake_media_builtin_list {
+            fake_media_list.draw(frame, area)?;
         }
 
         Ok(())

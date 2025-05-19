@@ -1,3 +1,4 @@
+use crate::tui::theme::Theme;
 use ratatui::{
     prelude::*,
     widgets::*,
@@ -8,6 +9,7 @@ pub(crate) fn label_and_text<'a>(
     content: impl ToString,
     label_width: usize,
     selected: bool,
+    theme: &Theme,
 ) -> Paragraph<'a> {
     let label = format!("{:width$}", label.to_string(), width = label_width);
     let content = content.to_string();
@@ -18,9 +20,9 @@ pub(crate) fn label_and_text<'a>(
             Span::styled(
                 content,
                 if selected {
-                    Style::default().fg(Color::Yellow)
+                    theme.text_selected
                 } else {
-                    Style::default()
+                    theme.text_default
                 },
             ),
         ]
@@ -33,7 +35,8 @@ pub(crate) fn label_and_bool<'a>(
     content: bool,
     label_width: usize,
     selected: bool,
+    theme: &Theme,
 ) -> Paragraph<'a> {
     let content = if content { "[x]" } else { "[ ]" };
-    label_and_text(label, content, label_width, selected)
+    label_and_text(label, content, label_width, selected, theme)
 }

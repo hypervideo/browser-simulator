@@ -14,7 +14,7 @@ pub(super) struct AppConfig {
 }
 
 lazy_static::lazy_static! {
-    pub(crate)static ref PROJECT_NAME: String = env!("CARGO_CRATE_NAME").to_uppercase().to_string();
+    pub(crate)static ref PROJECT_NAME: String = env!("CARGO_PKG_NAME").to_uppercase().to_string();
     static ref DATA_FOLDER: Option<PathBuf> = env::var(format!("{}_DATA", PROJECT_NAME.clone()))
         .ok()
         .map(PathBuf::from);
@@ -43,6 +43,14 @@ pub(crate) fn get_config_dir() -> PathBuf {
         PathBuf::from(".").join(".config")
     };
     directory
+}
+
+pub(crate) fn cache_dir() -> PathBuf {
+    if let Some(dirs) = ProjectDirs::from("video", "hyper", env!("CARGO_PKG_NAME")) {
+        dirs.cache_dir().to_path_buf()
+    } else {
+        PathBuf::from(".cache")
+    }
 }
 
 fn project_directory() -> Option<ProjectDirs> {

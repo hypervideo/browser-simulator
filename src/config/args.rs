@@ -1,7 +1,7 @@
 use clap::Parser;
 
 /// Client Simulator TUI
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Default, Debug, Clone)]
 #[command(author, version = version(), about, long_about = None)]
 pub struct Args {
     /// Optional URL to override the stored configuration.

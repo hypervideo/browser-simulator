@@ -1,0 +1,26 @@
+fake_media: true
+fake_media_selected: 1
+fake_media_sources:
+- fake_media: <none>
+- fake_media: <builtin>
+- description: South Park (Video + Audio)
+  fake_media: https://share.dev.hyper.video/sp.mp4
+- description: "IT Crowd (Video + Audio)"
+  fake_media: "https://share.dev.hyper.video/itcrowd.mkv"
+- description: "Counting (Audio)"
+  fake_media: "https://share.dev.hyper.video/iris-counting.wav"
+- description: "Pelicans + dog barking (Audio)"
+  fake_media: "https://audio-samples.hyper.video/alison-dog-barking-bg-50.mp3"
+- description: "Pelicans + background talking (Audio)"
+  fake_media: "https://audio-samples.hyper.video/alison-muffled-talking-bg-50.mp3"
+- description: "Pelicans + subway (Audio)"
+  fake_media: "https://audio-samples.hyper.video/alison-subway-bg-50.mp3"
+- description: "Trumpet soloist + baby crying (Audio)"
+  fake_media: "https://audio-samples.hyper.video/balsom-baby-crying-bg-90.mp3"
+- description: "Kennedy + Keyboard (Audio)"
+  fake_media: "https://audio-samples.hyper.video/kennedy-keyboard-bg-50.mp3"
+- description: "Corinthians + Cafe (Audio)"
+  fake_media: "https://audio-samples.hyper.video/corinthians-cafe-bg-90.mp3"
+- description: "Steve Jobs + British radio (Audio)"
+  fake_media: "https://audio-samples.hyper.video/steve-jobs-british-radio-bg-50.mp3"
+headless: false

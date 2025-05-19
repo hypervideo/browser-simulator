@@ -5,6 +5,7 @@ pub mod browser;
 pub mod config;
 mod errors;
 pub mod logging;
+pub mod media;
 mod tui;
 
 pub use config::Args;

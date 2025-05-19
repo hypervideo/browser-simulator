@@ -5,7 +5,9 @@ use ratatui::style::{
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Theme {
-    pub(super) default_style: Style,
+    pub(super) default: Style,
+    pub(super) text_default: Style,
+    pub(super) text_selected: Style,
     pub(super) border_focused: Style,
     pub(super) border_unfocused: Style,
 }
@@ -13,7 +15,9 @@ pub(super) struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            default_style: Style::default().bg(Color::Black).fg(Color::Gray),
+            default: Style::default().bg(Color::Black).fg(Color::Gray),
+            text_default: Style::default(),
+            text_selected: Style::default().fg(Color::Yellow),
             border_focused: Style::default().fg(Color::White),
             border_unfocused: Style::default().fg(Color::DarkGray),
         }
