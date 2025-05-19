@@ -13,7 +13,10 @@ pub use args::Args;
 pub use browser_config::BrowserConfig;
 use color_eyre::Result;
 use eyre::Context as _;
-use keybindings::KeyBindings;
+pub(crate) use keybindings::{
+    KeyBindings,
+    Keymap,
+};
 pub use participant_config::ParticipantConfig;
 use serde::{
     Deserialize,

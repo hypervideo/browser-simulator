@@ -1,20 +1,17 @@
 BrowserStart:
-  "<2>": "Participants" # Open the participants tab
-  "<3>": "Logs" # Open the logs tab
+  "<2>": !Activate Logs # Open the logs tab
   "<q>": "Quit" # Quit the application
   "<Ctrl-d>": "Quit" # Another way to quit
   "<Ctrl-c>": "Quit" # Yet another way to quit
   "<Ctrl-z>": "Suspend" # Suspend the application
 Participants:
-  "<1>": "BrowserStart" # Open the browser start tab
-  "<3>": "Logs" # Open the logs tab
+  "<2>": !Activate Logs # Open the logs tab
   "<q>": "Quit" # Quit the application
   "<Ctrl-d>": "Quit" # Another way to quit
   "<Ctrl-c>": "Quit" # Yet another way to quit
   "<Ctrl-z>": "Suspend" # Suspend the application
 Logs:
-  "<1>": "BrowserStart" # Open the browser start tab
-  "<2>": "Participants" # Open the participants tab
+  "<1>": !Activate BrowserStart # Open the browser start tab
   "<q>": "Quit" # Quit the application
   "<Ctrl-d>": "Quit" # Another way to quit
   "<Ctrl-c>": "Quit" # Yet another way to quit

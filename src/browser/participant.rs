@@ -60,22 +60,18 @@ pub struct ParticipantStore {
 }
 
 impl ParticipantStore {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn spawn(&self, config: &Config) -> Result<()> {
+    pub(crate) fn spawn(&self, config: &Config) -> Result<()> {
         let participant = Participant::with_app_config(config)?;
         self.add(participant);
         Ok(())
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.inner.lock().unwrap().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     fn sorted(&self) -> IntoIter<Participant> {
@@ -85,24 +81,30 @@ impl ParticipantStore {
         participants.into_iter()
     }
 
-    pub fn keys(&self) -> Vec<String> {
+    pub(crate) fn keys(&self) -> Vec<String> {
         self.sorted().map(|p| p.name.clone()).collect()
     }
 
-    pub fn values(&self) -> Vec<Participant> {
+    pub(crate) fn values(&self) -> Vec<Participant> {
         self.sorted().collect()
     }
 
-    pub fn add(&self, participant: Participant) {
+    pub(crate) fn add(&self, participant: Participant) {
         self.inner.lock().unwrap().insert(participant.name.clone(), participant);
     }
 
-    pub fn remove(&self, name: &str) -> Option<Participant> {
+    pub(crate) fn remove(&self, name: &str) -> Option<Participant> {
         self.inner.lock().unwrap().remove(name)
     }
 
-    pub fn get(&self, name: &str) -> Option<Participant> {
+    pub(crate) fn get(&self, name: &str) -> Option<Participant> {
         self.inner.lock().unwrap().get(name).cloned()
+    }
+
+    pub(crate) fn prev(&self, name: &str) -> Option<String> {
+        let sorted = self.sorted().collect::<Vec<_>>();
+        let index = sorted.iter().position(|p| p.name == name)?;
+        (index > 0).then(|| sorted[index - 1].name.clone())
     }
 }
 

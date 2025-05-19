@@ -1,13 +1,15 @@
 use crate::{
-    action::Action,
     config::Config,
-    tui::Event,
+    tui::{
+        Action,
+        Event,
+    },
 };
-use color_eyre::Result;
 use crossterm::event::{
     KeyEvent,
     MouseEvent,
 };
+use eyre::Result;
 use ratatui::{
     layout::{
         Rect,
@@ -17,25 +19,19 @@ use ratatui::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-pub mod browser_start;
-pub mod fps;
-pub mod logs;
-pub mod modal;
-pub mod participants;
-
 /// `Component` is a trait that represents a visual and interactive element of the user interface.
 ///
 /// Implementors of this trait can be registered with the main application loop and will be able to
 /// receive events, update state, and be rendered on the screen.
 pub trait Component {
-    /// Suspend the component, pausing its activity.
-    fn suspend(&mut self) -> Result<()> {
-        Ok(())
+    fn is_visible(&self) -> bool {
+        true
     }
-    /// Resume the component, allowing it to continue its activity.
-    fn resume(&mut self) -> Result<()> {
-        Ok(())
+
+    fn is_focused(&self) -> bool {
+        true
     }
+
     /// Register an action handler that can send actions for processing if necessary.
     ///
     /// # Arguments
@@ -49,6 +45,7 @@ pub trait Component {
         let _ = tx; // to appease clippy
         Ok(())
     }
+
     /// Register a configuration handler that provides configuration settings if necessary.
     ///
     /// # Arguments
@@ -62,6 +59,7 @@ pub trait Component {
         let _ = config; // to appease clippy
         Ok(())
     }
+
     /// Initialize the component with a specified area if necessary.
     ///
     /// # Arguments
@@ -75,6 +73,7 @@ pub trait Component {
         let _ = area; // to appease clippy
         Ok(())
     }
+
     /// Handle incoming events and produce actions if necessary.
     ///
     /// # Arguments
@@ -92,6 +91,7 @@ pub trait Component {
         };
         Ok(action)
     }
+
     /// Handle key events and produce actions if necessary.
     ///
     /// # Arguments
@@ -105,6 +105,7 @@ pub trait Component {
         let _ = key; // to appease clippy
         Ok(None)
     }
+
     /// Handle mouse events and produce actions if necessary.
     ///
     /// # Arguments
@@ -118,6 +119,7 @@ pub trait Component {
         let _ = mouse; // to appease clippy
         Ok(None)
     }
+
     /// Update the state of the component based on a received action. (REQUIRED)
     ///
     /// # Arguments
@@ -131,6 +133,7 @@ pub trait Component {
         let _ = action; // to appease clippy
         Ok(None)
     }
+
     /// Render the component on the screen. (REQUIRED)
     ///
     /// # Arguments

@@ -1,8 +1,8 @@
-use crate::components::{
+use super::components::{
     browser_start,
-    modal,
     participants,
 };
+use crate::config::Keymap;
 use serde::{
     Deserialize,
     Serialize,
@@ -11,23 +11,19 @@ use serde_yml::with::singleton_map_recursive;
 use strum::Display;
 
 #[derive(Display, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Action {
+pub(crate) enum Action {
     Tick,
     Render,
     Resize(u16, u16),
     Suspend,
     Resume,
     Quit,
-    BrowserStart,
-    Participants,
-    Logs,
     ClearScreen,
     Error(String),
     Help,
+    UpdateGlobalKeybindings(Keymap),
 
-    #[allow(clippy::enum_variant_names)]
-    #[serde(with = "singleton_map_recursive")]
-    TextModal(modal::TextModalAction),
+    Activate(ActivateAction),
 
     #[allow(clippy::enum_variant_names)]
     #[serde(with = "singleton_map_recursive")]
@@ -36,19 +32,24 @@ pub enum Action {
     #[allow(clippy::enum_variant_names)]
     #[serde(with = "singleton_map_recursive")]
     ParticipantsAction(participants::ParticipantsAction),
+
+    ParticipantCountChanged(usize),
+}
+
+#[derive(Display, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ActivateAction {
+    BrowserStart,
+    Participants,
+    Logs,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use modal::TextModalAction;
 
     #[test]
     fn name() {
-        let result = serde_yml::to_string(&Action::TextModal(TextModalAction::TextModalSubmit(
-            "Testing".to_string(),
-        )))
-        .unwrap();
+        let result = serde_yml::to_string(&Action::Activate(ActivateAction::BrowserStart)).unwrap();
         println!("{result}");
         panic!();
     }

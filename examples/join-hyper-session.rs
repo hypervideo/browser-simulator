@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate tracing;
-
 use clap::Parser;
 use eyre::Result;
 use hyper_video_client_simulator::{

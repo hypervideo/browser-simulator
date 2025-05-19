@@ -1,11 +1,19 @@
-use super::Component;
 use crate::{
-    action::Action,
     browser::participant::ParticipantStore,
+    config::Keymap,
+    tui::{
+        layout::header_and_two_main_areas,
+        Action,
+        ActivateAction,
+        Component,
+        FocusedTopLevelComponent,
+        Theme,
+    },
 };
 use chrono::TimeDelta;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
+use eyre::OptionExt as _;
 use ratatui::{
     layout::{
         Constraint,
@@ -15,10 +23,9 @@ use ratatui::{
         Color,
         Style,
     },
+    text::Line,
     widgets::{
         Cell,
-        List,
-        ListItem,
         Row,
         Table,
         TableState,
@@ -35,21 +42,23 @@ pub(crate) enum ParticipantsAction {
 
 #[derive(Debug, Clone)]
 pub struct Participants {
+    focused: bool,
+    visible: bool,
     participants: ParticipantStore,
     selected: Option<String>,
-    draw: bool,
-    suspended: bool,
     table_state: TableState,
+    keymap: Keymap,
 }
 
 impl Participants {
     pub fn new(participants: ParticipantStore) -> Self {
         Self {
+            focused: false,
+            visible: true,
             selected: None,
             participants,
-            draw: true,
-            suspended: true,
             table_state: TableState::default(),
+            keymap: Keymap::default(),
         }
     }
 
@@ -57,6 +66,7 @@ impl Participants {
         Ok(())
     }
 
+    #[expect(unused)]
     pub fn len(&self) -> usize {
         self.participants.len()
     }
@@ -69,11 +79,11 @@ impl Participants {
                 if index > 0 {
                     self.selected = keys.get(index - 1).cloned();
                 } else {
-                    self.selected = keys.last().cloned();
+                    self.selected = None;
                 }
             }
         } else {
-            self.selected = self.participants.keys().last().cloned();
+            self.selected = None;
         }
     }
 
@@ -84,8 +94,6 @@ impl Participants {
             if let Some(index) = index {
                 if index < keys.len() - 1 {
                     self.selected = keys.get(index + 1).cloned();
-                } else {
-                    self.selected = keys.first().cloned();
                 }
             }
         } else {
@@ -95,27 +103,48 @@ impl Participants {
 }
 
 impl Component for Participants {
-    fn suspend(&mut self) -> Result<()> {
-        self.draw = false;
-        self.suspended = true;
-        Ok(())
+    fn is_visible(&self) -> bool {
+        self.visible
     }
 
-    fn resume(&mut self) -> Result<()> {
-        self.draw = true;
-        self.suspended = false;
+    fn is_focused(&self) -> bool {
+        self.focused
+    }
+
+    fn register_config_handler(&mut self, config: crate::config::Config) -> Result<()> {
+        self.keymap = config
+            .keybindings
+            .get(&FocusedTopLevelComponent::Participants)
+            .cloned()
+            .ok_or_eyre("No keymap found for Participants")?;
         Ok(())
     }
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
-        if self.suspended {
-            return Ok(None);
-        }
-
         match action {
+            Action::Activate(ActivateAction::Participants) => {
+                self.focused = true;
+                self.visible = true;
+                self.selected = self.participants.keys().first().cloned();
+                return Ok(Some(Action::UpdateGlobalKeybindings(self.keymap.clone())));
+            }
+            Action::Activate(ActivateAction::BrowserStart) => {
+                self.focused = false;
+                self.visible = true;
+                return Ok(None);
+            }
+            Action::Activate(_) => {
+                self.focused = false;
+                self.visible = false;
+            }
             Action::Render => self.render_tick()?,
             Action::ParticipantsAction(inner) => match inner {
-                ParticipantsAction::MoveUp => self.move_up(),
+                ParticipantsAction::MoveUp => {
+                    self.move_up();
+                    if self.selected.is_none() {
+                        return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                    }
+                }
                 ParticipantsAction::MoveDown => self.move_down(),
             },
             _ => {}
@@ -124,92 +153,90 @@ impl Component for Participants {
     }
 
     fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<Option<Action>> {
-        if self.suspended {
-            return Ok(None);
-        }
-
-        let selected = self.selected.is_some();
-
-        let action = match key.code {
-            KeyCode::Backspace | KeyCode::Delete if selected => {
-                if let Some(participant) = self.participants.remove(&self.selected.clone().unwrap()) {
+        let action = match (key.code, &self.selected) {
+            (KeyCode::Backspace | KeyCode::Delete, Some(selected)) => {
+                let prev = self.participants.prev(selected);
+                if let Some(participant) = self.participants.remove(selected) {
                     tokio::spawn(async move {
                         participant.close().await;
                     });
-                    self.selected = None;
                 }
-
-                None
+                self.selected = prev;
+                Some(Action::ParticipantCountChanged(self.participants.len()))
             }
-            KeyCode::Char('l') if selected => {
-                if let Some(participant) = self.participants.get(&self.selected.clone().unwrap()) {
+
+            (KeyCode::Char('l'), Some(selected)) => {
+                if let Some(participant) = self.participants.get(selected) {
                     participant.leave();
                 }
 
                 None
             }
-            KeyCode::Char('j') if selected => {
-                if let Some(participant) = self.participants.get(&self.selected.clone().unwrap()) {
+
+            (KeyCode::Char('j'), Some(selected)) => {
+                if let Some(participant) = self.participants.get(selected) {
                     participant.join();
                 }
-
                 None
             }
-            KeyCode::Char('m') if selected => {
-                if let Some(participant) = self.participants.get(&self.selected.clone().unwrap()) {
+
+            (KeyCode::Char('m'), Some(selected)) => {
+                if let Some(participant) = self.participants.get(selected) {
                     participant.toggle_audio();
                 }
 
                 None
             }
-            KeyCode::Char('v') if selected => {
-                if let Some(participant) = self.participants.get(&self.selected.clone().unwrap()) {
+
+            (KeyCode::Char('v'), Some(selected)) => {
+                if let Some(participant) = self.participants.get(selected) {
                     participant.toggle_video();
                 }
-
                 None
             }
 
             // navigation
-            KeyCode::Up => Some(ParticipantsAction::MoveUp),
-            KeyCode::Down => Some(ParticipantsAction::MoveDown),
+            (KeyCode::Up, _) => Some(Action::ParticipantsAction(ParticipantsAction::MoveUp)),
+            (KeyCode::Down, _) => Some(Action::ParticipantsAction(ParticipantsAction::MoveDown)),
 
             _ => None,
         };
 
-        Ok(action.map(Action::ParticipantsAction))
+        Ok(action)
     }
 
     fn draw(&mut self, frame: &mut Frame<'_>, area: Rect) -> Result<()> {
-        if !self.draw {
-            return Ok(());
-        }
+        let theme = Theme::default();
+        let [_, _, area] = header_and_two_main_areas(area)?;
+
+        let help = if self.selected.is_some() {
+            " <del> to shutdown, <j> to join, <l> to leave, <m> to mute, <v> to toggle video "
+        } else {
+            ""
+        };
 
         let keys = self.participants.keys();
 
         if keys.is_empty() {
-            let empty = List::new(vec![ListItem::new("No participants")]);
+            let empty = ratatui::widgets::Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_style(theme.border(self.focused))
+                .title("No participants");
+
             frame.render_widget(empty, area);
             return Ok(());
         }
 
-        let header_names = [
-            "Name".to_string(),
-            "Created".to_string(),
-            "[x] Running".to_string(),
-            "[j/l] Joined".to_string(),
-            "[m] Muted".to_string(),
-            "[v] Video active".to_string(),
-        ];
+        let header_names = ["Name", "Created", "Running", "Joined", "Muted", "Video active"];
 
         // Prepare table data
         let header_cells = header_names
             .iter()
-            .map(|h| Cell::from(h.clone()).style(Style::default().fg(Color::White)));
+            .map(|h| Cell::from(*h).style(Style::default().fg(Color::White)));
         let header = Row::new(header_cells)
-            .style(Style::default().bg(Color::Gray).fg(Color::Black))
+            .style(Style::default().bg(Color::DarkGray).fg(Color::White))
             .height(1)
-            .bottom_margin(1);
+            .bottom_margin(0);
 
         let rows: Vec<Row> = self
             .participants
@@ -231,7 +258,7 @@ impl Component for Participants {
                     Cell::from(video),
                 ];
                 let style = if Some(&participant.name) == self.selected.as_ref() {
-                    Style::default().bg(Color::Cyan)
+                    Style::default().fg(Color::Yellow)
                 } else {
                     Style::default()
                 };
@@ -245,7 +272,9 @@ impl Component for Participants {
             .block(
                 ratatui::widgets::Block::default()
                     .borders(ratatui::widgets::Borders::ALL)
-                    .title("Participants"),
+                    .border_style(theme.border(self.focused))
+                    .title("Participants")
+                    .title_bottom(Line::from(help).centered()),
             )
             .widths([
                 Constraint::Percentage(25), // Name

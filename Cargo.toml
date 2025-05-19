@@ -39,6 +39,8 @@ tracing = "0.1.41"
 tracing-error = "0.2.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "serde"] }
 tui-input = "0.12.0"
+tui-logger = { version = "0.17.2", features = ["crossterm", "tracing", "tracing-subscriber", "tracing-support"] }
+tui-textarea = "0.7.0"
 url = "2.5.4"
 which = "7.0.3"
 

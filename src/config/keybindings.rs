@@ -1,6 +1,6 @@
-use crate::{
-    action::Action,
-    app::Mode,
+use crate::tui::{
+    Action,
+    FocusedTopLevelComponent,
 };
 use color_eyre::Result;
 use crossterm::event::{
@@ -19,7 +19,9 @@ use serde::{
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deref, DerefMut)]
-pub struct KeyBindings(pub HashMap<Mode, HashMap<Vec<KeyEvent>, Action>>);
+pub(crate) struct KeyBindings(HashMap<FocusedTopLevelComponent, Keymap>);
+
+pub(crate) type Keymap = HashMap<Vec<KeyEvent>, Action>;
 
 impl Default for KeyBindings {
     fn default() -> Self {
@@ -33,15 +35,17 @@ impl<'de> Deserialize<'de> for KeyBindings {
     where
         D: Deserializer<'de>,
     {
-        let parsed_map = HashMap::<Mode, HashMap<String, Action>>::deserialize(deserializer)?;
+        let parsed_map = HashMap::<FocusedTopLevelComponent, HashMap<String, Action>>::deserialize(deserializer)?;
 
         let keybindings = parsed_map
             .into_iter()
             .map(|(mode, inner_map)| {
-                let converted_inner_map = inner_map
-                    .into_iter()
-                    .map(|(key_str, cmd)| (parse_key_sequence(&key_str).unwrap(), cmd))
-                    .collect();
+                let converted_inner_map = Keymap::from(
+                    inner_map
+                        .into_iter()
+                        .map(|(key_str, cmd)| (parse_key_sequence(&key_str).unwrap(), cmd))
+                        .collect::<HashMap<Vec<KeyEvent>, Action>>(),
+                );
                 (mode, converted_inner_map)
             })
             .collect();

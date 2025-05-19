@@ -1,6 +1,6 @@
 use super::Component;
-use crate::action::Action;
-use color_eyre::Result;
+use crate::tui::Action;
+use eyre::Result;
 use ratatui::{
     layout::{
         Constraint,
