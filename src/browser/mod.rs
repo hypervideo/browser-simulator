@@ -49,12 +49,14 @@ async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Hand
         FakeMedia::None => {}
         FakeMedia::Bultin => {
             chrome_args.extend([
+                "--no-sandbox".to_string(),
                 "--use-fake-ui-for-media-stream".to_string(),
                 "--use-fake-device-for-media-stream".to_string(),
             ]);
         }
         FakeMedia::FileOrUrl(file_or_url) => {
             chrome_args.extend([
+                "--no-sandbox".to_string(),
                 "--use-fake-ui-for-media-stream".to_string(),
                 "--use-fake-device-for-media-stream".to_string(),
             ]);
