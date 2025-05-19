@@ -1,7 +1,10 @@
 use clap::Parser;
 use eyre::Result;
 use hyper_video_client_simulator::{
-    browser::participant::Participant,
+    browser::{
+        auth::HyperSessionCookieManger,
+        participant::Participant,
+    },
     config::ParticipantConfig,
     init_errors,
 };
@@ -23,13 +26,17 @@ async fn main() {
 }
 
 async fn run(Args { url }: Args) -> Result<()> {
-    let participant = Participant::with_participant_config(ParticipantConfig {
-        username: "browser-simulator example".to_string(),
-        session_url: url.clone(),
-        fake_media: true,
-        fake_video_file: None,
-        headless: false,
-    })
+    let participant = Participant::with_participant_config(
+        ParticipantConfig {
+            username: "browser-simulator example".to_string(),
+            session_url: url.clone(),
+            fake_media: true,
+            fake_video_file: None,
+            headless: false,
+        },
+        None,
+        HyperSessionCookieManger::new("cookies.json"),
+    )
     .expect("Failed to create participant config");
 
     tokio::signal::ctrl_c().await.expect("Failed to set up signal handler");

@@ -10,6 +10,9 @@ pub fn log_init() {
     let directory = config::get_data_dir();
     std::fs::create_dir_all(directory.clone()).expect("Failed to create directory");
     let log_path = directory.join(LOG_FILE.clone());
+    if log_path.exists() {
+        std::fs::remove_file(&log_path).expect("Failed to remove existing log file");
+    }
 
     tui_logger::init_logger(tui_logger::LevelFilter::Trace).expect("Failed to initialize tui logger");
     tui_logger::set_level_for_target("log", tui_logger::LevelFilter::Debug);

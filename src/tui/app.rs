@@ -51,8 +51,8 @@ type ActionReceiver = mpsc::UnboundedReceiver<Action>;
 
 impl App {
     pub fn new(args: crate::Args) -> Result<Self> {
-        let participants_store = ParticipantStore::new();
         let config = Config::new(args)?;
+        let participants_store = ParticipantStore::new(config.data_dir());
 
         Ok(Self {
             components: vec![

@@ -7,7 +7,6 @@ use std::{
 
 #[derive(Clone, Debug, Deserialize, Default)]
 pub(super) struct AppConfig {
-    #[expect(unused)]
     #[serde(default)]
     pub(super) data_dir: PathBuf,
     #[serde(default)]

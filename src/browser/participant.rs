@@ -1,5 +1,9 @@
 use super::{
-    auth::AuthToken,
+    auth::{
+        BorrowedCookie,
+        HyperSessionCookieManger,
+        HyperSessionCookieStash,
+    },
     create_browser,
     wait_for_element,
 };
@@ -21,6 +25,7 @@ use eyre::{
 use futures::StreamExt as _;
 use std::{
     collections::HashMap,
+    path::Path,
     sync::{
         Arc,
         Mutex,
@@ -54,18 +59,22 @@ pub enum ParticipantMessage {
 
 /// Store for all the participants that we will expose to the TUI
 /// for displaying and control.
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct ParticipantStore {
+    cookies: HyperSessionCookieManger,
     inner: Arc<Mutex<HashMap<String, Participant>>>,
 }
 
 impl ParticipantStore {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new(data_dir: impl AsRef<Path>) -> Self {
+        Self {
+            cookies: HyperSessionCookieStash::load_from_data_dir(data_dir).into(),
+            inner: Default::default(),
+        }
     }
 
     pub(crate) fn spawn(&self, config: &Config) -> Result<()> {
-        let participant = Participant::with_app_config(config)?;
+        let participant = Participant::spawn_with_app_config(config, self.cookies.clone())?;
         self.add(participant);
         Ok(())
     }
@@ -133,12 +142,20 @@ impl PartialEq for Participant {
 }
 
 impl Participant {
-    pub fn with_app_config(config: &Config) -> Result<Self> {
-        let participant_config = ParticipantConfig::new(config)?;
-        Self::with_participant_config(participant_config)
+    pub fn spawn_with_app_config(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+        let session_url = url::Url::parse(&config.url).context("failed to parse url")?;
+        let base_url = session_url.origin().unicode_serialization();
+        let cookie = cookie_manager.give_cookie(&base_url);
+        let name = cookie.as_ref().map(|c| c.username());
+        let participant_config = ParticipantConfig::new(config, name)?;
+        Self::with_participant_config(participant_config, cookie, cookie_manager)
     }
 
-    pub fn with_participant_config(participant_config: ParticipantConfig) -> Result<Self> {
+    pub fn with_participant_config(
+        participant_config: ParticipantConfig,
+        cookie: Option<BorrowedCookie>,
+        cookie_manager: HyperSessionCookieManger,
+    ) -> Result<Self> {
         let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
 
         let name = participant_config.username.clone();
@@ -155,6 +172,8 @@ impl Participant {
 
                     result = ParticipantInner::run(
                         participant_config,
+                        cookie,
+                        cookie_manager,
                         receiver,
                         state_sender,
                     ) => {
@@ -263,17 +282,24 @@ struct ParticipantInner {
     participant_config: ParticipantConfig,
     page: Option<Page>,
     state: watch::Sender<ParticipantState>,
-    auth: AuthToken,
+    auth: BorrowedCookie,
 }
 
 impl ParticipantInner {
     async fn run(
         participant_config: ParticipantConfig,
+        cookie: Option<BorrowedCookie>,
+        cookie_manager: HyperSessionCookieManger,
         receiver: UnboundedReceiver<ParticipantMessage>,
         state: watch::Sender<ParticipantState>,
     ) -> Result<()> {
-        let auth =
-            AuthToken::fetch_token_and_set_name(participant_config.base_url(), &participant_config.username).await?;
+        let auth = if let Some(cookie) = cookie {
+            cookie
+        } else {
+            cookie_manager
+                .fetch_new_coookie(participant_config.base_url(), &participant_config.username)
+                .await?
+        };
 
         let (browser, handler) = create_browser(&BrowserConfig::from(&participant_config)).await?;
 

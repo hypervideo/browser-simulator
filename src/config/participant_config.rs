@@ -18,9 +18,13 @@ pub struct ParticipantConfig {
 }
 
 impl ParticipantConfig {
-    pub fn new(config: &super::Config) -> Result<Self> {
-        let rng = RNG::from(&Language::Fantasy);
-        let name = rng.generate_name_by_count(3);
+    pub fn new(config: &super::Config, name: Option<impl ToString>) -> Result<Self> {
+        let name = if let Some(name) = name {
+            name.to_string()
+        } else {
+            let rng = RNG::from(&Language::Goblin);
+            rng.generate_name_by_count(3)
+        };
         let url = url::Url::parse(&config.url).context("failed to parse url")?;
         Ok(Self {
             username: name,

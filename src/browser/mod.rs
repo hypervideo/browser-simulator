@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-mod auth;
+pub mod auth;
 pub mod participant;
 
 fn get_binary() -> Result<PathBuf> {

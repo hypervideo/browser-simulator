@@ -22,6 +22,7 @@ use serde::{
     Deserialize,
     Serialize,
 };
+use std::path::Path;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -61,6 +62,10 @@ impl Config {
         let cfg: Self = builder.build()?.try_deserialize()?;
 
         Ok(cfg)
+    }
+
+    pub fn data_dir(&self) -> &Path {
+        &self.app_config.data_dir
     }
 
     pub fn save(&self) -> Result<()> {

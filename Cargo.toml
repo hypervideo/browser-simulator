@@ -9,7 +9,7 @@ repository = "https://github.com/hypervideo/hyper.video"
 better-panic = "0.3.0"
 # TODO: fix for https://github.com/mattsse/chromiumoxide/issues/243
 chromiumoxide = { git = "https://github.com/caido/dependency-chromiumoxide", branch = "ef-json-parsing", features = ["tokio-runtime", "bytes"], default-features = false }
-chrono = "0.4.40"
+chrono = { version = "0.4.40", features = ["serde"] }
 clap = { version = "4.5.37", features = ["derive", "env", "cargo", "string"] }
 color-eyre = "0.6.3"
 config = { version = "0.14.0", default-features = false, features = ["yaml", "convert-case", "async"] }
@@ -38,7 +38,6 @@ tokio-util = "0.7.12"
 tracing = "0.1.41"
 tracing-error = "0.2.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "serde"] }
-tui-input = "0.12.0"
 tui-logger = { version = "0.17.2", features = ["crossterm", "tracing", "tracing-subscriber", "tracing-support"] }
 tui-textarea = "0.7.0"
 url = "2.5.4"
