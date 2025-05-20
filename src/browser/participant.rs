@@ -15,11 +15,16 @@ use crate::config::{
 use chromiumoxide::{
     browser::Browser,
     cdp::browser_protocol::target::CreateTargetParams,
+    Element,
     Handler,
     Page,
 };
+use derive_more::Display;
 use eyre::{
+    bail,
     Context as _,
+    ContextCompat as _,
+    OptionExt,
     Result,
 };
 use futures::StreamExt as _;
@@ -49,6 +54,7 @@ use tokio_util::sync::{
     DropGuard,
 };
 
+#[derive(Display)]
 pub enum ParticipantMessage {
     Join,
     Leave,
@@ -127,7 +133,7 @@ pub struct Participant {
     sender: UnboundedSender<ParticipantMessage>,
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct ParticipantState {
     pub running: bool,
     pub joined: bool,
@@ -223,7 +229,7 @@ impl Participant {
         }
         self.sender
             .send(ParticipantMessage::Leave)
-            .expect("Was not able to send ParticipantMessage::Leave message")
+            .expect("Was not able to send ParticipantMessage::Leave message");
     }
 
     pub async fn close(mut self) {
@@ -297,7 +303,7 @@ impl ParticipantInner {
             cookie
         } else {
             cookie_manager
-                .fetch_new_coookie(participant_config.base_url(), &participant_config.username)
+                .fetch_new_cookie(participant_config.base_url(), &participant_config.username)
                 .await?
         };
 
@@ -348,7 +354,19 @@ impl ParticipantInner {
             state.running = true;
         });
 
-        self.join(&mut browser).await?;
+        if let Err(err) = self.join(&mut browser).await {
+            error!("Failed joining the session when starting the browser {err}");
+
+            match browser.kill().await {
+                Some(Ok(_)) => debug!("browser killed"),
+                Some(Err(err)) => error!("failed to kill browser: {err}"),
+                None => debug!("browser process not found"),
+            };
+            self.state.send_modify(|state| {
+                state.running = false;
+            });
+            return Ok(());
+        }
 
         let mut detached_event = browser
             .event_listener::<chromiumoxide::cdp::browser_protocol::target::EventDetachedFromTarget>()
@@ -368,32 +386,27 @@ impl ParticipantInner {
                         None => debug!("browser process not found"),
                     }
                     break;
-                }
+                },
 
                 Some(message) = receiver.recv() => {
                     message
                 }
-
             };
 
-            match message {
-                ParticipantMessage::Join => {
-                    self.join(&mut browser).await?;
-                }
-                ParticipantMessage::Leave => {
-                    self.leave().await?;
-                }
+            if let Err(e) = match message {
+                ParticipantMessage::Join => self.join(&mut browser).await,
+                ParticipantMessage::Leave => self.leave().await,
                 ParticipantMessage::Close => {
                     self.close(browser).await?;
                     return Ok(());
                 }
-                ParticipantMessage::ToggleAudio => {
-                    self.toggle_audio().await?;
-                }
-                ParticipantMessage::ToggleVideo => {
-                    self.toggle_video().await?;
-                }
+                ParticipantMessage::ToggleAudio => self.toggle_audio().await,
+                ParticipantMessage::ToggleVideo => self.toggle_video().await,
+            } {
+                error!("Running action {message} failed with error: {e}.");
             }
+
+            self.update_state().await;
         }
 
         self.state.send_modify(|state| {
@@ -414,21 +427,62 @@ impl ParticipantInner {
         Ok(())
     }
 
+    async fn ensure_page_exists(&mut self, browser: &mut Browser) -> Result<()> {
+        if self.page.is_none() {
+            let page = browser
+                .new_page(
+                    CreateTargetParams::builder()
+                        .url(self.participant_config.session_url.to_string())
+                        .build()
+                        .map_err(|e| eyre::eyre!(e))?,
+                )
+                .await
+                .context("failed to create new page")?;
+
+            let arc_request = page
+                .wait_for_navigation_response()
+                .await
+                .context("Page could not navigate to session_url")?
+                .with_context(|| {
+                    format!(
+                        "{}: No request returned when creating a page for {}",
+                        self.participant_config.username, self.participant_config.session_url,
+                    )
+                })?;
+
+            if let Some(text) = &arc_request.failure_text {
+                bail!(
+                    "{}: When creating a new page request got a failure: {}",
+                    self.participant_config.username,
+                    text
+                );
+            }
+
+            debug!(
+                self.participant_config.username,
+                "Created a new page for the {}", self.participant_config.session_url
+            );
+
+            self.page = Some(page);
+        }
+
+        Ok(())
+    }
+
     async fn join(&mut self, browser: &mut Browser) -> Result<()> {
-        // Create page
-        let page = browser
-            .new_page(
-                CreateTargetParams::builder()
-                    .url(self.participant_config.session_url.to_string())
-                    .build()
-                    .map_err(|e| eyre::eyre!(e))?,
-            )
-            .await
-            .context("failed to create new page")?;
+        if self.state.borrow().joined {
+            warn!("Already joined.");
+            return Ok(());
+        }
 
-        debug!(self.participant_config.username, "Created new page");
+        // Create a new page if none exists
+        self.ensure_page_exists(browser).await?;
+        let page = match &self.page {
+            Some(page) => page,
+            None => bail!("Unexpectedly, there was no page when joining."),
+        };
 
-        self.set_cookie(&page).await?;
+        self.set_cookie(page).await?;
 
         // Navigate and interact (similar to WebBrowser)
         page.goto(self.participant_config.session_url.to_string())
@@ -438,7 +492,7 @@ impl ParticipantInner {
         debug!(self.participant_config.username, "Navigated to page");
 
         // Find the input box to enter the name
-        let input = wait_for_element(&page, r#"[data-testid="trigger-join-name"]"#, Duration::from_secs(30))
+        let input = wait_for_element(page, r#"[data-testid="trigger-join-name"]"#, Duration::from_secs(30))
             .await
             .context("failed to find input name field")?;
         input
@@ -457,7 +511,7 @@ impl ParticipantInner {
 
         // Find the join button and click it
         wait_for_element(
-            &page,
+            page,
             r#"button[type="submit"]:not([disabled])"#,
             Duration::from_secs(30),
         )
@@ -469,47 +523,35 @@ impl ParticipantInner {
         debug!(self.participant_config.username, "Clicked on the join button");
 
         // Ensure we have joined the space.
-        wait_for_element(&page, r#"[data-testid="trigger-leave-call"]"#, Duration::from_secs(30))
+        wait_for_element(page, r#"[data-testid="trigger-leave-call"]"#, Duration::from_secs(30))
             .await
             .context("We haven't joined the space, cannot find the leave button")?;
-
-        self.page = Some(page);
 
         info!(self.participant_config.username, "Joined the space");
 
         self.state.send_modify(|state| {
             state.joined = true;
+            state.muted = false;
+            state.video_activated = true;
         });
 
         Ok(())
     }
 
     async fn leave(&self) -> Result<()> {
-        if let Some(page) = &self.page {
-            info!(self.participant_config.username, "Leaving the space...");
+        info!(self.participant_config.username, "Leaving the space...");
 
-            let leave_button = page
-                .find_element(r#"button[data-testid="trigger-leave-call"]"#)
-                .await
-                .context("Could not find the leave space button")?;
+        let leave_button = self.leave_button().await?;
+        debug!("Clicking on the leave space button");
 
-            debug!("Clicking on the leave space button");
+        leave_button
+            .click()
+            .await
+            .context("Could not click on the leave space button")?;
 
-            leave_button
-                .click()
-                .await
-                .context("Could not click on the leave space button")?;
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-            info!(self.participant_config.username, "Left the space");
-
-            self.state.send_modify(|state| {
-                state.joined = false;
-                state.muted = false;
-                state.video_activated = false;
-            });
-        }
+        info!(self.participant_config.username, "Left the space");
 
         Ok(())
     }
@@ -537,40 +579,94 @@ impl ParticipantInner {
     }
 
     pub async fn toggle_audio(&self) -> Result<()> {
-        if let Some(page) = &self.page {
-            page.find_element(r#"button[data-testid="toggle-audio"]"#)
-                .await
-                .context("Could not find the toggle audio button")?
-                .click()
-                .await
-                .context("Could not click on the toggle audio button")?;
+        let mute_button = self.mute_button().await?;
+        mute_button
+            .click()
+            .await
+            .context("Could not click on the toggle audio button")?;
 
-            info!(self.participant_config.username, "Toggled audio");
-
-            self.state.send_modify(|state| {
-                state.muted = !state.muted;
-            });
-        }
+        info!(self.participant_config.username, "Toggled audio");
 
         Ok(())
     }
 
     pub async fn toggle_video(&self) -> Result<()> {
-        if let Some(page) = &self.page {
-            page.find_element(r#"div[data-testid="toggle-camera"]"#)
-                .await
-                .context("Could not find the toggle camera button")?
-                .click()
-                .await
-                .context("Could not click on the toggle camera button")?;
+        let camera_button = self.camera_button().await?;
 
-            info!(self.participant_config.username, "Toggled camera");
+        camera_button
+            .click()
+            .await
+            .context("Could not click on the toggle camera button")?;
 
-            self.state.send_modify(|state| {
-                state.video_activated = !state.video_activated;
-            });
-        }
+        info!(self.participant_config.username, "Toggled camera");
 
         Ok(())
     }
+
+    async fn leave_button(&self) -> Result<Element> {
+        self.get_button(r#"button[data-testid="trigger-leave-call"]"#)
+            .await?
+            .ok_or_eyre("Leave not found")
+    }
+
+    async fn mute_button(&self) -> Result<Element> {
+        self.get_button(r#"button[data-testid="toggle-audio"]"#)
+            .await?
+            .ok_or_eyre("Mute button not found")
+    }
+
+    async fn camera_button(&self) -> Result<Element> {
+        self.get_button(r#"div[data-testid="toggle-camera"]"#)
+            .await?
+            .ok_or_eyre("Camera button not found")
+    }
+
+    async fn get_button(&self, selector: &str) -> Result<Option<Element>> {
+        if let Some(page) = self.page.as_ref() {
+            let button = page
+                .find_element(selector)
+                .await
+                .context(format!("Could not find the {selector} button"))?;
+
+            return Ok(Some(button));
+        }
+
+        Ok(None)
+    }
+
+    async fn update_state(&self) {
+        let mut joined = false;
+        let mut muted = false;
+        let mut video_activated = false;
+
+        if self.page.is_some() {
+            joined = self.leave_button().await.is_ok();
+
+            if let Ok(mute_button) = self.mute_button().await {
+                if let Some(button_state) = button_state(mute_button).await {
+                    muted = !button_state;
+                }
+            }
+
+            if let Ok(camera_button) = self.camera_button().await {
+                if let Some(button_state) = button_state(camera_button).await {
+                    video_activated = button_state;
+                }
+            }
+        }
+
+        self.state.send_modify(|state| {
+            state.joined = joined;
+            state.muted = muted;
+            state.video_activated = video_activated;
+        });
+    }
+}
+
+async fn button_state(el: Element) -> Option<bool> {
+    el.attribute("data-test-state")
+        .await
+        .ok()
+        .unwrap_or(None)
+        .map(|v| v == "true")
 }

@@ -58,11 +58,7 @@ impl HyperSessionCookieManger {
         available_cookies.push_back(cookie);
     }
 
-    pub async fn fetch_new_coookie(
-        &self,
-        base_url: impl ToString,
-        username: impl AsRef<str>,
-    ) -> Result<BorrowedCookie> {
+    pub async fn fetch_new_cookie(&self, base_url: impl ToString, username: impl AsRef<str>) -> Result<BorrowedCookie> {
         let base_url = base_url.to_string();
         let cookie = HyperSessionCookie::fetch_token_and_set_name(&base_url, username).await?;
 
