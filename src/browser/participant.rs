@@ -427,9 +427,19 @@ impl ParticipantInner {
         Ok(())
     }
 
-    async fn ensure_page_exists(&mut self, browser: &mut Browser) -> Result<()> {
-        if self.page.is_none() {
-            let page = browser
+    async fn create_page(&mut self, browser: &mut Browser) -> Result<Page> {
+        let page = if let Ok(Some(page)) = browser
+            .pages()
+            .await
+            .context("failed to get pages")
+            .map(|pages| pages.into_iter().next())
+        {
+            page.goto(self.participant_config.session_url.to_string())
+                .await
+                .context("failed to navigate to session_url")?;
+            page
+        } else {
+            browser
                 .new_page(
                     CreateTargetParams::builder()
                         .url(self.participant_config.session_url.to_string())
@@ -437,36 +447,34 @@ impl ParticipantInner {
                         .map_err(|e| eyre::eyre!(e))?,
                 )
                 .await
-                .context("failed to create new page")?;
+                .context("failed to create new page")?
+        };
 
-            let arc_request = page
-                .wait_for_navigation_response()
-                .await
-                .context("Page could not navigate to session_url")?
-                .with_context(|| {
-                    format!(
-                        "{}: No request returned when creating a page for {}",
-                        self.participant_config.username, self.participant_config.session_url,
-                    )
-                })?;
+        let navigation = page
+            .wait_for_navigation_response()
+            .await
+            .context("Page could not navigate to session_url")?
+            .with_context(|| {
+                format!(
+                    "{}: No request returned when creating a page for {}",
+                    self.participant_config.username, self.participant_config.session_url,
+                )
+            })?;
 
-            if let Some(text) = &arc_request.failure_text {
-                bail!(
-                    "{}: When creating a new page request got a failure: {}",
-                    self.participant_config.username,
-                    text
-                );
-            }
-
-            debug!(
+        if let Some(text) = &navigation.failure_text {
+            bail!(
+                "{}: When creating a new page request got a failure: {}",
                 self.participant_config.username,
-                "Created a new page for the {}", self.participant_config.session_url
+                text
             );
-
-            self.page = Some(page);
         }
 
-        Ok(())
+        debug!(
+            self.participant_config.username,
+            "Created a new page for the {}", self.participant_config.session_url
+        );
+
+        Ok(page)
     }
 
     async fn join(&mut self, browser: &mut Browser) -> Result<()> {
@@ -476,12 +484,30 @@ impl ParticipantInner {
         }
 
         // Create a new page if none exists
-        self.ensure_page_exists(browser).await?;
-        let page = match &self.page {
-            Some(page) => page,
-            None => bail!("Unexpectedly, there was no page when joining."),
-        };
+        if self.page.is_none() {
+            let mut backoff = hyper_video_maybe_backoff::MaybeBackoff::default();
+            let mut attempt = 0;
+            loop {
+                backoff.sleep().await;
+                match self.create_page(browser).await {
+                    Ok(page) => {
+                        self.page = Some(page);
+                        break;
+                    }
+                    Err(_) if attempt < 5 => {
+                        attempt += 1;
+                        backoff.arm();
+                        warn!(?attempt, "Failed to create a new page, retrying...");
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+        }
 
+        let page = self
+            .page
+            .as_ref()
+            .ok_or_eyre("Unexpectedly, there was no page when joining.")?;
         self.set_cookie(page).await?;
 
         // Navigate and interact (similar to WebBrowser)
