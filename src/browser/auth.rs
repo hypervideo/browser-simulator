@@ -201,9 +201,9 @@ impl HyperSessionCookie {
         Utc::now() > self.expires_at
     }
 
-    fn cookie_header(&self) -> reqwest::header::HeaderValue {
+    fn cookie_header(&self) -> Result<reqwest::header::HeaderValue> {
         reqwest::header::HeaderValue::from_str(&format!("hyper_session={}", self.cookie))
-            .expect("failed to create cookie header")
+            .context("failed to create cookie header")
     }
 
     async fn fetch_token_and_set_name(base_url: impl AsRef<str>, name: impl AsRef<str>) -> Result<Self> {
@@ -239,9 +239,14 @@ impl HyperSessionCookie {
 
     #[expect(unused)]
     pub(crate) async fn check_validity(&self, server_base_url: &str) -> bool {
+        let header = match self.cookie_header() {
+            Ok(h) => h,
+            _ => return false,
+        };
+
         reqwest::Client::new()
             .get(format!("{server_base_url}/api/v1/auth/me"))
-            .header("Cookie", self.cookie_header())
+            .header("Cookie", header)
             .send()
             .await
             .map(|response| response.status().is_success())
@@ -253,7 +258,7 @@ impl HyperSessionCookie {
         reqwest::Client::new()
             .post(format!("{server_base_url}/api/v1/auth/logout"))
             .header("Content-Type", "application/json")
-            .header("Cookie", self.cookie_header())
+            .header("Cookie", self.cookie_header()?)
             .body("{}")
             .send()
             .await?
@@ -266,7 +271,7 @@ impl HyperSessionCookie {
         reqwest::Client::new()
             .put(format!("{server_base_url}/api/v1/auth/me/name"))
             .header("Content-Type", "application/json")
-            .header("Cookie", self.cookie_header())
+            .header("Cookie", self.cookie_header()?)
             .json(&serde_json::json!({
                 "name": name,
             }))

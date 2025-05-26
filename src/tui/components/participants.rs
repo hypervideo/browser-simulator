@@ -156,9 +156,15 @@ impl Component for Participants {
         let action = match (key.code, &self.selected) {
             (KeyCode::Backspace | KeyCode::Delete, Some(selected)) => {
                 let prev = self.participants.prev(selected);
-                if let Some(participant) = self.participants.remove(selected) {
+                if let Some(participant) = self.participants.get(selected) {
+                    // We clone the store and move the participant and cloned store
+                    // into a task that will wait until the participant closes the browser
+                    // gracefully, and then we'll remove them from the store.
+                    let store = self.participants.clone();
                     tokio::spawn(async move {
+                        let name = participant.name.clone();
                         participant.close().await;
+                        store.remove(&name);
                     });
                 }
                 self.selected = prev;

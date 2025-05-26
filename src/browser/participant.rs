@@ -212,9 +212,9 @@ impl Participant {
             debug!(self.name, "Already joined");
             return;
         }
-        self.sender
-            .send(ParticipantMessage::Join)
-            .expect("Was not able to send ParticipantMessage::Join message")
+        if self.sender.send(ParticipantMessage::Join).is_err() {
+            error!("Was not able to send ParticipantMessage::Join message")
+        }
     }
 
     pub fn leave(&self) {
@@ -227,9 +227,9 @@ impl Participant {
             debug!(self.name, "Not in the space yet");
             return;
         }
-        self.sender
-            .send(ParticipantMessage::Leave)
-            .expect("Was not able to send ParticipantMessage::Leave message");
+        if self.sender.send(ParticipantMessage::Leave).is_err() {
+            error!("Was not able to send ParticipantMessage::Leave message")
+        }
     }
 
     pub async fn close(mut self) {
@@ -237,14 +237,13 @@ impl Participant {
             debug!(self.name, "Already closed the browser");
             return;
         }
-
-        self.sender
-            .send(ParticipantMessage::Close)
-            .expect("Was not able to send ParticipantMessage::Close message");
-
-        if let Err(err) = self.state.wait_for(|state| !state.running).await {
-            error!("Failed to wait for participant to close: {err}");
-        };
+        if let Ok(_) = self.sender.send(ParticipantMessage::Close) {
+            if let Err(err) = self.state.wait_for(|state| !state.running).await {
+                error!("Failed to wait for participant to close: {err}");
+            };
+        } else {
+            error!("Was not able to send ParticipantMessage::Close message")
+        }
     }
 
     pub fn toggle_audio(&self) {
@@ -257,9 +256,9 @@ impl Participant {
             debug!(self.name, "Cannot toggle audio, not in the space yet");
             return;
         }
-        self.sender
-            .send(ParticipantMessage::ToggleAudio)
-            .expect("Was not able to send ParticipantMessage::ToggleAudio message")
+        if self.sender.send(ParticipantMessage::ToggleAudio).is_err() {
+            error!("Was not able to send ParticipantMessage::ToggleAudio message")
+        }
     }
 
     pub fn toggle_video(&self) {
@@ -272,9 +271,9 @@ impl Participant {
             debug!(self.name, "Cannot toggle video, not in the space yet");
             return;
         }
-        self.sender
-            .send(ParticipantMessage::ToggleVideo)
-            .expect("Was not able to send ParticipantMessage::ToggleVideo message")
+        if self.sender.send(ParticipantMessage::ToggleVideo).is_err() {
+            error!("Was not able to send ParticipantMessage::ToggleVideo message")
+        }
     }
 }
 
@@ -600,6 +599,10 @@ impl ParticipantInner {
         browser.wait().await?;
 
         info!(self.participant_config.username, "Closed the browser");
+
+        self.state.send_modify(|state| {
+            state.running = false;
+        });
 
         Ok(())
     }
