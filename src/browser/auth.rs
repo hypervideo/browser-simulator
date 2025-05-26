@@ -124,6 +124,10 @@ impl BorrowedCookie {
 
 pub type Domain = String;
 
+/// Only store cookies for selected hyper servers. For these servers we don't want to needlessly create new guest
+/// accounts, for other (dev) servers guest creation does not matter.
+const PERSISTENCE_WHITELIST: [&str; 3] = ["latest.dev.hyper.video", "staging.hyper.video", "meet.hyper.video"];
+
 /// List of cookies that can be stored and retrieved.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct HyperSessionCookieStash {
@@ -161,12 +165,30 @@ impl HyperSessionCookieStash {
         Self::load(file)
     }
 
+    fn with_whitelisted_domains(&self) -> Self {
+        let cookies = self
+            .cookies
+            .iter()
+            .filter(|(domain, _)| {
+                PERSISTENCE_WHITELIST
+                    .iter()
+                    .any(|whitelisted| domain.contains(whitelisted))
+            })
+            .map(|(domain, cookies)| (domain.clone(), cookies.clone()))
+            .collect();
+
+        Self {
+            stash_file: self.stash_file.clone(),
+            cookies,
+        }
+    }
+
     /// Save the cookies to the given directory.
     fn save(&self) -> Result<()> {
         let dir = self.stash_file.parent().ok_or_eyre("failed to get parent directory")?;
         std::fs::create_dir_all(dir)?;
         let file = std::fs::File::create(&self.stash_file)?;
-        serde_json::to_writer_pretty(&file, self)?;
+        serde_json::to_writer_pretty(&file, &self.with_whitelisted_domains())?;
         debug!(?file, "saved hyper_session cookies");
         Ok(())
     }
