@@ -228,6 +228,14 @@ impl HyperSessionCookie {
             .context("failed to create cookie header")
     }
 
+    fn client() -> Result<reqwest::Client> {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .danger_accept_invalid_certs(true)
+            .build()
+            .context("failed to build reqwest client")
+    }
+
     async fn fetch_token_and_set_name(base_url: impl AsRef<str>, name: impl AsRef<str>) -> Result<Self> {
         let base_url = base_url.as_ref();
         let mut auth = HyperSessionCookie::fetch_token(base_url).await?;
@@ -240,9 +248,7 @@ impl HyperSessionCookie {
 
         debug!(?base_url, "Requesting guest cookie");
 
-        let response = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?
+        let response = Self::client()?
             .post(format!("{base_url}/api/v1/auth/guest"))
             .query(&[("username", "guest")])
             .send()
@@ -266,7 +272,9 @@ impl HyperSessionCookie {
             _ => return false,
         };
 
-        reqwest::Client::new()
+        let Ok(client) = Self::client() else { return false };
+
+        client
             .get(format!("{server_base_url}/api/v1/auth/me"))
             .header("Cookie", header)
             .send()
@@ -277,7 +285,7 @@ impl HyperSessionCookie {
 
     #[expect(unused)]
     pub(crate) async fn logout(&self, server_base_url: &str) -> Result<()> {
-        reqwest::Client::new()
+        Self::client()?
             .post(format!("{server_base_url}/api/v1/auth/logout"))
             .header("Content-Type", "application/json")
             .header("Cookie", self.cookie_header()?)
@@ -290,7 +298,7 @@ impl HyperSessionCookie {
 
     pub(crate) async fn set_name(&mut self, name: impl AsRef<str>, server_base_url: &str) -> Result<()> {
         let name = name.as_ref();
-        reqwest::Client::new()
+        Self::client()?
             .put(format!("{server_base_url}/api/v1/auth/me/name"))
             .header("Content-Type", "application/json")
             .header("Cookie", self.cookie_header()?)
