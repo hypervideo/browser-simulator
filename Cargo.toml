@@ -12,7 +12,7 @@ chromiumoxide = { git = "https://github.com/caido/dependency-chromiumoxide", bra
 chrono = { version = "0.4.40", features = ["serde"] }
 clap = { version = "4.5.37", features = ["derive", "env", "cargo", "string"] }
 color-eyre = "0.6.3"
-config = { version = "0.14.0", default-features = false, features = ["yaml", "convert-case", "async"] }
+config = { version = "0.15.11", default-features = false, features = ["yaml", "convert-case", "async"] }
 crossterm = { version = "0.28.1", features = ["serde", "event-stream"] }
 derive_more = { version = "2.0.1", default-features = false, features = ["deref", "deref_mut", "debug", "display"] }
 directories = "5.0.1"
