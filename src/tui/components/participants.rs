@@ -201,6 +201,34 @@ impl Component for Participants {
                 None
             }
 
+            (KeyCode::Char('n'), Some(selected)) => {
+                if let Some(participant) = self.participants.get(selected) {
+                    participant.toggle_noise_suppression();
+                }
+                None
+            }
+
+            (KeyCode::Char('t'), Some(selected)) => {
+                if let Some(participant) = self.participants.get(selected) {
+                    participant.toggle_transport_mode();
+                }
+                None
+            }
+
+            (KeyCode::Char('r'), Some(selected)) => {
+                if let Some(participant) = self.participants.get(selected) {
+                    participant.toggle_through_webcam_resolutions();
+                }
+                None
+            }
+
+            (KeyCode::Char('b'), Some(selected)) => {
+                if let Some(participant) = self.participants.get(selected) {
+                    participant.toggle_background_blur();
+                }
+                None
+            }
+
             // navigation
             (KeyCode::Up, _) => Some(Action::ParticipantsAction(ParticipantsAction::MoveUp)),
             (KeyCode::Down, _) => Some(Action::ParticipantsAction(ParticipantsAction::MoveDown)),
@@ -216,7 +244,7 @@ impl Component for Participants {
         let [_, _, area] = header_and_two_main_areas(area)?;
 
         let help = if self.selected.is_some() {
-            " <del> to shutdown, <j> to join, <l> to leave, <m> to mute, <v> to toggle video "
+            " <del> to shutdown, <j>oin, <l>eave, <m>ute, <v>ideo, <n>oise suppression, <t>transport mode, <r>esolutions, <b>lur "
         } else {
             ""
         };
@@ -233,7 +261,18 @@ impl Component for Participants {
             return Ok(());
         }
 
-        let header_names = ["Name", "Created", "Running", "Joined", "Muted", "Video active"];
+        let header_names = [
+            "Name",
+            "Created",
+            "Running",
+            "Joined",
+            "Muted",
+            "Video active",
+            "Noise Suppression",
+            "Transport",
+            "Resolution",
+            "Blur",
+        ];
 
         // Prepare table data
         let header_cells = header_names
@@ -255,6 +294,10 @@ impl Component for Participants {
                 let joined = format_bool(state.joined);
                 let muted = format_bool(state.muted);
                 let video = format_bool(state.video_activated);
+                let noise_suppression = state.noise_suppression.to_string();
+                let transport_mode = state.transport_mode.to_string();
+                let resolution = state.webcam_resolution.to_string();
+                let background_blur = format_bool(state.background_blur);
                 let cells = vec![
                     Cell::from(participant.name.clone()),
                     Cell::from(created),
@@ -262,6 +305,10 @@ impl Component for Participants {
                     Cell::from(joined),
                     Cell::from(muted),
                     Cell::from(video),
+                    Cell::from(noise_suppression),
+                    Cell::from(transport_mode),
+                    Cell::from(resolution),
+                    Cell::from(background_blur),
                 ];
                 let style = if Some(&participant.name) == self.selected.as_ref() {
                     theme.text_selected
@@ -283,12 +330,16 @@ impl Component for Participants {
                     .title_bottom(Line::from(help).centered()),
             )
             .widths([
-                Constraint::Percentage(25), // Name
-                Constraint::Percentage(25), // Created
-                Constraint::Percentage(10), // Opened
+                Constraint::Percentage(10), // Name
+                Constraint::Percentage(10), // Created
+                Constraint::Percentage(10), // Running
                 Constraint::Percentage(10), // Joined
                 Constraint::Percentage(10), // Muted
-                Constraint::Percentage(10), // Invisible
+                Constraint::Percentage(10), // Video active
+                Constraint::Percentage(10), // Noise suppressed
+                Constraint::Percentage(10), // Transport mode
+                Constraint::Percentage(10), // Resolution
+                Constraint::Percentage(10), // Blur
             ])
             .column_spacing(1);
 

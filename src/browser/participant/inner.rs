@@ -1,281 +1,55 @@
 use super::{
-    auth::{
-        BorrowedCookie,
-        HyperSessionCookieManger,
-        HyperSessionCookieStash,
+    commands::{
+        get_noise_suppression_eval,
+        set_noise_suppression_eval,
     },
-    create_browser,
-    wait_for_element,
+    messages::ParticipantMessage,
+    state::{
+        NoiseSuppression,
+        TransportMode,
+        WebcamResolution,
+    },
+    ParticipantState,
 };
-use crate::config::{
-    BrowserConfig,
-    Config,
-    ParticipantConfig,
+use crate::{
+    browser::{
+        auth::{
+            BorrowedCookie,
+            HyperSessionCookieManger,
+        },
+        create_browser,
+        participant::commands::get_background_blur_eval,
+        wait_for_element,
+    },
+    config::{
+        BrowserConfig,
+        ParticipantConfig,
+    },
 };
 use chromiumoxide::{
-    browser::Browser,
     cdp::browser_protocol::target::CreateTargetParams,
+    Browser,
     Element,
     Handler,
     Page,
 };
-use derive_more::Display;
 use eyre::{
     bail,
+    eyre,
     Context as _,
     ContextCompat as _,
     OptionExt,
     Result,
 };
 use futures::StreamExt as _;
-use std::{
-    collections::HashMap,
-    path::Path,
-    sync::{
-        Arc,
-        Mutex,
-    },
-    time::Duration,
-    vec::IntoIter,
-};
+use std::time::Duration;
 use tokio::{
     sync::{
-        mpsc::{
-            unbounded_channel,
-            UnboundedReceiver,
-            UnboundedSender,
-        },
+        mpsc::UnboundedReceiver,
         watch,
     },
     task::JoinHandle,
 };
-use tokio_util::sync::{
-    CancellationToken,
-    DropGuard,
-};
-
-#[derive(Display)]
-pub enum ParticipantMessage {
-    Join,
-    Leave,
-    Close,
-    ToggleAudio,
-    ToggleVideo,
-}
-
-/// Store for all the participants that we will expose to the TUI
-/// for displaying and control.
-#[derive(Debug, Clone)]
-pub struct ParticipantStore {
-    cookies: HyperSessionCookieManger,
-    inner: Arc<Mutex<HashMap<String, Participant>>>,
-}
-
-impl ParticipantStore {
-    pub(crate) fn new(data_dir: impl AsRef<Path>) -> Self {
-        Self {
-            cookies: HyperSessionCookieStash::load_from_data_dir(data_dir).into(),
-            inner: Default::default(),
-        }
-    }
-
-    pub(crate) fn spawn(&self, config: &Config) -> Result<()> {
-        let participant = Participant::spawn_with_app_config(config, self.cookies.clone())?;
-        self.add(participant);
-        Ok(())
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
-    }
-
-    fn sorted(&self) -> IntoIter<Participant> {
-        let mut participants = self.inner.lock().unwrap().values().cloned().collect::<Vec<_>>();
-        participants.sort_by(|a, b| a.created.cmp(&b.created));
-
-        participants.into_iter()
-    }
-
-    pub(crate) fn keys(&self) -> Vec<String> {
-        self.sorted().map(|p| p.name.clone()).collect()
-    }
-
-    pub(crate) fn values(&self) -> Vec<Participant> {
-        self.sorted().collect()
-    }
-
-    pub(crate) fn add(&self, participant: Participant) {
-        self.inner.lock().unwrap().insert(participant.name.clone(), participant);
-    }
-
-    pub(crate) fn remove(&self, name: &str) -> Option<Participant> {
-        self.inner.lock().unwrap().remove(name)
-    }
-
-    pub(crate) fn get(&self, name: &str) -> Option<Participant> {
-        self.inner.lock().unwrap().get(name).cloned()
-    }
-
-    pub(crate) fn prev(&self, name: &str) -> Option<String> {
-        let sorted = self.sorted().collect::<Vec<_>>();
-        let index = sorted.iter().position(|p| p.name == name)?;
-        (index > 0).then(|| sorted[index - 1].name.clone())
-    }
-}
-
-/// Participant that will spawn a browser and join the given space from the config.
-#[derive(Debug, Clone)]
-pub struct Participant {
-    pub name: String,
-    pub created: chrono::DateTime<chrono::Utc>,
-    pub state: watch::Receiver<ParticipantState>,
-    _participant_task_guard: Arc<DropGuard>,
-    sender: UnboundedSender<ParticipantMessage>,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct ParticipantState {
-    pub running: bool,
-    pub joined: bool,
-    pub muted: bool,
-    pub video_activated: bool,
-}
-
-impl PartialEq for Participant {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl Participant {
-    pub fn spawn_with_app_config(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
-        let session_url = url::Url::parse(&config.url).context("failed to parse url")?;
-        let base_url = session_url.origin().unicode_serialization();
-        let cookie = cookie_manager.give_cookie(&base_url);
-        let name = cookie.as_ref().map(|c| c.username());
-        let participant_config = ParticipantConfig::new(config, name)?;
-        Self::with_participant_config(participant_config, cookie, cookie_manager)
-    }
-
-    pub fn with_participant_config(
-        participant_config: ParticipantConfig,
-        cookie: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
-    ) -> Result<Self> {
-        let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
-
-        let name = participant_config.username.clone();
-        let task_cancellation_token = CancellationToken::new();
-        let task_cancellation_guard = task_cancellation_token.clone().drop_guard();
-        let (state_sender, state_receiver) = watch::channel(Default::default());
-
-        tokio::task::spawn({
-            let name = name.clone();
-            async move {
-                tokio::select! {
-                    biased;
-                    _ = task_cancellation_token.cancelled() => {},
-
-                    result = ParticipantInner::run(
-                        participant_config,
-                        cookie,
-                        cookie_manager,
-                        receiver,
-                        state_sender,
-                    ) => {
-                        if let Err(err) = result {
-                            error!(?name, "Failed to create participant: {err}")
-                        }
-                    }
-                };
-
-                debug!(?name, "Participant task canceled");
-            }
-        });
-
-        Ok(Self {
-            name,
-            created: chrono::Utc::now(),
-            state: state_receiver,
-            _participant_task_guard: Arc::new(task_cancellation_guard),
-            sender,
-        })
-    }
-
-    pub fn join(&self) {
-        let state = self.state.borrow();
-        if !state.running {
-            debug!(self.name, "Already closed the browser");
-            return;
-        }
-        if state.joined {
-            debug!(self.name, "Already joined");
-            return;
-        }
-        if self.sender.send(ParticipantMessage::Join).is_err() {
-            error!("Was not able to send ParticipantMessage::Join message")
-        }
-    }
-
-    pub fn leave(&self) {
-        let state = self.state.borrow();
-        if !state.running {
-            debug!(self.name, "Already closed the browser");
-            return;
-        }
-        if !state.joined {
-            debug!(self.name, "Not in the space yet");
-            return;
-        }
-        if self.sender.send(ParticipantMessage::Leave).is_err() {
-            error!("Was not able to send ParticipantMessage::Leave message")
-        }
-    }
-
-    pub async fn close(mut self) {
-        if !self.state.borrow().running {
-            debug!(self.name, "Already closed the browser");
-            return;
-        }
-        if let Ok(_) = self.sender.send(ParticipantMessage::Close) {
-            if let Err(err) = self.state.wait_for(|state| !state.running).await {
-                error!("Failed to wait for participant to close: {err}");
-            };
-        } else {
-            error!("Was not able to send ParticipantMessage::Close message")
-        }
-    }
-
-    pub fn toggle_audio(&self) {
-        let state = self.state.borrow();
-        if !state.running {
-            debug!(self.name, "Already closed the browser");
-            return;
-        }
-        if !state.joined {
-            debug!(self.name, "Cannot toggle audio, not in the space yet");
-            return;
-        }
-        if self.sender.send(ParticipantMessage::ToggleAudio).is_err() {
-            error!("Was not able to send ParticipantMessage::ToggleAudio message")
-        }
-    }
-
-    pub fn toggle_video(&self) {
-        let state = self.state.borrow();
-        if !state.running {
-            debug!(self.name, "Already closed the browser");
-            return;
-        }
-        if !state.joined {
-            debug!(self.name, "Cannot toggle video, not in the space yet");
-            return;
-        }
-        if self.sender.send(ParticipantMessage::ToggleVideo).is_err() {
-            error!("Was not able to send ParticipantMessage::ToggleVideo message")
-        }
-    }
-}
 
 /// Async participant "worker" that holds the browser and session.
 /// It has the direct command to the browser session that can modify the
@@ -283,7 +57,7 @@ impl Participant {
 /// It holds the message receiver that is used to handle the incoming messages
 /// from the sync TUI runtime.
 #[derive(Debug)]
-struct ParticipantInner {
+pub(super) struct ParticipantInner {
     participant_config: ParticipantConfig,
     page: Option<Page>,
     state: watch::Sender<ParticipantState>,
@@ -291,7 +65,7 @@ struct ParticipantInner {
 }
 
 impl ParticipantInner {
-    async fn run(
+    pub(super) async fn run(
         participant_config: ParticipantConfig,
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
@@ -401,6 +175,10 @@ impl ParticipantInner {
                 }
                 ParticipantMessage::ToggleAudio => self.toggle_audio().await,
                 ParticipantMessage::ToggleVideo => self.toggle_video().await,
+                ParticipantMessage::ToggleTransportMode => self.toggle_transport_mode().await,
+                ParticipantMessage::ToggleThroughWebcamResolutions => self.toggle_through_webcam_resolutions().await,
+                ParticipantMessage::ToggleNoiseSuppression => self.toggle_through_noise_suppression().await,
+                ParticipantMessage::ToggleBackgroundBlur => self.toggle_background_blur().await,
             } {
                 error!("Running action {message} failed with error: {e}.");
             }
@@ -414,9 +192,12 @@ impl ParticipantInner {
 
         Ok(())
     }
+}
 
+impl ParticipantInner {
     async fn set_cookie(&self, page: &Page) -> Result<()> {
         let domain = self.participant_config.session_url.host_str().unwrap_or("localhost");
+
         let cookie = self.auth.as_browser_cookie_for(domain)?;
 
         page.set_cookies(vec![cookie]).await.context("failed to set cookie")?;
@@ -474,6 +255,35 @@ impl ParticipantInner {
         );
 
         Ok(page)
+    }
+
+    async fn open_debug_panel(&self) -> Result<()> {
+        let debug_button = self
+            .find_element(r#"button[data-testid="toggle-debug-panel"]"#)
+            .await?
+            .ok_or_eyre("Settings collapsible button not found")?;
+
+        let state = element_state(&debug_button).await.unwrap_or_default();
+        if !state {
+            debug_button.click().await.context("Could not open the debug panel")?;
+        }
+
+        let settings_collapsible_button = self
+            .find_element(r#"button[data-testid="toggle-debug-settings-collapsible"]"#)
+            .await?
+            .ok_or_eyre("Settings collapsible button not found")?;
+
+        let state = element_state(&settings_collapsible_button).await.unwrap_or_default();
+        if !state {
+            settings_collapsible_button
+                .click()
+                .await
+                .context("Could not open the settings collapsible")?;
+        }
+
+        debug!(self.participant_config.username, "Opened the debug settings panel");
+
+        Ok(())
     }
 
     async fn join(&mut self, browser: &mut Browser) -> Result<()> {
@@ -543,7 +353,7 @@ impl ParticipantInner {
         .await?
         .click()
         .await
-        .context("failed to click submit button")?;
+        .context("failed to click join button")?;
 
         debug!(self.participant_config.username, "Clicked on the join button");
 
@@ -554,27 +364,19 @@ impl ParticipantInner {
 
         info!(self.participant_config.username, "Joined the space");
 
-        self.state.send_modify(|state| {
-            state.joined = true;
-            state.muted = false;
-            state.video_activated = true;
-        });
+        self.open_debug_panel().await?;
+
+        self.update_state().await;
 
         Ok(())
     }
 
     async fn leave(&self) -> Result<()> {
-        info!(self.participant_config.username, "Leaving the space...");
-
-        let leave_button = self.leave_button().await?;
-        debug!("Clicking on the leave space button");
-
-        leave_button
+        self.leave_button()
+            .await?
             .click()
             .await
             .context("Could not click on the leave space button")?;
-
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         info!(self.participant_config.username, "Left the space");
 
@@ -608,8 +410,8 @@ impl ParticipantInner {
     }
 
     pub async fn toggle_audio(&self) -> Result<()> {
-        let mute_button = self.mute_button().await?;
-        mute_button
+        self.mute_button()
+            .await?
             .click()
             .await
             .context("Could not click on the toggle audio button")?;
@@ -620,9 +422,8 @@ impl ParticipantInner {
     }
 
     pub async fn toggle_video(&self) -> Result<()> {
-        let camera_button = self.camera_button().await?;
-
-        camera_button
+        self.camera_button()
+            .await?
             .click()
             .await
             .context("Could not click on the toggle camera button")?;
@@ -632,30 +433,183 @@ impl ParticipantInner {
         Ok(())
     }
 
+    pub async fn toggle_transport_mode(&self) -> Result<()> {
+        self.open_debug_panel().await?;
+        self.webrtc_checkbox()
+            .await?
+            .click()
+            .await
+            .context("Could not click on the WebRTC checkbox")?;
+
+        debug!(self.participant_config.username, "Toggled transport mode");
+
+        // Reload the page to apply the changes
+        let page = self.page.as_ref().ok_or_eyre("Page not found")?;
+        page.reload().await.context("Could not reload the page")?;
+        page.wait_for_navigation()
+            .await
+            .context("Failed to wait for navigation")?;
+
+        debug!(self.participant_config.username, "Page reloaded");
+
+        // Find the join button and click it
+        wait_for_element(
+            page,
+            r#"button[type="submit"]:not([disabled])"#,
+            Duration::from_secs(30),
+        )
+        .await?
+        .click()
+        .await
+        .context("failed to click submit button")?;
+
+        debug!(self.participant_config.username, "Joining the space again");
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        self.update_state().await;
+
+        info!(self.participant_config.username, "Toggled transport mode");
+
+        Ok(())
+    }
+
+    pub async fn toggle_through_webcam_resolutions(&self) -> Result<()> {
+        self.open_debug_panel().await?;
+
+        let resolution = self.state.borrow().webcam_resolution.next();
+
+        let select = self.resolution_select_button().await?;
+
+        debug!(self.participant_config.username, "Changing to {resolution} resolution");
+
+        select
+            .click()
+            .await
+            .context("Could not click on the resolution select")?;
+
+        let selector = format!("div[data-test-value=\"{resolution}\"]");
+        let option = self
+            .find_element(&selector)
+            .await?
+            .ok_or_else(|| eyre!("Resolution option not found"))?;
+
+        option
+            .click()
+            .await
+            .context("Could not click on the resolution option")?;
+
+        info!(self.participant_config.username, "Changed to {resolution} resolution");
+
+        Ok(())
+    }
+
+    pub async fn toggle_through_noise_suppression(&self) -> Result<()> {
+        if let Some(page) = &self.page {
+            let noise_suppression = self.read_noise_suppression_level().await?.next();
+
+            set_noise_suppression_eval(page, noise_suppression.clone())
+                .await
+                .context("Failed to set noise suppression level")?;
+
+            info!(
+                self.participant_config.username,
+                "Changed noise suppression to {noise_suppression}"
+            );
+        } else {
+            error!("No page found to change noise suppression");
+        }
+
+        self.update_state().await;
+
+        Ok(())
+    }
+
+    pub async fn toggle_background_blur(&self) -> Result<()> {
+        if let Some(page) = &self.page {
+            let background_blur = self.read_background_blur().await?;
+
+            let new_state = !background_blur;
+
+            page.evaluate(format!(
+                "window.setBackgroundBlur({})",
+                new_state.to_string().to_lowercase()
+            ))
+            .await
+            .context("Failed to set background blur")?;
+
+            info!(
+                self.participant_config.username,
+                "Changed background blur to {}", new_state
+            );
+        } else {
+            error!("No page found to change background blur");
+        }
+
+        self.update_state().await;
+
+        Ok(())
+    }
+
+    async fn read_noise_suppression_level(&self) -> Result<NoiseSuppression> {
+        if let Some(page) = &self.page {
+            return get_noise_suppression_eval(page).await;
+        }
+        Ok(NoiseSuppression::default())
+    }
+
+    async fn read_background_blur(&self) -> Result<bool> {
+        if let Some(page) = &self.page {
+            return get_background_blur_eval(page).await;
+        }
+
+        Ok(false)
+    }
+}
+
+impl ParticipantInner {
     async fn leave_button(&self) -> Result<Element> {
-        self.get_button(r#"button[data-testid="trigger-leave-call"]"#)
+        self.find_element(r#"button[data-testid="trigger-leave-call"]"#)
             .await?
             .ok_or_eyre("Leave not found")
     }
 
     async fn mute_button(&self) -> Result<Element> {
-        self.get_button(r#"button[data-testid="toggle-audio"]"#)
+        self.find_element(r#"button[data-testid="toggle-audio"]"#)
             .await?
             .ok_or_eyre("Mute button not found")
     }
 
     async fn camera_button(&self) -> Result<Element> {
-        self.get_button(r#"div[data-testid="toggle-camera"]"#)
+        self.find_element(r#"div[data-testid="toggle-camera"]"#)
             .await?
             .ok_or_eyre("Camera button not found")
     }
 
-    async fn get_button(&self, selector: &str) -> Result<Option<Element>> {
+    async fn webrtc_checkbox(&self) -> Result<Element> {
+        self.find_element(r#"button[data-testid="toggle-debug-force-webrtc"]"#)
+            .await?
+            .ok_or_eyre("WebRTC select not found")
+    }
+
+    async fn resolution_select_button(&self) -> Result<Element> {
+        self.find_element(r#"div[data-testid="debug-webcam-resolution-camera"] button"#)
+            .await?
+            .ok_or_eyre("Resolution select not found")
+    }
+
+    async fn resolution_select_div(&self) -> Result<Element> {
+        self.find_element(r#"div[data-testid="debug-webcam-resolution-camera"]"#)
+            .await?
+            .ok_or_eyre("Resolution select not found")
+    }
+
+    async fn find_element(&self, selector: &str) -> Result<Option<Element>> {
         if let Some(page) = self.page.as_ref() {
             let button = page
                 .find_element(selector)
                 .await
-                .context(format!("Could not find the {selector} button"))?;
+                .context(format!("Could not find the {selector} element"))?;
 
             return Ok(Some(button));
         }
@@ -667,20 +621,50 @@ impl ParticipantInner {
         let mut joined = false;
         let mut muted = false;
         let mut video_activated = false;
+        let mut transport_mode = TransportMode::default();
+        let mut webcam_resolution = WebcamResolution::default();
+        let mut noise_suppression = NoiseSuppression::default();
+        let mut background_blur = false;
 
         if self.page.is_some() {
             joined = self.leave_button().await.is_ok();
 
+            if let Ok(noise_suppression_level) = self.read_noise_suppression_level().await {
+                noise_suppression = noise_suppression_level;
+            }
+
+            if let Err(err) = self.open_debug_panel().await {
+                error!("Error getting the state, failed opening settings: {}", err);
+                return;
+            }
+
             if let Ok(mute_button) = self.mute_button().await {
-                if let Some(button_state) = button_state(mute_button).await {
-                    muted = !button_state;
+                if let Some(element_state) = element_state(&mute_button).await {
+                    muted = !element_state;
                 }
             }
 
             if let Ok(camera_button) = self.camera_button().await {
-                if let Some(button_state) = button_state(camera_button).await {
-                    video_activated = button_state;
+                if let Some(element_state) = element_state(&camera_button).await {
+                    video_activated = element_state;
                 }
+            }
+
+            if let Ok(webrtc_checkbox) = self.webrtc_checkbox().await {
+                let state = webrtc_checkbox.attribute("data-state").await.unwrap_or_default();
+                if state == Some("checked".to_string()) {
+                    transport_mode = TransportMode::WebRTC;
+                }
+            }
+
+            if let Ok(resolution_select) = self.resolution_select_div().await {
+                if let Some(resolution) = resolution_select.attribute("data-state").await.unwrap_or_default() {
+                    webcam_resolution = WebcamResolution::from(resolution);
+                }
+            }
+
+            if let Ok(blur) = self.read_background_blur().await {
+                background_blur = blur;
             }
         }
 
@@ -688,11 +672,15 @@ impl ParticipantInner {
             state.joined = joined;
             state.muted = muted;
             state.video_activated = video_activated;
+            state.transport_mode = transport_mode;
+            state.webcam_resolution = webcam_resolution;
+            state.noise_suppression = noise_suppression;
+            state.background_blur = background_blur;
         });
     }
 }
 
-async fn button_state(el: Element) -> Option<bool> {
+async fn element_state(el: &Element) -> Option<bool> {
     el.attribute("data-test-state")
         .await
         .ok()

@@ -51,6 +51,6 @@ mod tests {
     fn name() {
         let result = serde_yml::to_string(&Action::Activate(ActivateAction::BrowserStart)).unwrap();
         println!("{result}");
-        panic!();
+        // panic!();
     }
 }

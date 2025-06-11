@@ -15,7 +15,7 @@ color-eyre = "0.6.3"
 config = { version = "0.15.11", default-features = false, features = ["yaml", "convert-case", "async"] }
 crossterm = { version = "0.28.1", features = ["serde", "event-stream"] }
 derive_more = { version = "2.0.1", default-features = false, features = ["deref", "deref_mut", "debug", "display"] }
-directories = "5.0.1"
+directories = "6.0.0"
 eyre = "0.6.12"
 futures = "0.3.31"
 human-panic = "2.0.2"
@@ -32,7 +32,7 @@ serde_yml = "0.0.12"
 sha1 = "0.10.6"
 signal-hook = "0.3.17"
 strip-ansi-escapes = "0.2.0"
-strum = { version = "0.26.3", features = ["derive"] }
+strum = { version = "0.27.1", features = ["derive"] }
 temp-dir = "0.1.16"
 tokio = { version = "1.44.2", default-features = false, features = ["macros", "rt-multi-thread", "sync", "signal"] }
 tokio-util = "0.7.12"
@@ -42,7 +42,7 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter", "serde"] }
 tui-logger = { version = "0.17.2", features = ["crossterm", "tracing", "tracing-subscriber", "tracing-support"] }
 tui-textarea = "0.7.0"
 url = "2.5.4"
-which = "7.0.3"
+which = "8.0.0"
 
 [package.metadata.cargo-udeps.ignore]
 normal = [
