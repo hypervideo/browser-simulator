@@ -1,6 +1,7 @@
 mod app_config;
 mod args;
 mod browser_config;
+mod client_config;
 mod keybindings;
 mod participant_config;
 
@@ -15,6 +16,14 @@ pub(crate) use app_config::{
 };
 pub use args::Args;
 pub use browser_config::BrowserConfig;
+pub use client_config::{
+    NoiseSuppression,
+    NoiseSuppressionIter,
+    TransportMode,
+    TransportModeIter,
+    WebcamResolution,
+    WebcamResolutionIter,
+};
 use color_eyre::Result;
 use eyre::Context as _;
 pub(crate) use keybindings::{
@@ -34,17 +43,29 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     #[serde(flatten, skip_serializing)]
-    app_config: AppConfig,
+    pub app_config: AppConfig,
     #[serde(skip)]
-    pub(crate) keybindings: KeyBindings,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub(crate) url: String,
+    pub keybindings: KeyBindings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) fake_media_selected: Option<usize>,
+    pub url: Option<url::Url>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fake_media_selected: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) fake_media_sources: Vec<FakeMediaWithDescription>,
+    pub fake_media_sources: Vec<FakeMediaWithDescription>,
     #[serde(default)]
-    pub(crate) headless: bool,
+    pub headless: bool,
+    #[serde(default)]
+    pub audio_enabled: bool,
+    #[serde(default)]
+    pub video_enabled: bool,
+    #[serde(default)]
+    pub noise_suppression: NoiseSuppression,
+    #[serde(default)]
+    pub transport: TransportMode,
+    #[serde(default)]
+    pub resolution: WebcamResolution,
+    #[serde(default)]
+    pub blur: bool,
 }
 
 const DEFAULT_CONFIG: &str = include_str!("default-config.yaml");
@@ -62,8 +83,8 @@ impl config::Source for Config {
 
     fn collect(&self) -> Result<config::Map<String, config::Value>, config::ConfigError> {
         let mut cache = HashMap::<String, config::Value>::new();
-        if !self.url.is_empty() {
-            cache.insert("url".to_string(), self.url.clone().into());
+        if let Some(url) = &self.url {
+            cache.insert("url".to_string(), url.to_string().into());
         }
         cache.insert("headless".to_string(), (self.headless).into());
         if let Some(value) = self.fake_media_selected {
@@ -157,7 +178,7 @@ impl Config {
             clone.fake_media_sources = Vec::new();
         }
         if self.url == default.url {
-            clone.url = String::new();
+            clone.url = None;
         }
 
         std::fs::create_dir_all(&self.app_config.config_dir).context("Failed to create config directory")?;
@@ -175,10 +196,12 @@ impl Config {
     pub fn update_from_args(&mut self, args: &Args) -> Result<()> {
         let mut changed = false;
         if let Some(url) = &args.url {
-            if self.url != *url {
-                info!(old = %self.url, new = %url, "Updating URL from args");
-                self.url = url.clone();
-                changed = true;
+            if let Ok(url) = url::Url::parse(url) {
+                if self.url.as_ref().is_some_and(|u| u != &url) {
+                    info!(old = ?self.url, new = ?url, "Updating URL from args");
+                    self.url = Some(url);
+                    changed = true;
+                }
             }
         }
 

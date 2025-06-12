@@ -41,7 +41,7 @@ tracing-error = "0.2.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "serde"] }
 tui-logger = { version = "0.17.2", features = ["crossterm", "tracing", "tracing-subscriber", "tracing-support"] }
 tui-textarea = "0.7.0"
-url = "2.5.4"
+url = { version = "2.5.4", features = ["serde"] }
 which = "8.0.0"
 
 [package.metadata.cargo-udeps.ignore]

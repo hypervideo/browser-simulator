@@ -1,3 +1,7 @@
+use crate::config::{
+    NoiseSuppression,
+    WebcamResolution,
+};
 use derive_more::Display;
 
 #[derive(Clone, Display)]
@@ -7,8 +11,7 @@ pub enum ParticipantMessage {
     Close,
     ToggleAudio,
     ToggleVideo,
-    ToggleTransportMode,
-    ToggleNoiseSuppression,
-    ToggleThroughWebcamResolutions,
+    SetNoiseSuppression(NoiseSuppression),
+    SetWebcamResolutions(WebcamResolution),
     ToggleBackgroundBlur,
 }

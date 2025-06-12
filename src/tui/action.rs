@@ -11,7 +11,7 @@ use serde_yml::with::singleton_map_recursive;
 use strum::Display;
 
 #[derive(Display, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) enum Action {
+pub enum Action {
     Tick,
     Render,
     Resize(u16, u16),
@@ -27,10 +27,12 @@ pub(crate) enum Action {
 
     #[allow(clippy::enum_variant_names)]
     #[serde(with = "singleton_map_recursive")]
+    #[allow(private_interfaces)]
     BrowserStartAction(browser_start::BrowserStartAction),
 
     #[allow(clippy::enum_variant_names)]
     #[serde(with = "singleton_map_recursive")]
+    #[allow(private_interfaces)]
     ParticipantsAction(participants::ParticipantsAction),
 
     ParticipantCountChanged(usize),

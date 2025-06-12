@@ -19,9 +19,9 @@ use serde::{
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deref, DerefMut)]
-pub(crate) struct KeyBindings(HashMap<FocusedTopLevelComponent, Keymap>);
+pub struct KeyBindings(HashMap<FocusedTopLevelComponent, Keymap>);
 
-pub(crate) type Keymap = HashMap<Vec<KeyEvent>, Action>;
+pub type Keymap = HashMap<Vec<KeyEvent>, Action>;
 
 impl Default for KeyBindings {
     fn default() -> Self {

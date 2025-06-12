@@ -5,10 +5,12 @@ use super::auth::{
 };
 use crate::config::{
     Config,
+    NoiseSuppression,
     ParticipantConfig,
+    WebcamResolution,
 };
 use eyre::{
-    Context as _,
+    OptionExt as _,
     Result,
 };
 use messages::ParticipantMessage;
@@ -53,7 +55,7 @@ impl PartialEq for Participant {
 
 impl Participant {
     pub fn spawn_with_app_config(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
-        let session_url = url::Url::parse(&config.url).context("failed to parse url")?;
+        let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
         let base_url = session_url.origin().unicode_serialization();
         let cookie = cookie_manager.give_cookie(&base_url);
         let name = cookie.as_ref().map(|c| c.username());
@@ -163,16 +165,12 @@ impl Participant {
         self.send_message(ParticipantMessage::ToggleVideo);
     }
 
-    pub fn toggle_transport_mode(&self) {
-        self.send_message(ParticipantMessage::ToggleTransportMode);
+    pub fn set_noise_suppression(&self, value: NoiseSuppression) {
+        self.send_message(ParticipantMessage::SetNoiseSuppression(value));
     }
 
-    pub fn toggle_noise_suppression(&self) {
-        self.send_message(ParticipantMessage::ToggleNoiseSuppression);
-    }
-
-    pub fn toggle_through_webcam_resolutions(&self) {
-        self.send_message(ParticipantMessage::ToggleThroughWebcamResolutions);
+    pub fn set_webcam_resolutions(&self, value: WebcamResolution) {
+        self.send_message(ParticipantMessage::SetWebcamResolutions(value));
     }
 
     pub fn toggle_background_blur(&self) {

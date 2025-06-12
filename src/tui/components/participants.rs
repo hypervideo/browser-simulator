@@ -1,8 +1,13 @@
 use crate::{
     browser::participant::ParticipantStore,
-    config::Keymap,
+    config::{
+        Keymap,
+        NoiseSuppression,
+        WebcamResolution,
+    },
     tui::{
         layout::header_and_two_main_areas,
+        widgets::EnumListInput,
         Action,
         ActivateAction,
         Component,
@@ -32,15 +37,20 @@ use ratatui::{
     },
     Frame,
 };
-use strum::Display;
+use strum::{
+    Display,
+    IntoEnumIterator as _,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Display, serde::Serialize, serde::Deserialize)]
 pub(crate) enum ParticipantsAction {
     MoveUp,
     MoveDown,
+    StartSelectNoiseSuppression,
+    StartSelectResolution,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Participants {
     focused: bool,
     visible: bool,
@@ -48,10 +58,12 @@ pub struct Participants {
     selected: Option<String>,
     table_state: TableState,
     keymap: Keymap,
+    noise_suppression_list: Option<EnumListInput<NoiseSuppression>>,
+    resolution_list: Option<EnumListInput<WebcamResolution>>,
 }
 
 impl Participants {
-    pub fn new(participants: ParticipantStore) -> Self {
+    pub(crate) fn new(participants: ParticipantStore) -> Self {
         Self {
             focused: false,
             visible: true,
@@ -59,6 +71,8 @@ impl Participants {
             participants,
             table_state: TableState::default(),
             keymap: Keymap::default(),
+            noise_suppression_list: None,
+            resolution_list: None,
         }
     }
 
@@ -66,12 +80,7 @@ impl Participants {
         Ok(())
     }
 
-    #[expect(unused)]
-    pub fn len(&self) -> usize {
-        self.participants.len()
-    }
-
-    pub fn move_up(&mut self) {
+    fn move_up(&mut self) {
         let keys = self.participants.keys();
         if let Some(key) = &self.selected {
             let index = keys.iter().position(|x| x == key);
@@ -87,7 +96,7 @@ impl Participants {
         }
     }
 
-    pub fn move_down(&mut self) {
+    fn move_down(&mut self) {
         let keys = self.participants.keys();
         if let Some(key) = &self.selected {
             let index = keys.iter().position(|x| x == key);
@@ -146,6 +155,27 @@ impl Component for Participants {
                     }
                 }
                 ParticipantsAction::MoveDown => self.move_down(),
+
+                ParticipantsAction::StartSelectNoiseSuppression => {
+                    if let Some(selected) = self.selected.as_ref().and_then(|s| self.participants.get(s)) {
+                        self.noise_suppression_list = Some(EnumListInput::new(
+                            "Noise Suppression Models",
+                            NoiseSuppression::iter(),
+                            selected.state.borrow().noise_suppression,
+                        ));
+                    }
+                    return Ok(None);
+                }
+                ParticipantsAction::StartSelectResolution => {
+                    if let Some(selected) = self.selected.as_ref().and_then(|s| self.participants.get(s)) {
+                        self.resolution_list = Some(EnumListInput::new(
+                            "Camera resolution",
+                            WebcamResolution::iter(),
+                            selected.state.borrow().webcam_resolution,
+                        ));
+                    }
+                    return Ok(None);
+                }
             },
             _ => {}
         }
@@ -153,6 +183,50 @@ impl Component for Participants {
     }
 
     fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<Option<Action>> {
+        if let Some(mut list) = self.noise_suppression_list.take() {
+            match key.code {
+                KeyCode::Enter => {
+                    if let Ok(value) = list.finish() {
+                        if let Some(participant) = self.selected.as_ref().and_then(|s| self.participants.get(s)) {
+                            participant.set_noise_suppression(value);
+                        }
+                    }
+                    return Ok(Some(Action::Activate(ActivateAction::Participants)));
+                }
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::Participants)));
+                }
+                _ => {}
+            }
+            let handled = list.handle_key_event(key);
+            self.noise_suppression_list = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
+        if let Some(mut list) = self.resolution_list.take() {
+            match key.code {
+                KeyCode::Enter => {
+                    if let Ok(value) = list.finish() {
+                        if let Some(participant) = self.selected.as_ref().and_then(|s| self.participants.get(s)) {
+                            participant.set_webcam_resolutions(value);
+                        }
+                    }
+                    return Ok(Some(Action::Activate(ActivateAction::Participants)));
+                }
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                _ => {}
+            }
+            let handled = list.handle_key_event(key);
+            self.resolution_list = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
         let action = match (key.code, &self.selected) {
             (KeyCode::Backspace | KeyCode::Delete, Some(selected)) => {
                 let prev = self.participants.prev(selected);
@@ -201,25 +275,12 @@ impl Component for Participants {
                 None
             }
 
-            (KeyCode::Char('n'), Some(selected)) => {
-                if let Some(participant) = self.participants.get(selected) {
-                    participant.toggle_noise_suppression();
-                }
-                None
-            }
+            (KeyCode::Char('n'), Some(_)) => Some(Action::ParticipantsAction(
+                ParticipantsAction::StartSelectNoiseSuppression,
+            )),
 
-            (KeyCode::Char('t'), Some(selected)) => {
-                if let Some(participant) = self.participants.get(selected) {
-                    participant.toggle_transport_mode();
-                }
-                None
-            }
-
-            (KeyCode::Char('r'), Some(selected)) => {
-                if let Some(participant) = self.participants.get(selected) {
-                    participant.toggle_through_webcam_resolutions();
-                }
-                None
+            (KeyCode::Char('r'), Some(_)) => {
+                Some(Action::ParticipantsAction(ParticipantsAction::StartSelectResolution))
             }
 
             (KeyCode::Char('b'), Some(selected)) => {
@@ -244,7 +305,7 @@ impl Component for Participants {
         let [_, _, area] = header_and_two_main_areas(area)?;
 
         let help = if self.selected.is_some() {
-            " <del> to shutdown, <j>oin, <l>eave, <m>ute, <v>ideo, <n>oise suppression, <t>transport mode, <r>esolutions, <b>lur "
+            " <del> to shutdown, <j>oin, <l>eave, <m>ute, <v>ideo, <n>oise suppression, <r>esolutions, <b>lur "
         } else {
             ""
         };
@@ -344,6 +405,15 @@ impl Component for Participants {
             .column_spacing(1);
 
         frame.render_stateful_widget(table, area, &mut self.table_state);
+
+        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+        if let Some(list) = &mut self.noise_suppression_list {
+            list.draw(frame, area)?;
+        }
+        if let Some(list) = &mut self.resolution_list {
+            list.draw(frame, area)?;
+        }
+
         Ok(())
     }
 }

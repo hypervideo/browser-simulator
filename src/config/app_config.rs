@@ -6,11 +6,11 @@ use std::{
 };
 
 #[derive(Clone, Debug, Deserialize, Default)]
-pub(super) struct AppConfig {
+pub struct AppConfig {
     #[serde(default)]
-    pub(super) data_dir: PathBuf,
+    pub data_dir: PathBuf,
     #[serde(default)]
-    pub(super) config_dir: PathBuf,
+    pub config_dir: PathBuf,
 }
 
 lazy_static::lazy_static! {

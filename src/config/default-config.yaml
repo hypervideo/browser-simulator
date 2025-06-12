@@ -24,3 +24,9 @@ fake_media_sources:
   - description: 'Steve Jobs + British radio (Audio)'
     fake_media: 'https://audio-samples.hyper.video/steve-jobs-british-radio-bg-50.mp3'
 headless: false
+audio_enabled: true
+video_enabled: true
+noise_suppresion: none
+transport: webtransport
+resolution: auto
+blur: false

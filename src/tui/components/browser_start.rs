@@ -1,10 +1,16 @@
 use crate::{
     browser::participant::ParticipantStore,
-    config::Config,
+    config::{
+        Config,
+        NoiseSuppression,
+        TransportMode,
+        WebcamResolution,
+    },
     tui::{
         layout::header_and_two_main_areas,
         widgets::{
             self,
+            EnumListInput,
             ListInput,
         },
         Action,
@@ -20,7 +26,10 @@ use ratatui::{
     prelude::*,
     widgets::*,
 };
-use strum::Display;
+use strum::{
+    Display,
+    IntoEnumIterator as _,
+};
 use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug)]
@@ -34,6 +43,12 @@ enum SelectedField {
     #[default]
     Url,
     FakeMedia,
+    Mute,
+    VideoDisable,
+    NoiseSuppression,
+    Transport,
+    Resolution,
+    BackgroundBlur,
     Headless,
     Start,
 }
@@ -45,7 +60,13 @@ impl SelectedField {
             SelectedField::FakeMedia => {
                 " Use audio and video from a file or a generated test stream. <enter> to edit, <del> to clear. "
             }
-            SelectedField::Headless => " Run the browser in headless mode? <enter> to toggle. ",
+            SelectedField::Mute => " Mute audio? <enter> to toggle. ",
+            SelectedField::VideoDisable => " Enable video? <enter> to toggle. ",
+            SelectedField::NoiseSuppression => " Enable noise suppression? <enter> to select noise suppression model. ",
+            SelectedField::Transport => " Select transport protocol. <enter> to select. ",
+            SelectedField::Resolution => " Select resolution for video (camera). <enter> to select. ",
+            SelectedField::BackgroundBlur => " Enable background blur? <enter> to toggle. ",
+            SelectedField::Headless => " Run the browser in headless mode? When disabled, will show a browser window with which you can interact. <enter> to toggle. ",
             SelectedField::Start => " Start a new browser session and join a hyper.video session. <enter> to start. ",
         }
     }
@@ -57,8 +78,11 @@ pub(crate) enum BrowserStartAction {
     MoveDown,
     StartEditText,
     StartSelectFakeMedia,
+    StartSelectNoiseSuppression,
+    StartSelectTransport,
+    StartSelectResolution,
     StartBrowser,
-    ToggleHeadless,
+    Toggle,
     DeleteSelectedField,
 }
 
@@ -79,6 +103,9 @@ pub struct BrowserStart {
     selected: SelectedField,
     editing: Option<EditingState>,
     fake_media_builtin_list: Option<ListInput<FakeMediaWithDescriptionItem>>,
+    noise_suppression_list: Option<EnumListInput<NoiseSuppression>>,
+    transport_list: Option<EnumListInput<TransportMode>>,
+    resolution_list: Option<EnumListInput<WebcamResolution>>,
     participant_store: ParticipantStore,
 }
 
@@ -91,6 +118,9 @@ impl BrowserStart {
             config: Config::default(),
             selected: SelectedField::Url,
             fake_media_builtin_list: None,
+            noise_suppression_list: None,
+            resolution_list: None,
+            transport_list: None,
             editing: None,
             participant_store,
         }
@@ -122,12 +152,19 @@ impl Component for BrowserStart {
                 KeyCode::Enter => {
                     let content = editing.editor.finish();
                     match editing.field {
-                        SelectedField::Url => self.config.url = content,
+                        SelectedField::Url => self.config.url = url::Url::parse(&content).ok(),
                         SelectedField::FakeMedia => {
                             let index = self.config.add_custom_fake_media(content);
                             self.config.fake_media_selected = index;
                         }
-                        SelectedField::Headless | SelectedField::Start => {}
+                        SelectedField::Mute
+                        | SelectedField::VideoDisable
+                        | SelectedField::NoiseSuppression
+                        | SelectedField::Transport
+                        | SelectedField::Resolution
+                        | SelectedField::BackgroundBlur
+                        | SelectedField::Headless
+                        | SelectedField::Start => {}
                     }
                     // Save config immediately after edit confirmation
                     if let Err(e) = self.config.save() {
@@ -140,7 +177,6 @@ impl Component for BrowserStart {
                 }
                 _ => {}
             }
-
             let handled = editing.editor.handle_key_event(key);
             self.editing = Some(editing);
             if handled {
@@ -156,12 +192,10 @@ impl Component for BrowserStart {
                             self.config.fake_media_sources.remove(index);
                         }
                     }
-
                     return Ok(Some(Action::BrowserStartAction(
                         BrowserStartAction::StartSelectFakeMedia,
                     )));
                 }
-
                 KeyCode::Enter => {
                     let content = list.finish();
                     if let Some((index, media)) = content {
@@ -176,22 +210,102 @@ impl Component for BrowserStart {
                     } else {
                         self.config.fake_media_selected = None;
                     };
-
                     if let Err(e) = self.config.save() {
                         error!(?e, "Failed to save config after edit");
                     }
                     return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
                 }
-
                 KeyCode::Esc => {
                     return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
                 }
-
                 _ => {}
             }
-
             let handled = list.handle_key_event(key);
             self.fake_media_builtin_list = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
+        if let Some(mut list) = self.noise_suppression_list.take() {
+            match key.code {
+                KeyCode::Enter => {
+                    match list.finish() {
+                        Ok(value) => {
+                            self.config.noise_suppression = value;
+                        }
+                        Err(err) => {
+                            error!(?err, "Failed to parse");
+                        }
+                    }
+                    if let Err(e) = self.config.save() {
+                        error!(?e, "Failed to save config after edit");
+                    }
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                _ => {}
+            }
+            let handled = list.handle_key_event(key);
+            self.noise_suppression_list = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
+        if let Some(mut list) = self.resolution_list.take() {
+            match key.code {
+                KeyCode::Enter => {
+                    match list.finish() {
+                        Ok(value) => {
+                            self.config.resolution = value;
+                        }
+                        Err(err) => {
+                            error!(?err, "Failed to parse");
+                        }
+                    }
+                    if let Err(e) = self.config.save() {
+                        error!(?e, "Failed to save config after edit");
+                    }
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                _ => {}
+            }
+            let handled = list.handle_key_event(key);
+            self.resolution_list = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
+        if let Some(mut list) = self.transport_list.take() {
+            match key.code {
+                KeyCode::Enter => {
+                    match list.finish() {
+                        Ok(value) => {
+                            self.config.transport = value;
+                        }
+                        Err(err) => {
+                            error!(?err, "Failed to parse");
+                        }
+                    }
+                    if let Err(e) = self.config.save() {
+                        error!(?e, "Failed to save config after edit");
+                    }
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                _ => {}
+            }
+            let handled = list.handle_key_event(key);
+            self.transport_list = Some(list);
             if handled {
                 return Ok(None);
             }
@@ -206,7 +320,20 @@ impl Component for BrowserStart {
 
             // start editing or start browser or toggle
             KeyCode::Enter if self.selected == SelectedField::Start => Some(BrowserStartAction::StartBrowser),
-            KeyCode::Enter if self.selected == SelectedField::Headless => Some(BrowserStartAction::ToggleHeadless),
+            KeyCode::Enter if self.selected == SelectedField::Headless => Some(BrowserStartAction::Toggle),
+            KeyCode::Enter if self.selected == SelectedField::Mute => Some(BrowserStartAction::Toggle),
+            KeyCode::Enter if self.selected == SelectedField::VideoDisable => Some(BrowserStartAction::Toggle),
+            KeyCode::Enter if self.selected == SelectedField::NoiseSuppression => {
+                Some(BrowserStartAction::StartSelectNoiseSuppression)
+            }
+            KeyCode::Enter if self.selected == SelectedField::Transport => {
+                Some(BrowserStartAction::StartSelectTransport)
+            }
+            KeyCode::Enter if self.selected == SelectedField::Resolution => {
+                Some(BrowserStartAction::StartSelectResolution)
+            }
+            KeyCode::Enter if self.selected == SelectedField::BackgroundBlur => Some(BrowserStartAction::Toggle),
+
             KeyCode::Enter if self.selected == SelectedField::FakeMedia => {
                 Some(BrowserStartAction::StartSelectFakeMedia)
             }
@@ -214,6 +341,18 @@ impl Component for BrowserStart {
 
             KeyCode::Esc if self.fake_media_builtin_list.is_some() => {
                 self.fake_media_builtin_list = None;
+                None
+            }
+            KeyCode::Esc if self.noise_suppression_list.is_some() => {
+                self.noise_suppression_list = None;
+                None
+            }
+            KeyCode::Esc if self.resolution_list.is_some() => {
+                self.resolution_list = None;
+                None
+            }
+            KeyCode::Esc if self.transport_list.is_some() => {
+                self.transport_list = None;
                 None
             }
 
@@ -251,20 +390,34 @@ impl Component for BrowserStart {
             _ => return Ok(None),
         };
 
+        let mut save_config = false;
+
         match action {
             BrowserStartAction::MoveUp => {
                 self.selected = match self.selected {
+                    SelectedField::Url => SelectedField::Url,
                     SelectedField::FakeMedia => SelectedField::Url,
-                    SelectedField::Headless => SelectedField::FakeMedia,
+                    SelectedField::Mute => SelectedField::FakeMedia,
+                    SelectedField::VideoDisable => SelectedField::Mute,
+                    SelectedField::NoiseSuppression => SelectedField::VideoDisable,
+                    SelectedField::Transport => SelectedField::NoiseSuppression,
+                    SelectedField::Resolution => SelectedField::Transport,
+                    SelectedField::BackgroundBlur => SelectedField::Resolution,
+                    SelectedField::Headless => SelectedField::BackgroundBlur,
                     SelectedField::Start => SelectedField::Headless,
-                    other => other, // Url stays Url
                 };
             }
 
             BrowserStartAction::MoveDown => {
                 self.selected = match self.selected {
                     SelectedField::Url => SelectedField::FakeMedia,
-                    SelectedField::FakeMedia => SelectedField::Headless,
+                    SelectedField::FakeMedia => SelectedField::Mute,
+                    SelectedField::Mute => SelectedField::VideoDisable,
+                    SelectedField::VideoDisable => SelectedField::NoiseSuppression,
+                    SelectedField::NoiseSuppression => SelectedField::Transport,
+                    SelectedField::Transport => SelectedField::Resolution,
+                    SelectedField::Resolution => SelectedField::BackgroundBlur,
+                    SelectedField::BackgroundBlur => SelectedField::Headless,
                     SelectedField::Headless => SelectedField::Start,
                     SelectedField::Start => return Ok(Some(Action::Activate(ActivateAction::Participants))),
                 };
@@ -273,7 +426,16 @@ impl Component for BrowserStart {
             // Edit
             BrowserStartAction::StartEditText if self.editing.is_none() => {
                 let (title, placeholder, content) = match self.selected {
-                    SelectedField::Url => ("Edit URL", "URL to a hyper.video session", self.config.url.clone()),
+                    SelectedField::Url => (
+                        "Edit URL",
+                        "URL to a hyper.video session",
+                        self.config
+                            .url
+                            .as_ref()
+                            .map(|url| url.to_string())
+                            .unwrap_or_default()
+                            .to_string(),
+                    ),
                     SelectedField::FakeMedia => {
                         let content = self.config.fake_media().to_string();
                         ("Edit Fake Media", "Fake media from file", content)
@@ -313,25 +475,61 @@ impl Component for BrowserStart {
                 return Ok(None);
             }
 
+            BrowserStartAction::StartSelectNoiseSuppression => {
+                self.noise_suppression_list = Some(EnumListInput::new(
+                    "Noise Suppression Models",
+                    NoiseSuppression::iter(),
+                    self.config.noise_suppression,
+                ));
+                return Ok(None);
+            }
+
+            BrowserStartAction::StartSelectTransport => {
+                self.transport_list = Some(EnumListInput::new(
+                    "Transport protocol to use",
+                    TransportMode::iter(),
+                    self.config.transport,
+                ));
+                return Ok(None);
+            }
+
+            BrowserStartAction::StartSelectResolution => {
+                self.resolution_list = Some(EnumListInput::new(
+                    "Camera resolution",
+                    WebcamResolution::iter(),
+                    self.config.resolution,
+                ));
+                return Ok(None);
+            }
+
             BrowserStartAction::DeleteSelectedField => {
                 match self.selected {
-                    SelectedField::Url => self.config.url.clear(),
+                    SelectedField::Url => self.config.url = None,
                     SelectedField::FakeMedia => {
                         self.config.fake_media_selected = Some(0);
                     }
                     _ => return Ok(None),
                 }
-                if let Err(e) = self.config.save() {
-                    error!(?e, "Failed to save config after deleting cookie");
-                    // TODO: inform the user via TUI state
-                }
+                save_config = true;
             }
 
-            BrowserStartAction::ToggleHeadless => {
-                self.config.headless = !self.config.headless;
-                if let Err(e) = self.config.save() {
-                    error!(?e, "Failed to save config after toggling headless mode");
+            BrowserStartAction::Toggle => {
+                match self.selected {
+                    SelectedField::Mute => {
+                        self.config.audio_enabled = !self.config.audio_enabled;
+                    }
+                    SelectedField::VideoDisable => {
+                        self.config.video_enabled = !self.config.video_enabled;
+                    }
+                    SelectedField::BackgroundBlur => {
+                        self.config.blur = !self.config.blur;
+                    }
+                    SelectedField::Headless => {
+                        self.config.headless = !self.config.headless;
+                    }
+                    _ => return Ok(None),
                 }
+                save_config = true;
             }
 
             // Start Browser / Playwright
@@ -346,6 +544,12 @@ impl Component for BrowserStart {
                 return Ok(Some(Action::ParticipantCountChanged(self.participant_store.len())));
             }
         };
+
+        if save_config {
+            if let Err(e) = self.config.save() {
+                error!(?e, "Failed to save config after action");
+            }
+        }
 
         Ok(None)
     }
@@ -372,6 +576,12 @@ impl Component for BrowserStart {
             .constraints([
                 Constraint::Length(1), // URL
                 Constraint::Length(1), // Fake-media
+                Constraint::Length(1), // Muted checkbox
+                Constraint::Length(1), // Video disabled checkbox
+                Constraint::Length(1), // Noise suppression checkbox
+                Constraint::Length(1), // Transport
+                Constraint::Length(1), // Resolution
+                Constraint::Length(1), // Background blur checkbox
                 Constraint::Length(1), // Headless checkbox
                 Constraint::Length(2), // Start button
             ])
@@ -381,16 +591,26 @@ impl Component for BrowserStart {
 
         // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
         // render individual form widgets for the browser controls
-        let form_labels = ["URL:", "Fake media:", "Headless:"];
+        let form_labels = [
+            "URL:",
+            "Fake media:",
+            "Audio enabled:",
+            "Video enabled:",
+            "Noise suppression:",
+            "Transport:",
+            "Resolution:",
+            "Background blur",
+            "Headless:",
+        ];
         let max_length = form_labels.iter().map(|s| s.len()).max().unwrap_or(0) + 1;
 
         // --- URL ---
         let url_widget = widgets::label_and_text(
-            form_labels[0],
-            if self.config.url.is_empty() {
-                "<empty>"
+            form_labels[current_row_index],
+            if let Some(url) = &self.config.url {
+                url.as_str()
             } else {
-                &self.config.url
+                "<empty>"
             },
             max_length,
             self.focused && self.selected == SelectedField::Url,
@@ -401,43 +621,120 @@ impl Component for BrowserStart {
 
         // --- Fake Media Checkbox ---
         let content = self.config.fake_media().to_string();
-        let fake_media_widget = widgets::label_and_text(
-            form_labels[1],
+        let widget = widgets::label_and_text(
+            form_labels[current_row_index],
             content,
             max_length,
             self.focused && self.selected == SelectedField::FakeMedia,
             &theme,
         );
-        frame.render_widget(fake_media_widget, rows[current_row_index]);
+        frame.render_widget(widget, rows[current_row_index]);
+        current_row_index += 1;
+
+        // --- Audio enabled ---
+        let widget = widgets::label_and_bool(
+            form_labels[current_row_index],
+            self.config.audio_enabled,
+            max_length,
+            self.focused && self.selected == SelectedField::Mute,
+            &theme,
+        );
+        frame.render_widget(widget, rows[current_row_index]);
+        current_row_index += 1;
+
+        // --- Video enabled ---
+        let widget = widgets::label_and_bool(
+            form_labels[current_row_index],
+            self.config.video_enabled,
+            max_length,
+            self.focused && self.selected == SelectedField::VideoDisable,
+            &theme,
+        );
+        frame.render_widget(widget, rows[current_row_index]);
+        current_row_index += 1;
+
+        // --- Noise suppression ---
+        let widget = widgets::label_and_text(
+            form_labels[current_row_index],
+            self.config.noise_suppression,
+            max_length,
+            self.focused && self.selected == SelectedField::NoiseSuppression,
+            &theme,
+        );
+        frame.render_widget(widget, rows[current_row_index]);
+        current_row_index += 1;
+
+        // --- Transport ---
+        let transport = self.config.transport.to_string();
+        let widget = widgets::label_and_text(
+            form_labels[current_row_index],
+            &transport,
+            max_length,
+            self.focused && self.selected == SelectedField::Transport,
+            &theme,
+        );
+        frame.render_widget(widget, rows[current_row_index]);
+        current_row_index += 1;
+
+        // --- Resolution ---
+        let resolution = self.config.resolution.to_string();
+        let widget = widgets::label_and_text(
+            form_labels[current_row_index],
+            &resolution,
+            max_length,
+            self.focused && self.selected == SelectedField::Resolution,
+            &theme,
+        );
+        frame.render_widget(widget, rows[current_row_index]);
+        current_row_index += 1;
+
+        // --- Background blur ---
+        let widget = widgets::label_and_bool(
+            form_labels[current_row_index],
+            self.config.blur,
+            max_length,
+            self.focused && self.selected == SelectedField::BackgroundBlur,
+            &theme,
+        );
+        frame.render_widget(widget, rows[current_row_index]);
         current_row_index += 1;
 
         // --- Headless Checkbox ---
-        let headless_widget = widgets::label_and_bool(
-            form_labels[2],
+        let widget = widgets::label_and_bool(
+            form_labels[current_row_index],
             self.config.headless,
             max_length,
             self.focused && self.selected == SelectedField::Headless,
             &theme,
         );
-        frame.render_widget(headless_widget, rows[current_row_index]);
+        frame.render_widget(widget, rows[current_row_index]);
         current_row_index += 1;
 
         // --- Start Button ---
-        let start_widget = Paragraph::new("Start Browser")
+        let widget = Paragraph::new("Start Browser")
             .style(if self.focused && self.selected == SelectedField::Start {
                 theme.text_selected.add_modifier(Modifier::BOLD)
             } else {
                 Style::default().add_modifier(Modifier::BOLD)
             })
             .block(Block::new().padding(Padding::top(1)));
-        frame.render_widget(start_widget, rows[current_row_index]);
+        frame.render_widget(widget, rows[current_row_index]);
 
         if let Some(editing) = &mut self.editing {
             editing.editor.draw(frame, area)?;
         }
 
-        if let Some(fake_media_list) = &mut self.fake_media_builtin_list {
-            fake_media_list.draw(frame, area)?;
+        if let Some(list) = &mut self.fake_media_builtin_list {
+            list.draw(frame, area)?;
+        }
+        if let Some(list) = &mut self.noise_suppression_list {
+            list.draw(frame, area)?;
+        }
+        if let Some(list) = &mut self.resolution_list {
+            list.draw(frame, area)?;
+        }
+        if let Some(list) = &mut self.transport_list {
+            list.draw(frame, area)?;
         }
 
         Ok(())

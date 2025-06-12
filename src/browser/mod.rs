@@ -45,7 +45,7 @@ async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Hand
 
     // Build browser config with fake media args
     let mut chrome_args = vec!["--no-startup-window".to_string()];
-    match &browser_config.fake_media {
+    match &browser_config.app_config.fake_media() {
         FakeMedia::None => {}
         FakeMedia::Bultin => {
             chrome_args.extend([
@@ -87,7 +87,7 @@ async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Hand
 
     let mut config = browser::BrowserConfig::builder();
 
-    if !browser_config.headless {
+    if !browser_config.app_config.headless {
         config = config.with_head().window_size(1920, 1080).viewport(None) // Fill the entire window
     }
 

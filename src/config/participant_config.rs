@@ -1,6 +1,5 @@
-use crate::media::FakeMedia;
 use eyre::{
-    Context as _,
+    OptionExt as _,
     Result,
 };
 use rnglib::{
@@ -13,8 +12,7 @@ use url::Url;
 pub struct ParticipantConfig {
     pub username: String,
     pub session_url: Url,
-    pub fake_media: FakeMedia,
-    pub headless: bool,
+    pub app_config: super::Config,
 }
 
 impl ParticipantConfig {
@@ -25,12 +23,11 @@ impl ParticipantConfig {
             let rng = RNG::from(&Language::Goblin);
             rng.generate_name_by_count(3)
         };
-        let url = url::Url::parse(&config.url).context("failed to parse url")?;
+        let url = config.url.clone().ok_or_eyre("No session URL provided")?;
         Ok(Self {
             username: name,
             session_url: url,
-            fake_media: config.fake_media(),
-            headless: config.headless,
+            app_config: config.clone(),
         })
     }
 

@@ -1,4 +1,3 @@
-use crate::media::FakeMedia;
 use std::path::{
     Path,
     PathBuf,
@@ -40,10 +39,9 @@ impl Default for UserDataDir {
 
 #[derive(Default, Clone, Debug)]
 pub struct BrowserConfig {
-    pub(crate) fake_media: FakeMedia,
-    pub(crate) headless: bool,
     pub(crate) user_data_dir: UserDataDir,
     pub(crate) cache_dir: PathBuf,
+    pub(crate) app_config: super::Config,
 }
 
 impl From<&super::ParticipantConfig> for BrowserConfig {
@@ -51,8 +49,7 @@ impl From<&super::ParticipantConfig> for BrowserConfig {
         Self {
             user_data_dir: Default::default(),
             cache_dir: super::app_config::cache_dir(),
-            fake_media: config.fake_media.clone(),
-            headless: config.headless,
+            app_config: config.app_config.clone(),
         }
     }
 }
