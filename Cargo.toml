@@ -1,11 +1,19 @@
-[package]
+[workspace]
+resolver = "2"
+members = [
+  "browser",
+  "config",
+  "tui",
+]
+
+[workspace.package]
 name = "hyper-video-client-simulator"
 version = "0.1.0"
 authors = ["hyper.video <info@hyper.video>"]
 edition = "2021"
 repository = "https://github.com/hypervideo/hyper.video"
 
-[dependencies]
+[workspace.dependencies]
 better-panic = "0.3.0"
 # TODO: fix for https://github.com/mattsse/chromiumoxide/issues/243
 chromiumoxide = { git = "https://github.com/caido/dependency-chromiumoxide", branch = "ef-json-parsing", features = ["tokio-runtime", "bytes"], default-features = false }
@@ -19,7 +27,6 @@ directories = "6.0.0"
 eyre = "0.6.12"
 futures = "0.3.31"
 human-panic = "2.0.2"
-hyper-video-maybe-backoff = { path = "../../shared/maybe-backoff" }
 lazy_static = "1.5.0"
 libc = "0.2.161"
 pretty_assertions = "1.4.1"
@@ -44,7 +51,13 @@ tui-textarea = "0.7.0"
 url = { version = "2.5.4", features = ["serde"] }
 which = "8.0.0"
 
-[package.metadata.cargo-udeps.ignore]
+client-simulator-browser = { path = "./browser" }
+client-simulator-config = { path = "./config" }
+client-simulator-tui = { path = "./tui" }
+
+hyper-video-maybe-backoff = { path = "../../shared/maybe-backoff" }
+
+[workspace.package.metadata.cargo-udeps.ignore]
 normal = [
   "human-panic",
   # Used in tests
@@ -54,3 +67,12 @@ development = [
   # Used conditionally in development mode.
   "better-panic",
 ]
+
+[workspace.lints.clippy]
+# Allows for simpler exports.
+module_inception = "allow"
+# E.g. when using `Rc<RefCell<···>>`, the type complexity lint is quite
+# counterproductive since factoring out the type would hide cruciual semantics.
+type_complexity = "allow"
+# We can decide on a case-by-case basis if arguments should be refactored.
+too_many_arguments = "allow"

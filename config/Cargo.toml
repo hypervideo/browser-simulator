@@ -1,0 +1,26 @@
+[package]
+name = "client-simulator-config"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap.workspace = true
+color-eyre.workspace = true
+config.workspace = true
+directories.workspace = true
+eyre.workspace = true
+lazy_static.workspace = true
+random_name_generator.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_yml.workspace = true
+sha1.workspace = true
+strum.workspace = true
+temp-dir.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

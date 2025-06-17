@@ -387,6 +387,82 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
+name = "client-simulator-browser"
+version = "0.1.0"
+dependencies = [
+ "chromiumoxide",
+ "chrono",
+ "client-simulator-config",
+ "derive_more",
+ "eyre",
+ "futures",
+ "hyper-video-maybe-backoff",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "which 8.0.0",
+]
+
+[[package]]
+name = "client-simulator-config"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "color-eyre",
+ "config",
+ "directories",
+ "eyre",
+ "lazy_static",
+ "random_name_generator",
+ "reqwest",
+ "serde",
+ "serde_yml",
+ "sha1",
+ "strum 0.27.1",
+ "temp-dir",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "client-simulator-tui"
+version = "0.1.0"
+dependencies = [
+ "better-panic",
+ "chrono",
+ "clap",
+ "client-simulator-browser",
+ "client-simulator-config",
+ "color-eyre",
+ "crossterm",
+ "derive_more",
+ "directories",
+ "eyre",
+ "futures",
+ "human-panic",
+ "lazy_static",
+ "libc",
+ "pretty_assertions",
+ "ratatui",
+ "serde",
+ "serde_yml",
+ "signal-hook",
+ "strip-ansi-escapes",
+ "strum 0.27.1",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-error",
+ "tracing-subscriber",
+ "tui-logger",
+ "tui-textarea",
+ "url",
+]
+
+[[package]]
 name = "color-eyre"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1243,48 +1319,6 @@ dependencies = [
  "tower-service",
  "tracing",
  "windows-registry",
-]
-
-[[package]]
-name = "hyper-video-client-simulator"
-version = "0.1.0"
-dependencies = [
- "better-panic",
- "chromiumoxide",
- "chrono",
- "clap",
- "color-eyre",
- "config",
- "crossterm",
- "derive_more",
- "directories",
- "eyre",
- "futures",
- "human-panic",
- "hyper-video-maybe-backoff",
- "lazy_static",
- "libc",
- "pretty_assertions",
- "random_name_generator",
- "ratatui",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yml",
- "sha1",
- "signal-hook",
- "strip-ansi-escapes",
- "strum 0.27.1",
- "temp-dir",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-error",
- "tracing-subscriber",
- "tui-logger",
- "tui-textarea",
- "url",
- "which 8.0.0",
 ]
 
 [[package]]
