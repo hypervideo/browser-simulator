@@ -3,17 +3,20 @@ resolver = "2"
 members = [
   "browser",
   "config",
+  "http",
   "tui",
 ]
 
 [workspace.package]
-name = "hyper-video-client-simulator"
 version = "0.1.0"
 authors = ["hyper.video <info@hyper.video>"]
 edition = "2021"
 repository = "https://github.com/hypervideo/hyper.video"
 
 [workspace.dependencies]
+axum = { version = "0.8.3" }
+axum-server = "0.7.2"
+base64 = "0.22.1"
 better-panic = "0.3.0"
 # TODO: fix for https://github.com/mattsse/chromiumoxide/issues/243
 chromiumoxide = { git = "https://github.com/caido/dependency-chromiumoxide", branch = "ef-json-parsing", features = ["tokio-runtime", "bytes"], default-features = false }
@@ -41,7 +44,9 @@ signal-hook = "0.3.17"
 strip-ansi-escapes = "0.2.0"
 strum = { version = "0.27.1", features = ["derive"] }
 temp-dir = "0.1.16"
+thiserror = "2.0.6"
 tokio = { version = "1.44.2", default-features = false, features = ["macros", "rt-multi-thread", "sync", "signal"] }
+tokio-tungstenite = "0.26.2"
 tokio-util = "0.7.12"
 tracing = "0.1.41"
 tracing-error = "0.2.0"
@@ -56,17 +61,6 @@ client-simulator-config = { path = "./config" }
 client-simulator-tui = { path = "./tui" }
 
 hyper-video-maybe-backoff = { path = "../../shared/maybe-backoff" }
-
-[workspace.package.metadata.cargo-udeps.ignore]
-normal = [
-  "human-panic",
-  # Used in tests
-  "pretty_assertions",
-]
-development = [
-  # Used conditionally in development mode.
-  "better-panic",
-]
 
 [workspace.lints.clippy]
 # Allows for simpler exports.

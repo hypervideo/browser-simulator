@@ -9,7 +9,7 @@ pub use custom_fake_media::{
 pub enum FakeMedia {
     #[default]
     None,
-    Bultin,
+    Builtin,
     FileOrUrl(String),
 }
 
@@ -20,7 +20,7 @@ impl std::fmt::Display for FakeMedia {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FakeMedia::None => write!(f, "{NONE}"),
-            FakeMedia::Bultin => write!(f, "{BUILTIN}"),
+            FakeMedia::Builtin => write!(f, "{BUILTIN}"),
             FakeMedia::FileOrUrl(file_or_url) => write!(f, "{file_or_url}"),
         }
     }
@@ -30,7 +30,7 @@ impl<T: AsRef<str>> From<T> for FakeMedia {
     fn from(arg: T) -> Self {
         match arg.as_ref() {
             NONE => FakeMedia::None,
-            BUILTIN => FakeMedia::Bultin,
+            BUILTIN => FakeMedia::Builtin,
             arg => FakeMedia::FileOrUrl(arg.to_string()),
         }
     }
@@ -43,7 +43,7 @@ impl serde::Serialize for FakeMedia {
     {
         match self {
             FakeMedia::None => serializer.serialize_str(NONE),
-            FakeMedia::Bultin => serializer.serialize_str(BUILTIN),
+            FakeMedia::Builtin => serializer.serialize_str(BUILTIN),
             FakeMedia::FileOrUrl(file_or_url) => serializer.serialize_str(file_or_url),
         }
     }
@@ -84,7 +84,7 @@ impl FakeMediaWithDescription {
 
         match self.fake_media {
             FakeMedia::None => NONE,
-            FakeMedia::Bultin => BUILTIN,
+            FakeMedia::Builtin => BUILTIN,
             FakeMedia::FileOrUrl(_) => "",
         }
     }

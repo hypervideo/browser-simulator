@@ -30,3 +30,4 @@ noise_suppresion: none
 transport: webtransport
 resolution: auto
 blur: false
+remote_url:

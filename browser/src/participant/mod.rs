@@ -3,6 +3,12 @@ use super::auth::{
     HyperSessionCookieManger,
     HyperSessionCookieStash,
 };
+use crate::participant::{
+    messages::ParticipantLogMessage,
+    remote::spawn_remote,
+    transport_data::ParticipantConfigQuery,
+};
+use chrono::Utc;
 use client_simulator_config::{
     Config,
     NoiseSuppression,
@@ -18,6 +24,7 @@ use std::sync::Arc;
 use tokio::sync::{
     mpsc::{
         unbounded_channel,
+        UnboundedReceiver,
         UnboundedSender,
     },
     watch,
@@ -29,9 +36,11 @@ use tokio_util::sync::{
 
 mod commands;
 mod inner;
-mod messages;
+pub mod messages;
+mod remote;
 mod state;
 mod store;
+pub mod transport_data;
 
 use inner::ParticipantInner;
 pub use state::ParticipantState;
@@ -55,11 +64,20 @@ impl PartialEq for Participant {
 
 impl Participant {
     pub fn spawn_with_app_config(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+        let (participant, _) = Self::spawn_with_app_config_and_receiver(config, cookie_manager)?;
+        Ok(participant)
+    }
+
+    pub fn spawn_with_app_config_and_receiver(
+        config: &Config,
+        cookie_manager: HyperSessionCookieManger,
+    ) -> Result<(Self, UnboundedReceiver<ParticipantLogMessage>)> {
         let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
         let base_url = session_url.origin().unicode_serialization();
         let cookie = cookie_manager.give_cookie(&base_url);
         let name = cookie.as_ref().map(|c| c.username());
         let participant_config = ParticipantConfig::new(config, name)?;
+        debug!("Participant config: {:#?}", participant_config);
         Self::with_participant_config(participant_config, cookie, cookie_manager)
     }
 
@@ -67,8 +85,9 @@ impl Participant {
         participant_config: ParticipantConfig,
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
-    ) -> Result<Self> {
-        let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
+    ) -> Result<(Self, UnboundedReceiver<ParticipantLogMessage>)> {
+        let (sender_tx, receiver_tx) = unbounded_channel::<ParticipantMessage>();
+        let (sender_rx, receiver_rx) = unbounded_channel::<ParticipantLogMessage>();
 
         let name = participant_config.username.clone();
         let task_cancellation_token = CancellationToken::new();
@@ -86,22 +105,70 @@ impl Participant {
                         participant_config,
                         cookie,
                         cookie_manager,
-                        receiver,
+                        receiver_tx,
+                        sender_rx.clone(),
                         state_sender,
                     ) => {
                         if let Err(err) = result {
-                            error!(?name, "Failed to create participant: {err}")
+                            error!(?name, "Failed to create participant: {err}");
+                            let _ = sender_rx.send(ParticipantLogMessage::new("error", &name, format!("Failed to create participant: {err}")));
                         }
                     }
                 };
 
                 debug!(?name, "Participant task canceled");
+                let _ = sender_rx.send(ParticipantLogMessage::new(
+                    "debug",
+                    &name,
+                    format!("Participant {name} has been closed"),
+                ));
+            }
+        });
+
+        Ok((
+            Self {
+                name,
+                created: chrono::Utc::now(),
+                state: state_receiver,
+                _participant_task_guard: Arc::new(task_cancellation_guard),
+                sender: sender_tx,
+            },
+            receiver_rx,
+        ))
+    }
+
+    pub fn spawn_remote(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+        let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
+        let base_url = session_url.origin().unicode_serialization();
+        let cookie = cookie_manager.give_cookie(&base_url);
+        let query = ParticipantConfigQuery::new(config, cookie.as_ref())?;
+        let name = query.username.clone();
+
+        let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
+        let task_cancellation_token = CancellationToken::new();
+        let task_cancellation_guard = task_cancellation_token.clone().drop_guard();
+        let (state_sender, state_receiver) = watch::channel(Default::default());
+
+        tokio::task::spawn({
+            async move {
+                tokio::select! {
+                    biased;
+                    _ = task_cancellation_token.cancelled() => {},
+
+                    result = spawn_remote(receiver, state_sender, query, cookie, cookie_manager) => {
+                        if let Err(err) = result {
+                            error!("Failed to spawn remote participant: {err}");
+                        }
+                    }
+                };
+
+                debug!("Remote participant task canceled");
             }
         });
 
         Ok(Self {
             name,
-            created: chrono::Utc::now(),
+            created: Utc::now(),
             state: state_receiver,
             _participant_task_guard: Arc::new(task_cancellation_guard),
             sender,
@@ -138,7 +205,11 @@ impl Participant {
         }
     }
 
-    fn send_message(&self, message: ParticipantMessage) {
+    pub fn send_message(&self, message: ParticipantMessage) {
+        if let ParticipantMessage::Join = &message {
+            return self.join();
+        }
+
         let state = self.state.borrow();
         if !state.running {
             debug!(self.name, "Already closed the browser");
@@ -151,6 +222,8 @@ impl Participant {
         if self.sender.send(message.clone()).is_err() {
             error!("Was not able to send message: {message}")
         }
+
+        debug!("Sent message {message:?}");
     }
 
     pub fn leave(&self) {
@@ -163,6 +236,10 @@ impl Participant {
 
     pub fn toggle_video(&self) {
         self.send_message(ParticipantMessage::ToggleVideo);
+    }
+
+    pub fn toggle_screen_share(&self) {
+        self.send_message(ParticipantMessage::ToggleScreenshare);
     }
 
     pub fn set_noise_suppression(&self, value: NoiseSuppression) {

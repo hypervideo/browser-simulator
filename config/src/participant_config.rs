@@ -20,8 +20,7 @@ impl ParticipantConfig {
         let name = if let Some(name) = name {
             name.to_string()
         } else {
-            let rng = RNG::from(&Language::Goblin);
-            rng.generate_name_by_count(3)
+            generate_random_name()
         };
         let url = config.url.clone().ok_or_eyre("No session URL provided")?;
         Ok(Self {
@@ -34,4 +33,9 @@ impl ParticipantConfig {
     pub fn base_url(&self) -> String {
         self.session_url.origin().unicode_serialization()
     }
+}
+
+pub fn generate_random_name() -> String {
+    let rng = RNG::from(&Language::Goblin);
+    rng.generate_name_by_count(3)
 }

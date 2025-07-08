@@ -7,10 +7,14 @@ mod browser_config;
 mod client_config;
 pub mod media;
 mod participant_config;
+pub mod remote_url_option;
 
-use crate::media::{
-    FakeMedia,
-    FakeMediaWithDescription,
+use crate::{
+    media::{
+        FakeMedia,
+        FakeMediaWithDescription,
+    },
+    remote_url_option::RemoteUrlOption,
 };
 use app_config::AppConfig;
 pub use app_config::{
@@ -29,7 +33,10 @@ pub use client_config::{
 };
 use color_eyre::Result;
 use eyre::Context as _;
-pub use participant_config::ParticipantConfig;
+pub use participant_config::{
+    generate_random_name,
+    ParticipantConfig,
+};
 use serde::{
     Deserialize,
     Serialize,
@@ -56,6 +63,8 @@ pub struct Config {
     #[serde(default)]
     pub video_enabled: bool,
     #[serde(default)]
+    pub screenshare_enabled: bool,
+    #[serde(default)]
     pub noise_suppression: NoiseSuppression,
     #[serde(default)]
     pub transport: TransportMode,
@@ -63,6 +72,10 @@ pub struct Config {
     pub resolution: WebcamResolution,
     #[serde(default)]
     pub blur: bool,
+    #[serde(default)]
+    pub remote_url: Option<usize>,
+    #[serde(default)]
+    pub remote_url_options: Vec<RemoteUrlOption>,
 }
 
 const DEFAULT_CONFIG: &str = include_str!("default-config.yaml");
@@ -83,6 +96,9 @@ impl config::Source for Config {
         if let Some(url) = &self.url {
             cache.insert("url".to_string(), url.to_string().into());
         }
+        if let Some(url) = &self.remote_url {
+            cache.insert("remote_url".to_string(), url.to_string().into());
+        }
         cache.insert("headless".to_string(), (self.headless).into());
         if let Some(value) = self.fake_media_selected {
             cache.insert("fake_media_selected".to_string(), (value as u64).into());
@@ -96,6 +112,24 @@ impl config::Source for Config {
                         config::ValueKind::Table(HashMap::from_iter([
                             ("description".to_string(), ea.description().to_string().into()),
                             ("fake_media".to_string(), ea.fake_media().to_string().into()),
+                        ]))
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            );
+        }
+        if let Some(remote_url) = &self.remote_url {
+            cache.insert("remote_url".to_string(), remote_url.to_string().into());
+        }
+        if !self.remote_url_options.is_empty() {
+            cache.insert(
+                "remote_url_options".to_string(),
+                self.remote_url_options
+                    .iter()
+                    .map(|item| {
+                        config::ValueKind::Table(HashMap::from_iter([
+                            ("description".to_string(), item.description().to_string().into()),
+                            ("url".to_string(), item.url().to_string().into()),
                         ]))
                     })
                     .collect::<Vec<_>>()
@@ -143,6 +177,17 @@ impl Config {
         self.fake_media_with_description().fake_media().clone()
     }
 
+    pub fn remote_url_option(&self) -> Option<RemoteUrlOption> {
+        match (self.remote_url, &self.remote_url_options) {
+            (Some(selected), sources) => sources.get(selected).cloned(),
+            _ => None,
+        }
+    }
+
+    pub fn remote_url(&self) -> Option<url::Url> {
+        self.remote_url_option().map(|o| o.url().clone())
+    }
+
     pub fn add_custom_fake_media(&mut self, content: String) -> Option<usize> {
         let media = if content.trim().is_empty() {
             return None;
@@ -157,6 +202,16 @@ impl Config {
             fake_media_sources.push(media);
             Some(fake_media_sources.len() - 1)
         }
+    }
+
+    pub fn add_remote_url(&mut self, content: String) -> Option<usize> {
+        let url = match url::Url::parse(&content) {
+            Ok(url) => url,
+            Err(_) => return None,
+        };
+        let option = RemoteUrlOption::new(url, None);
+        self.remote_url_options.push(option);
+        Some(self.remote_url_options.len() - 1)
     }
 
     pub fn data_dir(&self) -> &Path {
@@ -176,6 +231,9 @@ impl Config {
         }
         if self.url == default.url {
             clone.url = None;
+        }
+        if self.remote_url == default.remote_url {
+            clone.remote_url = None;
         }
 
         std::fs::create_dir_all(&self.app_config.config_dir).context("Failed to create config directory")?;

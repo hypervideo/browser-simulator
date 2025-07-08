@@ -276,6 +276,13 @@ impl Component for Participants {
                 None
             }
 
+            (KeyCode::Char('s'), Some(selected)) => {
+                if let Some(participant) = self.participants.get(selected) {
+                    participant.toggle_screen_share();
+                }
+                None
+            }
+
             (KeyCode::Char('n'), Some(_)) => Some(Action::ParticipantsAction(
                 ParticipantsAction::StartSelectNoiseSuppression,
             )),
@@ -306,7 +313,7 @@ impl Component for Participants {
         let [_, _, area] = header_and_two_main_areas(area)?;
 
         let help = if self.selected.is_some() {
-            " <del> to shutdown, <j>oin, <l>eave, <m>ute, <v>ideo, <n>oise suppression, <r>esolutions, <b>lur "
+            " <del> to shutdown, <j>oin, <l>eave, <m>ute, <v>ideo, <s>creenshare, <n>oise suppression, <r>esolutions, <b>lur "
         } else {
             ""
         };
@@ -330,6 +337,7 @@ impl Component for Participants {
             "Joined",
             "Muted",
             "Video active",
+            "Screenshare active",
             "Noise Suppression",
             "Transport",
             "Resolution",
@@ -352,21 +360,24 @@ impl Component for Participants {
             .map(|participant| {
                 let created = format_duration(chrono::Utc::now() - participant.created);
                 let state = participant.state.borrow();
+                let name = participant.name.clone();
                 let opened = format_bool(state.running);
                 let joined = format_bool(state.joined);
                 let muted = format_bool(state.muted);
                 let video = format_bool(state.video_activated);
+                let screenshare = format_bool(state.screenshare_activated);
                 let noise_suppression = state.noise_suppression.to_string();
                 let transport_mode = state.transport_mode.to_string();
                 let resolution = state.webcam_resolution.to_string();
                 let background_blur = format_bool(state.background_blur);
                 let cells = vec![
-                    Cell::from(participant.name.clone()),
+                    Cell::from(name),
                     Cell::from(created),
                     Cell::from(opened),
                     Cell::from(joined),
                     Cell::from(muted),
                     Cell::from(video),
+                    Cell::from(screenshare),
                     Cell::from(noise_suppression),
                     Cell::from(transport_mode),
                     Cell::from(resolution),
@@ -398,6 +409,7 @@ impl Component for Participants {
                 Constraint::Percentage(10), // Joined
                 Constraint::Percentage(10), // Muted
                 Constraint::Percentage(10), // Video active
+                Constraint::Percentage(10), // Screenshare active
                 Constraint::Percentage(10), // Noise suppressed
                 Constraint::Percentage(10), // Transport mode
                 Constraint::Percentage(10), // Resolution

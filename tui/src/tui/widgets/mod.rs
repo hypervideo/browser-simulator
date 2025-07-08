@@ -1,8 +1,10 @@
+mod button;
 mod enum_list_input;
 mod label_and_text;
 mod list_input;
 mod text_input;
 
+pub(crate) use button::button;
 pub(crate) use enum_list_input::EnumListInput;
 pub(crate) use label_and_text::{
     label_and_bool,

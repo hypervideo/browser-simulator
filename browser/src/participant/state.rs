@@ -4,8 +4,9 @@ use client_simulator_config::{
     WebcamResolution,
 };
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ParticipantState {
+    pub username: String,
     pub running: bool,
     pub joined: bool,
     pub muted: bool,
@@ -14,4 +15,5 @@ pub struct ParticipantState {
     pub transport_mode: TransportMode,
     pub webcam_resolution: WebcamResolution,
     pub background_blur: bool,
+    pub screenshare_activated: bool,
 }

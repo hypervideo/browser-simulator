@@ -50,7 +50,7 @@ async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Hand
     let mut chrome_args = vec!["--no-startup-window".to_string()];
     match &browser_config.app_config.fake_media() {
         FakeMedia::None => {}
-        FakeMedia::Bultin => {
+        FakeMedia::Builtin => {
             chrome_args.extend([
                 "--no-sandbox".to_string(),
                 "--use-fake-ui-for-media-stream".to_string(),

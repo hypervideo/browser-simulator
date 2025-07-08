@@ -102,7 +102,7 @@ create_eval_setter!(
 
 create_eval_getter!(
     get_outgoing_camera_resolution,
-    "function f() { return hyper.settings.videoCodec.videoResolutionForWebcamEncoder.level; }",
+    "function f() { return hyper.settings.videoCodec.videoResolutionForWebcamEncoder.name; }",
     String,
     WebcamResolution
 );

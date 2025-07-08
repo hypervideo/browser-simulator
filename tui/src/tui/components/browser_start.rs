@@ -3,6 +3,7 @@ use crate::tui::{
     layout::header_and_two_main_areas,
     widgets::{
         self,
+        button,
         EnumListInput,
         ListInput,
     },
@@ -21,10 +22,7 @@ use client_simulator_config::{
 };
 use color_eyre::Result;
 use crossterm::event::KeyCode;
-use ratatui::{
-    prelude::*,
-    widgets::*,
-};
+use ratatui::prelude::*;
 use strum::{
     Display,
     IntoEnumIterator as _,
@@ -44,12 +42,14 @@ enum SelectedField {
     FakeMedia,
     Mute,
     VideoDisable,
+    ScreenshareDisable,
     NoiseSuppression,
     Transport,
     Resolution,
     BackgroundBlur,
     Headless,
-    Start,
+    StartBrowser,
+    RemoteUrl,
 }
 
 impl SelectedField {
@@ -61,12 +61,14 @@ impl SelectedField {
             }
             SelectedField::Mute => " Mute audio? <enter> to toggle. ",
             SelectedField::VideoDisable => " Enable video? <enter> to toggle. ",
+            SelectedField::ScreenshareDisable => " Enable screenshare? <enter> to toggle. ",
             SelectedField::NoiseSuppression => " Enable noise suppression? <enter> to select noise suppression model. ",
             SelectedField::Transport => " Select transport protocol. <enter> to select. ",
             SelectedField::Resolution => " Select resolution for video (camera). <enter> to select. ",
             SelectedField::BackgroundBlur => " Enable background blur? <enter> to toggle. ",
             SelectedField::Headless => " Run the browser in headless mode? When disabled, will show a browser window with which you can interact. <enter> to toggle. ",
-            SelectedField::Start => " Start a new browser session and join a hyper.video session. <enter> to start. ",
+            SelectedField::StartBrowser => " Start a new browser session and join a hyper.video session. <enter> to start. ",
+            SelectedField::RemoteUrl => " URL to a remote server to spawn remote participants. <enter> to edit, <del> to clear. ",
         }
     }
 }
@@ -80,6 +82,7 @@ pub(crate) enum BrowserStartAction {
     StartSelectNoiseSuppression,
     StartSelectTransport,
     StartSelectResolution,
+    StartSelectRemoteUrl,
     StartBrowser,
     Toggle,
     DeleteSelectedField,
@@ -87,6 +90,12 @@ pub(crate) enum BrowserStartAction {
 
 #[derive(Debug, Clone)]
 enum FakeMediaWithDescriptionItem {
+    Add,
+    Select,
+}
+
+#[derive(Debug, Clone)]
+enum RemoteUrlWithDescriptionItem {
     Add,
     Select,
 }
@@ -106,6 +115,7 @@ pub struct BrowserStart {
     noise_suppression_list: Option<EnumListInput<NoiseSuppression>>,
     transport_list: Option<EnumListInput<TransportMode>>,
     resolution_list: Option<EnumListInput<WebcamResolution>>,
+    remote_url_list: Option<ListInput<RemoteUrlWithDescriptionItem>>,
     participant_store: ParticipantStore,
 }
 
@@ -122,6 +132,7 @@ impl BrowserStart {
             noise_suppression_list: None,
             resolution_list: None,
             transport_list: None,
+            remote_url_list: None,
             editing: None,
             participant_store,
         }
@@ -155,18 +166,23 @@ impl Component for BrowserStart {
                     let content = editing.editor.finish();
                     match editing.field {
                         SelectedField::Url => self.config.url = url::Url::parse(&content).ok(),
+                        SelectedField::RemoteUrl => {
+                            let index = self.config.add_remote_url(content);
+                            self.config.remote_url = index;
+                        }
                         SelectedField::FakeMedia => {
                             let index = self.config.add_custom_fake_media(content);
                             self.config.fake_media_selected = index;
                         }
                         SelectedField::Mute
                         | SelectedField::VideoDisable
+                        | SelectedField::ScreenshareDisable
                         | SelectedField::NoiseSuppression
                         | SelectedField::Transport
                         | SelectedField::Resolution
                         | SelectedField::BackgroundBlur
                         | SelectedField::Headless
-                        | SelectedField::Start => {}
+                        | SelectedField::StartBrowser => {}
                     }
                     // Save config immediately after edit confirmation
                     if let Err(e) = self.config.save() {
@@ -313,6 +329,47 @@ impl Component for BrowserStart {
             }
         }
 
+        if let Some(mut list) = self.remote_url_list.take() {
+            match key.code {
+                KeyCode::Delete | KeyCode::Backspace => {
+                    if let Some(index) = list.finish().and_then(|(index, _)| (index > 0).then(|| index - 1)) {
+                        self.config.remote_url_options.remove(index);
+                    }
+                    return Ok(Some(Action::BrowserStartAction(
+                        BrowserStartAction::StartSelectRemoteUrl,
+                    )));
+                }
+                KeyCode::Enter => {
+                    let content = list.finish();
+                    if let Some((index, media)) = content {
+                        match media {
+                            RemoteUrlWithDescriptionItem::Add => {
+                                return Ok(Some(Action::BrowserStartAction(BrowserStartAction::StartEditText)));
+                            }
+                            RemoteUrlWithDescriptionItem::Select => {
+                                self.config.remote_url = Some(index - 1);
+                            }
+                        }
+                    } else {
+                        self.config.remote_url = None;
+                    };
+                    if let Err(e) = self.config.save() {
+                        error!(?e, "Failed to save config after edit");
+                    }
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                _ => {}
+            }
+            let handled = list.handle_key_event(key);
+            self.remote_url_list = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
         let action = match key.code {
             KeyCode::Delete | KeyCode::Backspace => Some(BrowserStartAction::DeleteSelectedField),
 
@@ -321,10 +378,11 @@ impl Component for BrowserStart {
             KeyCode::Down => Some(BrowserStartAction::MoveDown),
 
             // start editing or start browser or toggle
-            KeyCode::Enter if self.selected == SelectedField::Start => Some(BrowserStartAction::StartBrowser),
+            KeyCode::Enter if self.selected == SelectedField::StartBrowser => Some(BrowserStartAction::StartBrowser),
             KeyCode::Enter if self.selected == SelectedField::Headless => Some(BrowserStartAction::Toggle),
             KeyCode::Enter if self.selected == SelectedField::Mute => Some(BrowserStartAction::Toggle),
             KeyCode::Enter if self.selected == SelectedField::VideoDisable => Some(BrowserStartAction::Toggle),
+            KeyCode::Enter if self.selected == SelectedField::ScreenshareDisable => Some(BrowserStartAction::Toggle),
             KeyCode::Enter if self.selected == SelectedField::NoiseSuppression => {
                 Some(BrowserStartAction::StartSelectNoiseSuppression)
             }
@@ -340,6 +398,9 @@ impl Component for BrowserStart {
                 Some(BrowserStartAction::StartSelectFakeMedia)
             }
             KeyCode::Enter if self.selected == SelectedField::Url => Some(BrowserStartAction::StartEditText),
+            KeyCode::Enter if self.selected == SelectedField::RemoteUrl => {
+                Some(BrowserStartAction::StartSelectRemoteUrl)
+            }
 
             KeyCode::Esc if self.fake_media_builtin_list.is_some() => {
                 self.fake_media_builtin_list = None;
@@ -355,6 +416,10 @@ impl Component for BrowserStart {
             }
             KeyCode::Esc if self.transport_list.is_some() => {
                 self.transport_list = None;
+                None
+            }
+            KeyCode::Esc if self.remote_url_list.is_some() => {
+                self.remote_url_list = None;
                 None
             }
 
@@ -400,12 +465,14 @@ impl Component for BrowserStart {
                     SelectedField::FakeMedia => SelectedField::Url,
                     SelectedField::Mute => SelectedField::FakeMedia,
                     SelectedField::VideoDisable => SelectedField::Mute,
-                    SelectedField::NoiseSuppression => SelectedField::VideoDisable,
+                    SelectedField::ScreenshareDisable => SelectedField::VideoDisable,
+                    SelectedField::NoiseSuppression => SelectedField::ScreenshareDisable,
                     SelectedField::Transport => SelectedField::NoiseSuppression,
                     SelectedField::Resolution => SelectedField::Transport,
                     SelectedField::BackgroundBlur => SelectedField::Resolution,
                     SelectedField::Headless => SelectedField::BackgroundBlur,
-                    SelectedField::Start => SelectedField::Headless,
+                    SelectedField::RemoteUrl => SelectedField::Headless,
+                    SelectedField::StartBrowser => SelectedField::RemoteUrl,
                 };
             }
 
@@ -414,13 +481,15 @@ impl Component for BrowserStart {
                     SelectedField::Url => SelectedField::FakeMedia,
                     SelectedField::FakeMedia => SelectedField::Mute,
                     SelectedField::Mute => SelectedField::VideoDisable,
-                    SelectedField::VideoDisable => SelectedField::NoiseSuppression,
+                    SelectedField::VideoDisable => SelectedField::ScreenshareDisable,
+                    SelectedField::ScreenshareDisable => SelectedField::NoiseSuppression,
                     SelectedField::NoiseSuppression => SelectedField::Transport,
                     SelectedField::Transport => SelectedField::Resolution,
                     SelectedField::Resolution => SelectedField::BackgroundBlur,
                     SelectedField::BackgroundBlur => SelectedField::Headless,
-                    SelectedField::Headless => SelectedField::Start,
-                    SelectedField::Start => return Ok(Some(Action::Activate(ActivateAction::Participants))),
+                    SelectedField::Headless => SelectedField::RemoteUrl,
+                    SelectedField::RemoteUrl => SelectedField::StartBrowser,
+                    SelectedField::StartBrowser => return Ok(Some(Action::Activate(ActivateAction::Participants))),
                 };
             }
 
@@ -432,6 +501,16 @@ impl Component for BrowserStart {
                         "URL to a hyper.video session",
                         self.config
                             .url
+                            .as_ref()
+                            .map(|url| url.to_string())
+                            .unwrap_or_default()
+                            .to_string(),
+                    ),
+                    SelectedField::RemoteUrl => (
+                        "Edit remote URL",
+                        "URL to a remote server to spawn remote participants",
+                        self.config
+                            .remote_url
                             .as_ref()
                             .map(|url| url.to_string())
                             .unwrap_or_default()
@@ -503,11 +582,32 @@ impl Component for BrowserStart {
                 return Ok(None);
             }
 
+            BrowserStartAction::StartSelectRemoteUrl => {
+                let items = [("<add...>".to_string(), RemoteUrlWithDescriptionItem::Add)]
+                    .into_iter()
+                    .chain(
+                        self.config
+                            .remote_url_options
+                            .clone()
+                            .into_iter()
+                            .map(|url| (url.url().to_string(), RemoteUrlWithDescriptionItem::Select)),
+                    );
+                self.remote_url_list = Some(ListInput::new(
+                    "Remote URL options",
+                    items,
+                    self.config.remote_url.map(|index| index + 1),
+                ));
+                return Ok(None);
+            }
+
             BrowserStartAction::DeleteSelectedField => {
                 match self.selected {
                     SelectedField::Url => self.config.url = None,
                     SelectedField::FakeMedia => {
                         self.config.fake_media_selected = Some(0);
+                    }
+                    SelectedField::RemoteUrl => {
+                        self.config.remote_url = None;
                     }
                     _ => return Ok(None),
                 }
@@ -521,6 +621,9 @@ impl Component for BrowserStart {
                     }
                     SelectedField::VideoDisable => {
                         self.config.video_enabled = !self.config.video_enabled;
+                    }
+                    SelectedField::ScreenshareDisable => {
+                        self.config.screenshare_enabled = !self.config.screenshare_enabled;
                     }
                     SelectedField::BackgroundBlur => {
                         self.config.blur = !self.config.blur;
@@ -539,9 +642,14 @@ impl Component for BrowserStart {
                     return Ok(None);
                 }
 
-                if let Err(e) = self.participant_store.spawn(&self.config) {
-                    error!(?e, "Failed to spawn participant");
+                if self.config.remote_url.is_some() {
+                    if let Err(e) = self.participant_store.spawn_remote(&self.config) {
+                        error!(?e, "Failed to spawn remote participant");
+                    }
+                } else if let Err(e) = self.participant_store.spawn_local(&self.config) {
+                    error!(?e, "Failed to spawn local participant");
                 }
+
                 return Ok(Some(Action::ParticipantCountChanged(self.participant_store.len())));
             }
         };
@@ -579,12 +687,14 @@ impl Component for BrowserStart {
                 Constraint::Length(1), // Fake-media
                 Constraint::Length(1), // Muted checkbox
                 Constraint::Length(1), // Video disabled checkbox
+                Constraint::Length(1), // Screenshare disabled checkbox
                 Constraint::Length(1), // Noise suppression checkbox
                 Constraint::Length(1), // Transport
                 Constraint::Length(1), // Resolution
                 Constraint::Length(1), // Background blur checkbox
                 Constraint::Length(1), // Headless checkbox
-                Constraint::Length(2), // Start button
+                Constraint::Length(1), // Remote server URL
+                Constraint::Length(3), // Start button
             ])
             .split(area);
 
@@ -597,11 +707,14 @@ impl Component for BrowserStart {
             "Fake media:",
             "Audio enabled:",
             "Video enabled:",
+            "Screenshare enabled:",
             "Noise suppression:",
             "Transport:",
             "Resolution:",
             "Background blur",
             "Headless:",
+            "Remote server URL:",
+            "Start browser",
         ];
         let max_length = form_labels.iter().map(|s| s.len()).max().unwrap_or(0) + 1;
 
@@ -649,6 +762,17 @@ impl Component for BrowserStart {
             self.config.video_enabled,
             max_length,
             self.focused && self.selected == SelectedField::VideoDisable,
+            &theme,
+        );
+        frame.render_widget(widget, rows[current_row_index]);
+        current_row_index += 1;
+
+        // --- Screenshare enabled ---
+        let widget = widgets::label_and_bool(
+            form_labels[current_row_index],
+            self.config.screenshare_enabled,
+            max_length,
+            self.focused && self.selected == SelectedField::ScreenshareDisable,
             &theme,
         );
         frame.render_widget(widget, rows[current_row_index]);
@@ -711,15 +835,33 @@ impl Component for BrowserStart {
         frame.render_widget(widget, rows[current_row_index]);
         current_row_index += 1;
 
-        // --- Start Button ---
-        let widget = Paragraph::new("Start Browser")
-            .style(if self.focused && self.selected == SelectedField::Start {
-                theme.text_selected.add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().add_modifier(Modifier::BOLD)
-            })
-            .block(Block::new().padding(Padding::top(1)));
+        // --- Remote URL Checkbox ---
+        let content = self
+            .config
+            .remote_url()
+            .map(|u| u.to_string())
+            .unwrap_or_else(|| "<none>".to_string());
+        let widget = widgets::label_and_text(
+            form_labels[current_row_index],
+            content,
+            max_length,
+            self.focused && self.selected == SelectedField::RemoteUrl,
+            &theme,
+        );
         frame.render_widget(widget, rows[current_row_index]);
+        current_row_index += 1;
+
+        // --- Start Browser button ---
+        let button_area = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(18)])
+            .split(rows[current_row_index]);
+        let button = button(
+            form_labels[current_row_index],
+            self.focused && self.selected == SelectedField::StartBrowser,
+            &theme,
+        );
+        frame.render_widget(button, button_area[0]);
 
         if let Some(editing) = &mut self.editing {
             editing.editor.draw(frame, area)?;
@@ -735,6 +877,9 @@ impl Component for BrowserStart {
             list.draw(frame, area)?;
         }
         if let Some(list) = &mut self.transport_list {
+            list.draw(frame, area)?;
+        }
+        if let Some(list) = &mut self.remote_url_list {
             list.draw(frame, area)?;
         }
 

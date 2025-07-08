@@ -14,11 +14,14 @@ use crate::{
         HyperSessionCookieManger,
     },
     create_browser,
-    participant::commands::{
-        get_background_blur,
-        set_background_blur,
-        set_force_webrtc,
-        set_outgoing_camera_resolution,
+    participant::{
+        commands::{
+            get_background_blur,
+            set_background_blur,
+            set_force_webrtc,
+            set_outgoing_camera_resolution,
+        },
+        messages::ParticipantLogMessage,
     },
     wait_for_element,
 };
@@ -47,7 +50,10 @@ use futures::StreamExt as _;
 use std::time::Duration;
 use tokio::{
     sync::{
-        mpsc::UnboundedReceiver,
+        mpsc::{
+            UnboundedReceiver,
+            UnboundedSender,
+        },
         watch,
     },
     task::JoinHandle,
@@ -63,6 +69,7 @@ pub(super) struct ParticipantInner {
     participant_config: ParticipantConfig,
     page: Page,
     state: watch::Sender<ParticipantState>,
+    sender: UnboundedSender<ParticipantLogMessage>,
     auth: BorrowedCookie,
 }
 
@@ -73,6 +80,7 @@ impl ParticipantInner {
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
         receiver: UnboundedReceiver<ParticipantMessage>,
+        sender: UnboundedSender<ParticipantLogMessage>,
         state: watch::Sender<ParticipantState>,
     ) -> Result<()> {
         let auth = if let Some(cookie) = cookie {
@@ -89,10 +97,15 @@ impl ParticipantInner {
 
         let page = Self::create_page_retry(&participant_config, &mut browser).await?;
 
+        state.send_modify(|state| {
+            state.username = participant_config.username.clone();
+        });
+
         let participant = Self {
             participant_config,
             page,
             state: state.clone(),
+            sender,
             auth,
         };
 
@@ -133,10 +146,20 @@ impl ParticipantInner {
 
         if let Err(err) = self.join().await {
             error!("Failed joining the session when starting the browser {err}");
+            self.send_log_message(
+                "error",
+                format!("Failed joining the session when starting the browser {err}"),
+            );
 
             match browser.kill().await {
-                Some(Ok(_)) => debug!("browser killed"),
-                Some(Err(err)) => error!("failed to kill browser: {err}"),
+                Some(Ok(_)) => {
+                    debug!("browser killed");
+                    self.send_log_message("debug", "browser killed");
+                }
+                Some(Err(err)) => {
+                    error!("failed to kill browser: {err}");
+                    self.send_log_message("error", format!("failed to kill browser: {err}"));
+                }
                 None => debug!("browser process not found"),
             };
             self.state.send_modify(|state| {
@@ -158,9 +181,18 @@ impl ParticipantInner {
                 Some(_) = detached_event.next() => {
                     warn!(self.participant_config.username, "Browser unexpectedly closed");
                     match browser.kill().await {
-                        Some(Ok(_)) => debug!("browser killed"),
-                        Some(Err(err)) => error!("failed to kill browser: {err}"),
-                        None => debug!("browser process not found"),
+                        Some(Ok(_)) => {
+                            debug!("browser killed");
+                            self.send_log_message("debug", "browser killed");
+                        },
+                        Some(Err(err)) => {
+                            error!("failed to kill browser: {err}");
+                            self.send_log_message("error", format!("failed to kill browser: {err}"));
+                        },
+                        None => {
+                            debug!("browser process not found");
+                            self.send_log_message("debug", "browser process not found");
+                        },
                     }
                     break;
                 },
@@ -179,11 +211,13 @@ impl ParticipantInner {
                 }
                 ParticipantMessage::ToggleAudio => self.toggle_audio().await,
                 ParticipantMessage::ToggleVideo => self.toggle_video().await,
+                ParticipantMessage::ToggleScreenshare => self.toggle_screen_share().await,
                 ParticipantMessage::SetWebcamResolutions(value) => self.set_webcam_resolutions(value).await,
                 ParticipantMessage::SetNoiseSuppression(value) => self.set_noise_suppression(value).await,
                 ParticipantMessage::ToggleBackgroundBlur => self.toggle_background_blur().await,
             } {
                 error!("Running action {message} failed with error: {e}.");
+                self.send_log_message("error", format!("Running action {message} failed with error: {e}."));
             }
 
             self.update_state().await;
@@ -194,6 +228,16 @@ impl ParticipantInner {
         });
 
         Ok(())
+    }
+
+    fn send_log_message(&self, level: &str, message: impl ToString) {
+        if let Err(err) = self.sender.send(ParticipantLogMessage::new(
+            level,
+            &self.participant_config.username,
+            message,
+        )) {
+            trace!("Failed to send log message: {err}");
+        }
     }
 
     async fn create_page(config: &ParticipantConfig, browser: &mut Browser) -> Result<Page> {
@@ -273,6 +317,7 @@ impl ParticipantInner {
             .context("failed to set cookie")?;
 
         debug!(self.participant_config.username, "Set cookie");
+        self.send_log_message("debug", format!("Set cookie for domain {domain}"));
 
         Ok(())
     }
@@ -280,6 +325,7 @@ impl ParticipantInner {
     async fn join(&mut self) -> Result<()> {
         if self.state.borrow().joined {
             warn!("Already joined.");
+            self.send_log_message("warn", "Already joined.");
             return Ok(());
         }
 
@@ -294,6 +340,7 @@ impl ParticipantInner {
             .context("failed to wait for navigation response")?;
 
         debug!(self.participant_config.username, "Navigated to page");
+        self.send_log_message("debug", "Navigated to page");
 
         // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
         // Find the input box to enter the name
@@ -317,6 +364,13 @@ impl ParticipantInner {
             .context("failed to insert name")?;
 
         debug!(self.participant_config.username, "Set the name of the participant");
+        self.send_log_message(
+            "debug",
+            format!(
+                "Set the name of the participant to {}",
+                self.participant_config.username
+            ),
+        );
 
         // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
         // Find the join button
@@ -340,6 +394,7 @@ impl ParticipantInner {
             .context("failed to click join button")?;
 
         debug!(self.participant_config.username, "Clicked on the join button");
+        self.send_log_message("debug", "Clicked on the join button");
 
         // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
         // Ensure we have joined the space.
@@ -352,6 +407,7 @@ impl ParticipantInner {
         .context("We haven't joined the space, cannot find the leave button")?;
 
         info!(self.participant_config.username, "Joined the space");
+        self.send_log_message("info", "Joined the space");
 
         self.update_state().await;
 
@@ -366,6 +422,7 @@ impl ParticipantInner {
             blur,
             audio_enabled,
             video_enabled,
+            screenshare_enabled,
             ..
         } = &self.participant_config.app_config;
         set_noise_suppression(&self.page, *noise_suppression)
@@ -389,7 +446,20 @@ impl ParticipantInner {
             self.toggle_video().await?;
         }
 
+        if !screenshare_enabled {
+            self.toggle_screen_share().await?;
+        }
+
         Ok(())
+    }
+
+    async fn toggle_screen_share(&self) -> Result<()> {
+        self.screen_share_button()
+            .await?
+            .click()
+            .await
+            .context("Could not click on the toggle screen share button")
+            .map(|_| ())
     }
 
     async fn leave(&self) -> Result<()> {
@@ -400,6 +470,7 @@ impl ParticipantInner {
             .context("Could not click on the leave space button")?;
 
         info!(self.participant_config.username, "Left the space");
+        self.send_log_message("info", "Left the space");
 
         Ok(())
     }
@@ -412,16 +483,19 @@ impl ParticipantInner {
                 self.participant_config.username,
                 "Failed leaving space while closing browser: {}", err
             );
+            self.send_log_message("error", format!("Failed leaving space while closing browser: {}", err));
         }
 
-        if let Err(err) = self.page.close().await {
+        if let Err(err) = self.page.clone().close().await {
             error!("Error closing page: {err}");
+            self.send_log_message("error", format!("Error closing page: {err}"));
         }
 
         browser.close().await?;
         browser.wait().await?;
 
         info!(self.participant_config.username, "Closed the browser");
+        self.send_log_message("info", "Closed the browser");
 
         self.state.send_modify(|state| {
             state.running = false;
@@ -438,6 +512,8 @@ impl ParticipantInner {
             .context("Could not click on the toggle audio button")?;
 
         info!(self.participant_config.username, "Toggled audio");
+        self.send_log_message("info", "Toggled audio");
+        self.update_state().await;
 
         Ok(())
     }
@@ -450,6 +526,8 @@ impl ParticipantInner {
             .context("Could not click on the toggle camera button")?;
 
         info!(self.participant_config.username, "Toggled camera");
+        self.send_log_message("info", "Toggled camera");
+        self.update_state().await;
 
         Ok(())
     }
@@ -460,7 +538,7 @@ impl ParticipantInner {
         set_outgoing_camera_resolution(&self.page, &value)
             .await
             .context("Failed to set outgoing camera resolution")?;
-
+        self.update_state().await;
         Ok(())
     }
 
@@ -469,6 +547,7 @@ impl ParticipantInner {
             self.participant_config.username,
             "Changing noise suppression to {value}"
         );
+        self.send_log_message("info", format!("Changing noise suppression to {}", value));
 
         set_noise_suppression(&self.page, value)
             .await
@@ -502,6 +581,10 @@ impl ParticipantInner {
         self.find_element(r#"[data-testid="toggle-video"]"#).await
     }
 
+    async fn screen_share_button(&self) -> Result<Element> {
+        self.find_element(r#"[data-testid="toggle-screen-share"]"#).await
+    }
+
     async fn find_element(&self, selector: &str) -> Result<Element> {
         self.page
             .find_element(selector)
@@ -517,6 +600,7 @@ impl ParticipantInner {
         let mut webcam_resolution = WebcamResolution::default();
         let mut noise_suppression = NoiseSuppression::default();
         let mut background_blur = false;
+        let mut screenshare_activated = false;
 
         if let Ok(value) = get_noise_suppression(&self.page).await {
             noise_suppression = value;
@@ -531,6 +615,12 @@ impl ParticipantInner {
         if let Ok(camera_button) = self.camera_button().await {
             if let Some(element_state) = element_state(&camera_button).await {
                 video_activated = element_state;
+            }
+        }
+
+        if let Ok(screen_share_button) = self.screen_share_button().await {
+            if let Some(element_state) = element_state(&screen_share_button).await {
+                screenshare_activated = element_state;
             }
         }
 
@@ -556,6 +646,8 @@ impl ParticipantInner {
             state.webcam_resolution = webcam_resolution;
             state.noise_suppression = noise_suppression;
             state.background_blur = background_blur;
+            state.screenshare_activated = screenshare_activated;
+            debug!("Sending state update: {state:?}");
         });
     }
 }

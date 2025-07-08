@@ -27,7 +27,7 @@ async fn main() {
 }
 
 async fn run(Args { url }: Args) -> Result<()> {
-    let participant = Participant::with_participant_config(
+    let (participant, _) = Participant::with_participant_config(
         ParticipantConfig {
             username: "browser-simulator example".to_string(),
             session_url: url.clone(),

@@ -69,6 +69,21 @@ impl HyperSessionCookieManger {
 
         Ok(BorrowedCookie::new(base_url, cookie, self.clone()))
     }
+
+    pub async fn give_or_fetch_cookie(
+        &self,
+        base_url: impl ToString,
+        username: impl AsRef<str>,
+    ) -> Result<BorrowedCookie> {
+        let base_url = base_url.to_string();
+        let username = username.as_ref();
+
+        if let Some(cookie) = self.give_cookie(base_url.clone()) {
+            return Ok(cookie);
+        }
+
+        self.fetch_new_cookie(base_url, username).await
+    }
 }
 
 impl From<HyperSessionCookieStash> for HyperSessionCookieManger {
@@ -115,7 +130,7 @@ impl BorrowedCookie {
         self.cookie.as_browser_cookie_for(domain)
     }
 
-    pub(crate) fn username(&self) -> &str {
+    pub fn username(&self) -> &str {
         &self.cookie.username
     }
 }
@@ -130,7 +145,7 @@ const PERSISTENCE_WHITELIST: [&str; 3] = ["latest.dev.hyper.video", "staging.hyp
 
 /// List of cookies that can be stored and retrieved.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct HyperSessionCookieStash {
+pub struct HyperSessionCookieStash {
     stash_file: PathBuf,
     cookies: HashMap<Domain, Vec<HyperSessionCookie>>,
 }
@@ -159,7 +174,7 @@ impl HyperSessionCookieStash {
     }
 
     /// Load the cookies from the given directory.
-    pub(super) fn load_from_data_dir(data_dir: impl AsRef<Path>) -> Self {
+    pub fn load_from_data_dir(data_dir: impl AsRef<Path>) -> Self {
         const HYPER_COOKIES_FILE: &str = "hyper_session_cookies.json";
         let file = data_dir.as_ref().join(HYPER_COOKIES_FILE);
         Self::load(file)
@@ -196,11 +211,11 @@ impl HyperSessionCookieStash {
 
 /// A token (actually a cookie) to authenticate against the hyper.video server.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct HyperSessionCookie {
+pub struct HyperSessionCookie {
     domain: Domain,
     created_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
-    pub(crate) username: String,
+    pub username: String,
     cookie: String,
 }
 
