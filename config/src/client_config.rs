@@ -46,9 +46,6 @@ pub enum NoiseSuppression {
     #[strum(to_string = "rnnoise")]
     #[serde(rename = "rnnoise")]
     RNNoise,
-    #[strum(to_string = "iris-inta")]
-    #[serde(rename = "iris-inta")]
-    IRISInta,
     #[strum(to_string = "iris-shepherd")]
     #[serde(rename = "iris-shepherd")]
     IRISShepherd,
