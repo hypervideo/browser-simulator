@@ -20,7 +20,7 @@ base64 = "0.22.1"
 better-panic = "0.3.0"
 # TODO: fix for https://github.com/mattsse/chromiumoxide/issues/243
 chromiumoxide = { git = "https://github.com/caido/dependency-chromiumoxide", branch = "ef-json-parsing", features = ["tokio-runtime", "bytes"], default-features = false }
-chrono = { version = "0.4.40", features = ["serde"] }
+chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.37", features = ["derive", "env", "cargo", "string"] }
 color-eyre = "0.6.3"
 config = { version = "0.15.11", default-features = false, features = ["yaml", "convert-case", "async"] }
@@ -45,7 +45,7 @@ strip-ansi-escapes = "0.2.0"
 strum = { version = "0.27.1", features = ["derive"] }
 temp-dir = "0.1.16"
 thiserror = "2.0.6"
-tokio = { version = "1.44.2", default-features = false, features = ["macros", "rt-multi-thread", "sync", "signal"] }
+tokio = { version = "1.46.1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "signal"] }
 tokio-tungstenite = "0.26.2"
 tokio-util = "0.7.12"
 tracing = "0.1.41"
