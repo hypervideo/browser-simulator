@@ -7,7 +7,6 @@ use client_simulator_config::{
     Config,
     ParticipantConfig,
 };
-use client_simulator_tui::init_errors;
 use eyre::Result;
 use std::time::Duration;
 use url::Url;
@@ -20,7 +19,6 @@ pub struct Args {
 
 #[tokio::main]
 async fn main() {
-    init_errors().expect("Failed to initialize error handling");
     tracing_subscriber::fmt::init();
 
     run(Args::parse()).await.unwrap();

@@ -1,9 +1,15 @@
+use client_simulator_config::TuiArgs;
+
 #[macro_use]
 extern crate tracing;
 
-mod errors;
 pub mod logging;
 mod tui;
 
-pub use errors::init as init_errors;
-pub use tui::App;
+pub use tui::Tui;
+
+pub async fn start_tui(args: TuiArgs) -> eyre::Result<()> {
+    logging::log_init(args.debug)?;
+
+    tui::App::new(args)?.run().await
+}

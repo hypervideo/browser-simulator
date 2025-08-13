@@ -30,8 +30,10 @@ impl ParticipantConfig {
         })
     }
 
-    pub fn base_url(&self) -> String {
-        self.session_url.origin().unicode_serialization()
+    pub fn base_url(&self) -> Url {
+        let mut url = self.session_url.clone();
+        url.set_path("/");
+        url
     }
 }
 

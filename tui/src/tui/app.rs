@@ -19,8 +19,8 @@ use crate::tui::keybindings::{
 };
 use client_simulator_browser::participant::ParticipantStore;
 use client_simulator_config::{
-    Args,
     Config,
+    TuiArgs,
 };
 use color_eyre::Result;
 use crossterm::event::KeyEvent;
@@ -53,7 +53,7 @@ type ActionSender = mpsc::UnboundedSender<Action>;
 type ActionReceiver = mpsc::UnboundedReceiver<Action>;
 
 impl App {
-    pub fn new(args: Args) -> Result<Self> {
+    pub fn new(args: TuiArgs) -> Result<Self> {
         let config = Config::new(args)?;
         let keybindings = KeyBindings::default();
         let participants_store = ParticipantStore::new(config.data_dir());

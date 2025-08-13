@@ -21,7 +21,7 @@ pub use app_config::{
     get_config_dir,
     get_data_dir,
 };
-pub use args::Args;
+pub use args::TuiArgs;
 pub use browser_config::BrowserConfig;
 pub use client_config::{
     NoiseSuppression,
@@ -141,7 +141,7 @@ impl config::Source for Config {
 }
 
 impl Config {
-    pub fn new(args: Args) -> Result<Self, config::ConfigError> {
+    pub fn new(args: TuiArgs) -> Result<Self, config::ConfigError> {
         let data_dir = get_data_dir();
         let config_dir = get_config_dir();
         let mut builder = config::Config::builder()
@@ -248,7 +248,7 @@ impl Config {
     /// # Errors
     /// Returns an error if saving the updated configuration fails.
     #[instrument(level = "debug", skip(self, args))]
-    pub fn update_from_args(&mut self, args: &Args) -> Result<()> {
+    pub fn update_from_args(&mut self, args: &TuiArgs) -> Result<()> {
         let mut changed = false;
         if let Some(url) = &args.url {
             if let Ok(url) = url::Url::parse(url) {

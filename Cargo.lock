@@ -540,6 +540,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
+name = "client-simulator"
+version = "0.1.0"
+dependencies = [
+ "better-panic",
+ "clap",
+ "client-simulator-browser",
+ "client-simulator-config",
+ "client-simulator-tui",
+ "color-eyre",
+ "eyre",
+ "human-panic",
+ "libc",
+ "serde_json",
+ "strip-ansi-escapes",
+ "tokio",
+ "tracing",
+ "tracing-error",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "client-simulator-browser"
 version = "0.1.0"
 dependencies = [
@@ -609,7 +631,6 @@ dependencies = [
 name = "client-simulator-tui"
 version = "0.1.0"
 dependencies = [
- "better-panic",
  "chrono",
  "clap",
  "client-simulator-browser",
@@ -620,15 +641,12 @@ dependencies = [
  "directories",
  "eyre",
  "futures",
- "human-panic",
  "lazy_static",
- "libc",
  "pretty_assertions",
  "ratatui",
  "serde",
  "serde_yml",
  "signal-hook",
- "strip-ansi-escapes",
  "strum 0.27.2",
  "tokio",
  "tokio-util",

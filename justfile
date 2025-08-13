@@ -2,10 +2,10 @@ default:
     just --list
 
 run *flags="":
-    cargo run --release --package client-simulator-tui -- {{ flags }}
+    cargo run --release --package client-simulator -- {{ flags }}
 
 dev *flags="":
-    cargo run --package client-simulator-tui -- {{ flags }}
+    cargo run --package client-simulator -- {{ flags }}
 
 serve *flags="":
     cargo run --release --bin client-simulator-http -- {{ flags }}
@@ -18,3 +18,6 @@ clippy:
 
 clippy-watch:
     fd --type f --extension rs | entr -r just clippy
+
+fetch-cookie username="simulator-user" server-url="http://localhost:8081":
+    cargo run -q -- cookie --url {{ server-url }} --user {{ username }}

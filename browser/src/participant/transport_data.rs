@@ -26,6 +26,7 @@ use client_simulator_config::{
 };
 use eyre::{
     eyre,
+    Context as _,
     Report,
     Result,
 };
@@ -136,7 +137,8 @@ impl ParticipantConfigQuery {
 
     pub async fn ensure_cookie(&mut self, cookie_manager: HyperSessionCookieManger) -> Result<Option<BorrowedCookie>> {
         if self.cookie.is_none() {
-            let cookie = cookie_manager.fetch_new_cookie(&self.base_url, &self.username).await?;
+            let base_url = Url::parse(&self.base_url).context("Failed to parse base URL")?;
+            let cookie = cookie_manager.fetch_new_cookie(base_url, &self.username).await?;
             self.cookie = Some(cookie.cookie.clone());
 
             return Ok(Some(cookie));

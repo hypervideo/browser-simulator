@@ -58,24 +58,23 @@ impl HyperSessionCookieManger {
         available_cookies.push_back(cookie);
     }
 
-    pub async fn fetch_new_cookie(&self, base_url: impl ToString, username: impl AsRef<str>) -> Result<BorrowedCookie> {
-        let base_url = base_url.to_string();
-        let cookie = HyperSessionCookie::fetch_token_and_set_name(&base_url, username).await?;
+    pub async fn fetch_new_cookie(&self, base_url: url::Url, username: impl AsRef<str>) -> Result<BorrowedCookie> {
+        let cookie = HyperSessionCookie::fetch_token_and_set_name(base_url.clone(), username).await?;
 
         // Safe the new cookie so we can reuse it later.
+
         let mut stash = HyperSessionCookieStash::load(&self.stash_file);
-        stash.cookies.entry(base_url.clone()).or_default().push(cookie.clone());
+        stash
+            .cookies
+            .entry(base_url.to_string())
+            .or_default()
+            .push(cookie.clone());
         stash.save()?;
 
         Ok(BorrowedCookie::new(base_url, cookie, self.clone()))
     }
 
-    pub async fn give_or_fetch_cookie(
-        &self,
-        base_url: impl ToString,
-        username: impl AsRef<str>,
-    ) -> Result<BorrowedCookie> {
-        let base_url = base_url.to_string();
+    pub async fn give_or_fetch_cookie(&self, base_url: url::Url, username: impl AsRef<str>) -> Result<BorrowedCookie> {
         let username = username.as_ref();
 
         if let Some(cookie) = self.give_cookie(base_url.clone()) {
@@ -126,7 +125,7 @@ impl BorrowedCookie {
         }
     }
 
-    pub(crate) fn as_browser_cookie_for(&self, domain: impl AsRef<str>) -> Result<CookieParam> {
+    pub fn as_browser_cookie_for(&self, domain: impl AsRef<str>) -> Result<CookieParam> {
         self.cookie.as_browser_cookie_for(domain)
     }
 
@@ -251,20 +250,21 @@ impl HyperSessionCookie {
             .context("failed to build reqwest client")
     }
 
-    async fn fetch_token_and_set_name(base_url: impl AsRef<str>, name: impl AsRef<str>) -> Result<Self> {
-        let base_url = base_url.as_ref();
-        let mut auth = HyperSessionCookie::fetch_token(base_url).await?;
-        auth.set_name(name, base_url).await?;
+    async fn fetch_token_and_set_name(base_url: url::Url, name: impl AsRef<str>) -> Result<Self> {
+        let mut auth = HyperSessionCookie::fetch_token(&base_url).await?;
+        auth.set_name(name, &base_url).await?;
         Ok(auth)
     }
 
-    async fn fetch_token(base_url: impl AsRef<str>) -> Result<Self> {
-        let base_url = base_url.as_ref();
+    async fn fetch_token(base_url: &url::Url) -> Result<Self> {
+        let url = base_url
+            .join("/api/v1/auth/guest")
+            .context("failed to join base URL with /api/v1/auth/guest")?;
 
-        debug!(?base_url, "Requesting guest cookie");
+        debug!(%url, "Requesting guest cookie");
 
         let response = Self::client()?
-            .post(format!("{base_url}/api/v1/auth/guest"))
+            .post(url)
             .query(&[("username", "guest")])
             .send()
             .await?
@@ -281,7 +281,7 @@ impl HyperSessionCookie {
     }
 
     #[expect(unused)]
-    pub(crate) async fn check_validity(&self, server_base_url: &str) -> bool {
+    pub(crate) async fn check_validity(&self, server_base_url: &url::Url) -> bool {
         let header = match self.cookie_header() {
             Ok(h) => h,
             _ => return false,
@@ -289,8 +289,12 @@ impl HyperSessionCookie {
 
         let Ok(client) = Self::client() else { return false };
 
+        let url = server_base_url
+            .join("/api/v1/auth/me")
+            .expect("failed to join base URL with /api/v1/auth/me");
+
         client
-            .get(format!("{server_base_url}/api/v1/auth/me"))
+            .get(url)
             .header("Cookie", header)
             .send()
             .await
@@ -299,9 +303,12 @@ impl HyperSessionCookie {
     }
 
     #[expect(unused)]
-    pub(crate) async fn logout(&self, server_base_url: &str) -> Result<()> {
+    pub(crate) async fn logout(&self, server_base_url: &url::Url) -> Result<()> {
+        let url = server_base_url
+            .join("/api/v1/auth/logout")
+            .context("failed to join base URL with /api/v1/auth/logout")?;
         Self::client()?
-            .post(format!("{server_base_url}/api/v1/auth/logout"))
+            .post(url)
             .header("Content-Type", "application/json")
             .header("Cookie", self.cookie_header()?)
             .body("{}")
@@ -311,10 +318,13 @@ impl HyperSessionCookie {
         Ok(())
     }
 
-    pub(crate) async fn set_name(&mut self, name: impl AsRef<str>, server_base_url: &str) -> Result<()> {
+    pub(crate) async fn set_name(&mut self, name: impl AsRef<str>, server_base_url: &url::Url) -> Result<()> {
         let name = name.as_ref();
+        let url = server_base_url
+            .join("/api/v1/auth/me/name")
+            .context("failed to join base URL with /api/v1/auth/me/name")?;
         Self::client()?
-            .put(format!("{server_base_url}/api/v1/auth/me/name"))
+            .put(url)
             .header("Content-Type", "application/json")
             .header("Cookie", self.cookie_header()?)
             .json(&serde_json::json!({

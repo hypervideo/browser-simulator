@@ -31,6 +31,10 @@ impl ParticipantStore {
         }
     }
 
+    pub fn cookies(&self) -> &HyperSessionCookieManger {
+        &self.cookies
+    }
+
     pub fn spawn_local(&self, config: &Config) -> Result<()> {
         let participant = Participant::spawn_with_app_config(config, self.cookies.clone())?;
         self.add(participant);

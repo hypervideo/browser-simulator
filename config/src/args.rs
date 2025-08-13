@@ -1,9 +1,10 @@
-use clap::Parser;
-
 /// Client Simulator TUI
-#[derive(Parser, Default, Debug, Clone)]
-#[command(author, version = version(), about, long_about = None)]
-pub struct Args {
+#[derive(clap::Args, Default, Debug, Clone)]
+pub struct TuiArgs {
+    /// Verbosity level (set from parent command)
+    #[clap(skip)]
+    pub debug: u8,
+
     /// Optional URL to override the stored configuration.
     #[clap(long, value_name = "URL")]
     pub url: Option<String>,
@@ -41,13 +42,16 @@ mod config_ext {
     };
     use std::collections::HashMap;
 
-    impl Source for Args {
+    impl Source for TuiArgs {
         fn clone_into_box(&self) -> Box<dyn Source + Send + Sync> {
             Box::new((*self).clone())
         }
 
         fn collect(&self) -> Result<Map<String, Value>, config::ConfigError> {
             let mut cache = HashMap::<String, Value>::new();
+            if self.debug > 0 {
+                cache.insert("debug".to_string(), (self.debug as i64).into());
+            }
             if let Some(url) = &self.url {
                 cache.insert("url".to_string(), url.clone().into());
             }
@@ -69,18 +73,4 @@ mod config_ext {
             Ok(cache)
         }
     }
-}
-
-pub fn version() -> String {
-    let author = clap::crate_authors!();
-    let config_dir_path = crate::get_config_dir().display().to_string();
-    let data_dir_path = crate::get_data_dir().display().to_string();
-
-    format!(
-        "\
-Authors: {author}
-
-Config directory: {config_dir_path}
-Data directory: {data_dir_path}"
-    )
 }

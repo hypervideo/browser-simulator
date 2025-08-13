@@ -3,7 +3,6 @@ use client_simulator_config::media::{
     FakeMediaFileOrUrl,
     FakeMediaFiles,
 };
-use client_simulator_tui::init_errors;
 use directories::ProjectDirs;
 use std::path::PathBuf;
 
@@ -20,7 +19,6 @@ pub struct Args {
 }
 
 fn main() {
-    init_errors().expect("Failed to initialize error handling");
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
