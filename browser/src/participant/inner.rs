@@ -381,7 +381,7 @@ impl ParticipantInner {
         )
         .await?;
 
-        if let Err(err) = self.apply_all_settings().await {
+        if let Err(err) = self.apply_all_settings(true).await {
             error!("Failed to apply settings before joining: {err}");
         }
 
@@ -414,7 +414,7 @@ impl ParticipantInner {
         Ok(())
     }
 
-    async fn apply_all_settings(&self) -> Result<()> {
+    async fn apply_all_settings(&self, in_lobby: bool) -> Result<()> {
         let Config {
             noise_suppression,
             transport,
@@ -446,7 +446,7 @@ impl ParticipantInner {
             self.toggle_video().await?;
         }
 
-        if !screenshare_enabled {
+        if !in_lobby && *screenshare_enabled {
             self.toggle_screen_share().await?;
         }
 

@@ -17,7 +17,7 @@ clippy:
     cargo clippy --all-features -- -D warnings
 
 clippy-watch:
-    fd --type f --extension rs | entr -r just clippy
+    fd --type f --extension rs | entr -n -r just clippy
 
 fetch-cookie username="simulator-user" server-url="http://localhost:8081":
     cargo run -q -- cookie --url {{ server-url }} --user {{ username }}
