@@ -214,7 +214,7 @@ fn infer_filename_from_url(url: &Url) -> Option<PathBuf> {
     let path = url.path();
     let filename = path
         .split('/')
-        .last()
+        .next_back()
         .ok_or_else(|| eyre::eyre!("Failed to infer filename from URL"))
         .ok()?;
 
