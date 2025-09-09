@@ -35,6 +35,13 @@ impl ParticipantConfig {
         url.set_path("/");
         url
     }
+
+    /// Returns true if the session URL points to the new lite frontend.
+    /// We consider the lite frontend when the URL path starts with "/m/" or is exactly "/m".
+    pub fn is_lite_frontend(&self) -> bool {
+        let path = self.session_url.path();
+        path == "/m" || path.starts_with("/m/")
+    }
 }
 
 pub fn generate_random_name() -> String {

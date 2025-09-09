@@ -36,8 +36,10 @@ use tokio_util::sync::{
 
 mod commands;
 mod inner;
+mod inner_lite;
 pub mod messages;
 mod remote;
+mod selectors;
 mod state;
 mod store;
 pub mod transport_data;
@@ -96,28 +98,41 @@ impl Participant {
 
         tokio::task::spawn({
             let name = name.clone();
+            let task_sender_for_worker = sender_rx.clone();
+            let task_sender_for_task = sender_rx.clone();
             async move {
                 tokio::select! {
                     biased;
                     _ = task_cancellation_token.cancelled() => {},
 
-                    result = ParticipantInner::run(
-                        participant_config,
-                        cookie,
-                        cookie_manager,
-                        receiver_tx,
-                        sender_rx.clone(),
-                        state_sender,
-                    ) => {
+                    result = async move {
+                        if participant_config.is_lite_frontend() {
+                            inner_lite::ParticipantInnerLite::run(
+                                participant_config,
+                                receiver_tx,
+                                task_sender_for_worker,
+                                state_sender,
+                            ).await
+                        } else {
+                            ParticipantInner::run(
+                                participant_config,
+                                cookie,
+                                cookie_manager,
+                                receiver_tx,
+                                task_sender_for_worker,
+                                state_sender,
+                            ).await
+                        }
+                    } => {
                         if let Err(err) = result {
                             error!(?name, "Failed to create participant: {err}");
-                            let _ = sender_rx.send(ParticipantLogMessage::new("error", &name, format!("Failed to create participant: {err}")));
+                            let _ = task_sender_for_task.send(ParticipantLogMessage::new("error", &name, format!("Failed to create participant: {err}")));
                         }
                     }
                 };
 
                 debug!(?name, "Participant task canceled");
-                let _ = sender_rx.send(ParticipantLogMessage::new(
+                let _ = task_sender_for_task.send(ParticipantLogMessage::new(
                     "debug",
                     &name,
                     format!("Participant {name} has been closed"),

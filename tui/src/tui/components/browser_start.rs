@@ -461,7 +461,7 @@ impl Component for BrowserStart {
         match action {
             BrowserStartAction::MoveUp => {
                 self.selected = match self.selected {
-                    SelectedField::Url => SelectedField::Url,
+                    SelectedField::Url => SelectedField::StartBrowser,
                     SelectedField::FakeMedia => SelectedField::Url,
                     SelectedField::Mute => SelectedField::FakeMedia,
                     SelectedField::VideoDisable => SelectedField::Mute,

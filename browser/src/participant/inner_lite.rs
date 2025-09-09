@@ -1,28 +1,12 @@
 use super::{
-    commands::{
-        get_force_webrtc,
-        get_noise_suppression,
-        get_outgoing_camera_resolution,
-        set_noise_suppression,
-    },
     messages::ParticipantMessage,
     ParticipantState,
 };
 use crate::{
-    auth::{
-        BorrowedCookie,
-        HyperSessionCookieManger,
-    },
     create_browser,
     participant::{
-        commands::{
-            get_background_blur,
-            set_background_blur,
-            set_force_webrtc,
-            set_outgoing_camera_resolution,
-        },
         messages::ParticipantLogMessage,
-        selectors::classic,
+        selectors::lite,
     },
     wait_for_element,
 };
@@ -60,42 +44,24 @@ use tokio::{
     task::JoinHandle,
 };
 
-/// Async participant "worker" that holds the browser and session.
-/// It has the direct command to the browser session that can modify the
-/// participant behavior in the space.
-/// It holds the message receiver that is used to handle the incoming messages
-/// from the sync TUI runtime.
 #[derive(Debug)]
-pub(super) struct ParticipantInner {
+pub(super) struct ParticipantInnerLite {
     participant_config: ParticipantConfig,
     page: Page,
     state: watch::Sender<ParticipantState>,
     sender: UnboundedSender<ParticipantLogMessage>,
-    auth: BorrowedCookie,
 }
 
-impl ParticipantInner {
+impl ParticipantInnerLite {
     #[instrument(level = "debug", skip_all, fields(name = %participant_config.username))]
     pub(super) async fn run(
         participant_config: ParticipantConfig,
-        cookie: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
         receiver: UnboundedReceiver<ParticipantMessage>,
         sender: UnboundedSender<ParticipantLogMessage>,
         state: watch::Sender<ParticipantState>,
     ) -> Result<()> {
-        let auth = if let Some(cookie) = cookie {
-            cookie
-        } else {
-            cookie_manager
-                .fetch_new_cookie(participant_config.base_url(), &participant_config.username)
-                .await?
-        };
-
         let (mut browser, handler) = create_browser(&BrowserConfig::from(&participant_config)).await?;
-
         let browser_event_task_handle = Self::drive_browser_events(&participant_config.username, handler);
-
         let page = Self::create_page_retry(&participant_config, &mut browser).await?;
 
         state.send_modify(|state| {
@@ -107,7 +73,6 @@ impl ParticipantInner {
             page,
             state: state.clone(),
             sender,
-            auth,
         };
 
         participant
@@ -116,7 +81,6 @@ impl ParticipantInner {
             .context("failed to handle actions")?;
 
         browser_event_task_handle.await?;
-
         Ok(())
     }
 
@@ -178,7 +142,6 @@ impl ParticipantInner {
             let message = tokio::select! {
                 biased;
 
-                // Event is fired when the page is closed by the user
                 Some(_) = detached_event.next() => {
                     warn!(self.participant_config.username, "Browser unexpectedly closed");
                     match browser.kill().await {
@@ -198,9 +161,7 @@ impl ParticipantInner {
                     break;
                 },
 
-                Some(message) = receiver.recv() => {
-                    message
-                }
+                Some(message) = receiver.recv() => { message }
             };
 
             if let Err(e) = match message {
@@ -306,23 +267,7 @@ impl ParticipantInner {
     }
 }
 
-impl ParticipantInner {
-    async fn set_cookie(&self) -> Result<()> {
-        let domain = self.participant_config.session_url.host_str().unwrap_or("localhost");
-
-        let cookie = self.auth.as_browser_cookie_for(domain)?;
-
-        self.page
-            .set_cookies(vec![cookie])
-            .await
-            .context("failed to set cookie")?;
-
-        debug!(self.participant_config.username, "Set cookie");
-        self.send_log_message("debug", format!("Set cookie for domain {domain}"));
-
-        Ok(())
-    }
-
+impl ParticipantInnerLite {
     async fn join(&mut self) -> Result<()> {
         if self.state.borrow().joined {
             warn!("Already joined.");
@@ -330,11 +275,7 @@ impl ParticipantInner {
             return Ok(());
         }
 
-        // Create a new page if none exists
-        self.set_cookie().await?;
-
-        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-        // Navigate to the session URL
+        // Navigate to session URL directly, lite auth is handled by frontend routing
         self.page
             .goto(self.participant_config.session_url.to_string())
             .await
@@ -343,43 +284,13 @@ impl ParticipantInner {
         debug!(self.participant_config.username, "Navigated to page");
         self.send_log_message("debug", "Navigated to page");
 
-        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-        // Find the input box to enter the name
-        let input = wait_for_element(&self.page, classic::NAME_INPUT, Duration::from_secs(30))
-            .await
-            .context("failed to find input name field")?;
-        input
-            .focus()
-            .await
-            .context("failed to focus on the name input")?
-            .call_js_fn("function() { this.value = ''; }", true)
-            .await
-            .context("failed to empty current name")?;
-        input
-            .type_str(&self.participant_config.username)
-            .await
-            .context("failed to insert name")?;
+        // Ensure join button exists
+        wait_for_element(&self.page, lite::JOIN_BUTTON, Duration::from_secs(30)).await?;
 
-        debug!(self.participant_config.username, "Set the name of the participant");
-        self.send_log_message(
-            "debug",
-            format!(
-                "Set the name of the participant to {}",
-                self.participant_config.username
-            ),
-        );
+        // Lite frontend doesn't support pre-join settings configuration
 
-        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-        // Find the join button
-        wait_for_element(&self.page, classic::JOIN_BUTTON, Duration::from_secs(30)).await?;
-
-        if let Err(err) = self.apply_all_settings(true).await {
-            error!("Failed to apply settings before joining: {err}");
-        }
-
-        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
         // Click the join button
-        self.find_element(classic::JOIN_BUTTON)
+        self.find_element(lite::JOIN_BUTTON)
             .await?
             .click()
             .await
@@ -388,44 +299,33 @@ impl ParticipantInner {
         debug!(self.participant_config.username, "Clicked on the join button");
         self.send_log_message("debug", "Clicked on the join button");
 
-        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
         // Ensure we have joined the space.
-        wait_for_element(&self.page, classic::LEAVE_BUTTON, Duration::from_secs(30))
+        wait_for_element(&self.page, lite::LEAVE_BUTTON, Duration::from_secs(30))
             .await
             .context("We haven't joined the space, cannot find the leave button")?;
 
         info!(self.participant_config.username, "Joined the space");
         self.send_log_message("info", "Joined the space");
 
-        self.update_state().await;
+        // Apply settings after joining
+        if let Err(err) = self.apply_all_settings(false).await {
+            error!("Failed to apply settings after joining: {err}");
+            self.send_log_message("error", format!("Failed to apply settings after joining: {err}"));
+        }
 
+        self.update_state().await;
         Ok(())
     }
 
-    async fn apply_all_settings(&self, in_lobby: bool) -> Result<()> {
+    async fn apply_all_settings(&self, _in_lobby: bool) -> Result<()> {
         let Config {
-            noise_suppression,
-            transport,
-            resolution,
-            blur,
             audio_enabled,
             video_enabled,
             screenshare_enabled,
             ..
         } = &self.participant_config.app_config;
-        set_noise_suppression(&self.page, *noise_suppression)
-            .await
-            .context("failed to set noise suppression")?;
-        set_background_blur(&self.page, *blur)
-            .await
-            .context("failed to set background blur")?;
-        set_outgoing_camera_resolution(&self.page, resolution)
-            .await
-            .context("failed to set outgoing camera resolution")?;
-        set_force_webrtc(&self.page, transport == &TransportMode::WebRTC)
-            .await
-            .context("failed to set transport mode")?;
 
+        // Only apply core settings that are supported in lite frontend
         if !audio_enabled {
             self.toggle_audio().await?;
         }
@@ -434,20 +334,11 @@ impl ParticipantInner {
             self.toggle_video().await?;
         }
 
-        if !in_lobby && *screenshare_enabled {
+        if *screenshare_enabled {
             self.toggle_screen_share().await?;
         }
 
         Ok(())
-    }
-
-    async fn toggle_screen_share(&self) -> Result<()> {
-        self.screen_share_button()
-            .await?
-            .click()
-            .await
-            .context("Could not click on the toggle screen share button")
-            .map(|_| ())
     }
 
     async fn leave(&self) -> Result<()> {
@@ -456,39 +347,22 @@ impl ParticipantInner {
             .click()
             .await
             .context("Could not click on the leave space button")?;
-
         info!(self.participant_config.username, "Left the space");
         self.send_log_message("info", "Left the space");
-
         Ok(())
     }
 
     async fn close(self, mut browser: Browser) -> Result<()> {
         debug!(self.participant_config.username, "Closing the browser...");
-
-        if let Err(err) = self.leave().await {
-            error!(
-                self.participant_config.username,
-                "Failed leaving space while closing browser: {}", err
-            );
-            self.send_log_message("error", format!("Failed leaving space while closing browser: {}", err));
-        }
-
-        if let Err(err) = self.page.clone().close().await {
-            error!("Error closing page: {err}");
-            self.send_log_message("error", format!("Error closing page: {err}"));
-        }
-
+        let _ = self.leave().await;
+        let _ = self.page.clone().close().await;
         browser.close().await?;
         browser.wait().await?;
-
         info!(self.participant_config.username, "Closed the browser");
         self.send_log_message("info", "Closed the browser");
-
         self.state.send_modify(|state| {
             state.running = false;
         });
-
         Ok(())
     }
 
@@ -498,11 +372,9 @@ impl ParticipantInner {
             .click()
             .await
             .context("Could not click on the toggle audio button")?;
-
         info!(self.participant_config.username, "Toggled audio");
         self.send_log_message("info", "Toggled audio");
         self.update_state().await;
-
         Ok(())
     }
 
@@ -512,67 +384,67 @@ impl ParticipantInner {
             .click()
             .await
             .context("Could not click on the toggle camera button")?;
-
         info!(self.participant_config.username, "Toggled camera");
         self.send_log_message("info", "Toggled camera");
         self.update_state().await;
-
         Ok(())
     }
 
-    async fn set_webcam_resolutions(&self, value: WebcamResolution) -> Result<()> {
-        debug!(self.participant_config.username, "Changing to {value} resolution");
-
-        set_outgoing_camera_resolution(&self.page, &value)
+    async fn toggle_screen_share(&self) -> Result<()> {
+        self.screen_share_button()
+            .await?
+            .click()
             .await
-            .context("Failed to set outgoing camera resolution")?;
+            .context("Could not click on the toggle screen share button")?;
+        info!(self.participant_config.username, "Toggled screen share");
+        self.send_log_message("info", "Toggled screen share");
+        // Give it some time to start share before updating state
+        tokio::time::sleep(Duration::from_secs(1)).await;
         self.update_state().await;
         Ok(())
     }
 
-    async fn set_noise_suppression(&self, value: NoiseSuppression) -> Result<()> {
-        info!(
+    async fn set_webcam_resolutions(&self, _value: WebcamResolution) -> Result<()> {
+        // Lite frontend doesn't support webcam resolution changes
+        debug!(
             self.participant_config.username,
-            "Changing noise suppression to {value}"
+            "Webcam resolution changes not supported in lite frontend"
         );
-        self.send_log_message("info", format!("Changing noise suppression to {}", value));
+        Ok(())
+    }
 
-        set_noise_suppression(&self.page, value)
-            .await
-            .context("Failed to set noise suppression level")?;
-
-        self.update_state().await;
-
+    async fn set_noise_suppression(&self, _value: NoiseSuppression) -> Result<()> {
+        // Lite frontend doesn't support noise suppression changes
+        debug!(
+            self.participant_config.username,
+            "Noise suppression changes not supported in lite frontend"
+        );
         Ok(())
     }
 
     async fn toggle_background_blur(&self) -> Result<()> {
-        let background_blur = get_background_blur(&self.page).await?;
-        set_background_blur(&self.page, !background_blur)
-            .await
-            .context("Failed to set background blur")?;
-        self.update_state().await;
+        // Lite frontend doesn't support background blur changes
+        debug!(
+            self.participant_config.username,
+            "Background blur changes not supported in lite frontend"
+        );
         Ok(())
     }
 }
 
-impl ParticipantInner {
+impl ParticipantInnerLite {
     async fn leave_button(&self) -> Result<Element> {
-        self.find_element(classic::LEAVE_BUTTON).await
+        self.find_element(lite::LEAVE_BUTTON).await
     }
-
     async fn mute_button(&self) -> Result<Element> {
-        self.find_element(classic::MUTE_BUTTON).await
+        self.find_element(lite::MUTE_BUTTON).await
     }
-
     async fn camera_button(&self) -> Result<Element> {
-        self.find_element(classic::VIDEO_BUTTON).await
+        self.find_element(lite::VIDEO_BUTTON).await
     }
-
     async fn screen_share_button(&self) -> Result<Element> {
-        self.find_element(classic::SCREEN_SHARE_BUTTON).await
+        self.find_element(lite::SCREEN_SHARE_BUTTON).await
     }
-
     async fn find_element(&self, selector: &str) -> Result<Element> {
         self.page
             .find_element(selector)
@@ -584,57 +456,39 @@ impl ParticipantInner {
         let joined = self.leave_button().await.is_ok();
         let mut muted = false;
         let mut video_activated = false;
-        let mut transport_mode = TransportMode::default();
-        let mut webcam_resolution = WebcamResolution::default();
-        let mut noise_suppression = NoiseSuppression::default();
-        let mut background_blur = false;
         let mut screenshare_activated = false;
 
-        if let Ok(value) = get_noise_suppression(&self.page).await {
-            noise_suppression = value;
-        }
-
+        // Only check core operations that are supported in lite frontend
         if let Ok(mute_button) = self.mute_button().await {
             if let Some(value) = element_state(&mute_button).await {
                 muted = !value;
             }
         }
-
         if let Ok(camera_button) = self.camera_button().await {
-            if let Some(element_state) = element_state(&camera_button).await {
-                video_activated = element_state;
+            if let Some(v) = element_state(&camera_button).await {
+                video_activated = v;
             }
         }
-
         if let Ok(screen_share_button) = self.screen_share_button().await {
-            if let Some(element_state) = element_state(&screen_share_button).await {
-                screenshare_activated = element_state;
+            debug!(
+                self.participant_config.username,
+                "Screen share button: {screen_share_button:?}"
+            );
+            if let Some(v) = element_state(&screen_share_button).await {
+                screenshare_activated = v;
             }
-        }
-
-        if let Ok(value) = get_force_webrtc(&self.page).await {
-            if value {
-                transport_mode = TransportMode::WebRTC;
-            }
-        }
-
-        if let Ok(value) = get_outgoing_camera_resolution(&self.page).await {
-            webcam_resolution = value
-        }
-
-        if let Ok(blur) = get_background_blur(&self.page).await {
-            background_blur = blur;
         }
 
         self.state.send_modify(|state| {
             state.joined = joined;
             state.muted = muted;
             state.video_activated = video_activated;
-            state.transport_mode = transport_mode;
-            state.webcam_resolution = webcam_resolution;
-            state.noise_suppression = noise_suppression;
-            state.background_blur = background_blur;
             state.screenshare_activated = screenshare_activated;
+            // Set defaults for unsupported features
+            state.transport_mode = TransportMode::default();
+            state.webcam_resolution = WebcamResolution::default();
+            state.noise_suppression = NoiseSuppression::default();
+            state.background_blur = false;
             debug!("Sending state update: {state:?}");
         });
     }
