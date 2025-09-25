@@ -5,6 +5,7 @@ members = [
   "browser",
   "config",
   "http",
+  "orchestrator",
   "tui",
 ]
 
@@ -59,6 +60,7 @@ which = "8.0.0"
 
 client-simulator-browser = { path = "./browser" }
 client-simulator-config = { path = "./config" }
+client-simulator-orchestrator = { path = "./orchestrator" }
 client-simulator-tui = { path = "./tui" }
 
 hyper-video-maybe-backoff = { path = "../../shared/maybe-backoff" }

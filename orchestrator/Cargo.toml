@@ -1,0 +1,26 @@
+[package]
+name = "client-simulator-orchestrator"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive", "env", "cargo", "string"] }
+color-eyre = { workspace = true }
+eyre = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_yml = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+tracing-error = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+
+client-simulator-browser = { path = "../browser" }
+client-simulator-config = { path = "../config" }
+
+[lints]
+workspace = true

@@ -13,6 +13,12 @@ serve *flags="":
 serve-dev *flags="":
     cargo run --package client-simulator-http -- {{ flags }}
 
+orchestrator *flags="":
+    cargo run --release --bin client-simulator-orchestrator -- {{ flags }}
+
+orchestrator-dev *flags="":
+    cargo run --package client-simulator-orchestrator -- {{ flags }}
+
 clippy:
     cargo clippy --all-features -- -D warnings
 

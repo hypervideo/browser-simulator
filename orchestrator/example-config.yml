@@ -1,0 +1,48 @@
+## Orchestrator example configuration
+# Base Hyper session URL participants should join
+session_url: 'https://latest.dev.hyper.video/AA7-H8M-FYF'
+
+# HTTP workers that host the client-simulator HTTP gateway (WebSocket endpoint at "/")
+# Workers will be used in a round-robin order.
+workers:
+  - url: 'ws://127.0.0.1:8081/'
+  - url: 'ws://127.0.0.1:8082/'
+
+# Global participant defaults (applied before per-participant overrides).
+defaults:
+  headless: true
+  audio_enabled: true
+  video_enabled: true
+  screenshare_enabled: false
+  noise_suppression: rnnoise # one of: none, deepfilternet, rnnoise, iris-carthy, krisp-high, krisp-medium, krisp-low, krisp-high-with-bvc, krisp-medium-with-bvc
+  transport: webtransport # one of: webtransport, webrtc
+  resolution: auto # one of: auto, p144, p240, p360, p480, p720, p1080, p1440, p2160, p4320
+  blur: false
+  fake_media: builtin # one of: none, builtin, or URL to video file
+
+# Orchestrator controls
+run_seconds: 60 # total test duration per participant
+
+# Participants with their join timing and settings
+participants_specs:
+  - username: 'alice'
+    wait_to_join_seconds: 0 # joins immediately
+    initial: # initial state of the participant (optional, overrides global defaults)
+      audio_enabled: true
+      video_enabled: true
+      screenshare_enabled: false
+      blur: false
+
+  - username: 'bob'
+    wait_to_join_seconds: 5 # joins after 5 seconds
+    initial:
+      audio_enabled: true
+      video_enabled: false
+      screenshare_enabled: false
+
+  - username: 'charlie'
+    wait_to_join_seconds: 10 # joins after 10 seconds
+
+  - username: 'diana'
+    wait_to_join_seconds: 15 # joins after 15 seconds
+
