@@ -1,3 +1,4 @@
 target/
 .data/
 tmp/
+hyper_session_cookies.json

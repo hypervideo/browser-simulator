@@ -21,7 +21,7 @@ defaults:
   fake_media: builtin # one of: none, builtin, or URL to video file
 
 # Orchestrator controls
-run_seconds: 60 # total test duration per participant
+run_seconds: 600 # total test duration per participant
 
 # Participants with their join timing and settings
 participants_specs:
@@ -46,3 +46,65 @@ participants_specs:
   - username: 'diana'
     wait_to_join_seconds: 15 # joins after 15 seconds
 
+  - username: 'eve'
+    wait_to_join_seconds: 20
+
+  - username: 'frank'
+    wait_to_join_seconds: 25
+
+  - username: 'grace'
+    wait_to_join_seconds: 30
+
+  - username: 'henry'
+    wait_to_join_seconds: 35
+
+  - username: 'iris'
+    wait_to_join_seconds: 40
+
+  - username: 'jack'
+    wait_to_join_seconds: 45
+
+  - username: 'kate'
+    wait_to_join_seconds: 50
+
+  - username: 'liam'
+    wait_to_join_seconds: 55
+
+  - username: 'maya'
+    wait_to_join_seconds: 60
+
+  - username: 'noah'
+    wait_to_join_seconds: 65
+
+  - username: 'olivia'
+    wait_to_join_seconds: 70
+
+  - username: 'peter'
+    wait_to_join_seconds: 75
+
+  - username: 'quinn'
+    wait_to_join_seconds: 80
+
+  - username: 'ruby'
+    wait_to_join_seconds: 85
+
+  - username: 'sam'
+    wait_to_join_seconds: 90
+
+  - username: 'tara'
+    wait_to_join_seconds: 95
+
+  - username: 'uma'
+    wait_to_join_seconds: 100
+
+  - username: 'victor'
+    wait_to_join_seconds: 105
+
+  - username: 'wendy'
+    wait_to_join_seconds: 110
+
+  - username: 'xavier'
+    wait_to_join_seconds: 115
+
+  - username: 'yara'
+    wait_to_join_seconds: 120

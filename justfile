@@ -19,6 +19,12 @@ orchestrator *flags="":
 orchestrator-dev *flags="":
     cargo run --package client-simulator-orchestrator -- {{ flags }}
 
+stats-gatherer *flags="":
+    cargo run --release --bin client-simulator-stats-gatherer -- {{ flags }}
+
+stats-gatherer-dev *flags="":
+    cargo run --package client-simulator-stats-gatherer -- {{ flags }}
+
 clippy:
     cargo clippy --all-features -- -D warnings
 
