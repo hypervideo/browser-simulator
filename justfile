@@ -26,10 +26,18 @@ stats-gatherer-dev *flags="":
     cargo run --package client-simulator-stats-gatherer -- {{ flags }}
 
 clippy:
-    cargo clippy --all-features -- -D warnings
+    cargo clippy --all-targets --all-features -- -D warnings
 
 clippy-watch:
     fd --type f --extension rs | entr -n -r just clippy
 
 fetch-cookie username="simulator-user" server-url="http://localhost:8081":
     cargo run -q -- cookie --url {{ server-url }} --user {{ username }}
+
+test:
+    cargo nextest run --no-tests warn
+
+check: clippy test
+
+fmt:
+    cargo fmt

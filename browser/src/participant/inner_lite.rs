@@ -250,7 +250,7 @@ impl ParticipantInnerLite {
     }
 
     async fn create_page_retry(config: &ParticipantConfig, browser: &mut Browser) -> Result<Page> {
-        let mut backoff = hyper_video_maybe_backoff::MaybeBackoff::default();
+        let mut backoff = maybe_backoff::MaybeBackoff::default();
         let mut attempt = 0;
         loop {
             backoff.sleep().await;

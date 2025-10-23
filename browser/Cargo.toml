@@ -24,7 +24,7 @@ url.workspace = true
 which.workspace = true
 
 client-simulator-config.workspace = true
-hyper-video-maybe-backoff.workspace = true
+maybe-backoff.workspace = true
 
 [lints]
 workspace = true
