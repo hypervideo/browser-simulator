@@ -41,3 +41,11 @@ check: clippy test
 
 fmt:
     cargo fmt
+
+cachix-push:
+    nix build --no-link --print-out-paths \
+        .#client-simulator \
+        .#client-simulator-http \
+        .#client-simulator-orchestrator \
+        .#client-simulator-stats-gatherer \
+      | cachix push hyper-video
