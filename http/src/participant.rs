@@ -90,6 +90,8 @@ async fn handle_socket_inner(
 
     loop {
         tokio::select! {
+            biased;
+
             Some(message) = receiver.next() => {
                 match message {
                     Ok(Message::Text(text)) => {
@@ -126,6 +128,7 @@ async fn handle_socket_inner(
                     }
                 }
             },
+
             message = participant_receiver.recv() => {
                 match message {
                     Some(msg) => {
@@ -140,6 +143,7 @@ async fn handle_socket_inner(
                     }
                 }
             },
+
             Ok(_) = rx.changed() => {
                 let state = participant.state.borrow_and_update().clone();
                 debug!("Participant state changed: {:?}", &state);
