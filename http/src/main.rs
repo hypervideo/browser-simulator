@@ -26,7 +26,7 @@ struct HttpArgs {
     http_listen_address: SocketAddr,
 
     /// Should the HTTP server terminate TLS connections?
-    #[arg(long, action, env = "CLIENT_SIMULATOR_HTTP_TLS")]
+    #[arg(long, action, default_value_t = false, env = "CLIENT_SIMULATOR_HTTP_TLS")]
     tls: bool,
 }
 
@@ -38,11 +38,11 @@ struct Args {
 
     /// Path to the X.509 public key certificate in DER encoding.
     #[arg(long)]
-    certificate: PathBuf,
+    certificate: Option<PathBuf>,
 
     /// Path to the private key for the X.509 certificate in DER encoding.
     #[arg(long)]
-    private_key: PathBuf,
+    private_key: Option<PathBuf>,
 }
 
 fn init_logging() {
@@ -62,7 +62,13 @@ async fn start_server(args: Args) -> Result<()> {
     tracing::info!("listening on {}", args.http.http_listen_address);
 
     if args.http.tls {
-        let rustls_config = RustlsConfig::from_pem_file(args.certificate, args.private_key).await?;
+        let Some(cert_path) = args.certificate else {
+            eyre::bail!("TLS is enabled but no certificate path was provided");
+        };
+        let Some(private_key) = args.private_key else {
+            eyre::bail!("TLS is enabled but no private key path was provided");
+        };
+        let rustls_config = RustlsConfig::from_pem_file(cert_path, private_key).await?;
         axum_server::bind_rustls(args.http.http_listen_address, rustls_config)
             .serve(app.into_make_service())
             .await?;
