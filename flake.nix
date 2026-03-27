@@ -8,6 +8,9 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        runtimeLibs = with pkgs; [
+          openssl
+        ];
       in
       {
         packages = pkgs.callPackages ./nix/packages.nix { };
@@ -37,6 +40,7 @@
           RUST_BACKTRACE = "1";
           RUST_LOG = "debug";
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
         };
       }
     );
