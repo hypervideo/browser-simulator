@@ -60,6 +60,7 @@ impl ParticipantInnerLite {
         sender: UnboundedSender<ParticipantLogMessage>,
         state: watch::Sender<ParticipantState>,
     ) -> Result<()> {
+        debug!("Starting participant inner lite...");
         let (mut browser, handler) = create_browser(&BrowserConfig::from(&participant_config)).await?;
         let browser_event_task_handle = Self::drive_browser_events(&participant_config.username, handler);
         let page = Self::create_page_retry(&participant_config, &mut browser).await?;

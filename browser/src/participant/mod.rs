@@ -205,6 +205,7 @@ impl Participant {
             error!("Was not able to send ParticipantMessage::Close message")
         }
     }
+
     pub fn join(&self) {
         let state = self.state.borrow();
         if !state.running {
