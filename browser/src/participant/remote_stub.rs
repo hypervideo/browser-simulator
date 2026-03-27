@@ -32,8 +32,12 @@ pub async fn spawn_remote_stub(
         state.screenshare_activated = participant_config.app_config.screenshare_enabled;
     });
 
-    ParticipantLogMessage::new("warn", &username, "remote backend is a local stub; commands are simulated locally")
-        .write();
+    ParticipantLogMessage::new(
+        "warn",
+        &username,
+        "remote backend is a local stub; commands are simulated locally",
+    )
+    .write();
 
     while let Some(message) = receiver.recv().await {
         match message {
@@ -81,15 +85,23 @@ pub async fn spawn_remote_stub(
                 state_sender.send_modify(|state| {
                     state.noise_suppression = value;
                 });
-                ParticipantLogMessage::new("debug", &username, format!("remote stub set noise suppression to {value}"))
-                    .write();
+                ParticipantLogMessage::new(
+                    "debug",
+                    &username,
+                    format!("remote stub set noise suppression to {value}"),
+                )
+                .write();
             }
             ParticipantMessage::SetWebcamResolutions(value) => {
                 state_sender.send_modify(|state| {
                     state.webcam_resolution = value;
                 });
-                ParticipantLogMessage::new("debug", &username, format!("remote stub set camera resolution to {value}"))
-                    .write();
+                ParticipantLogMessage::new(
+                    "debug",
+                    &username,
+                    format!("remote stub set camera resolution to {value}"),
+                )
+                .write();
             }
             ParticipantMessage::ToggleBackgroundBlur => {
                 state_sender.send_modify(|state| {

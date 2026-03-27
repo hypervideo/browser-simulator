@@ -4,6 +4,7 @@ use super::auth::{
     HyperSessionCookieStash,
 };
 use crate::participant::{
+    frontend::ResolvedFrontendKind,
     messages::ParticipantLogMessage,
     remote_stub::spawn_remote_stub,
 };
@@ -34,6 +35,7 @@ use tokio_util::sync::{
 };
 
 mod commands;
+mod frontend;
 mod inner;
 mod inner_lite;
 pub mod messages;
@@ -104,22 +106,26 @@ impl Participant {
                     _ = task_cancellation_token.cancelled() => {},
 
                     result = async move {
-                        if participant_config.is_lite_frontend() {
-                            inner_lite::ParticipantInnerLite::run(
-                                participant_config,
-                                receiver_tx,
-                                task_sender_for_worker,
-                                state_sender,
-                            ).await
-                        } else {
-                            ParticipantInner::run(
-                                participant_config,
-                                cookie,
-                                cookie_manager,
-                                receiver_tx,
-                                task_sender_for_worker,
-                                state_sender,
-                            ).await
+                        let frontend = ResolvedFrontendKind::from_session_url(&participant_config.session_url);
+                        match frontend {
+                            ResolvedFrontendKind::HyperLite => {
+                                inner_lite::ParticipantInnerLite::run(
+                                    participant_config,
+                                    receiver_tx,
+                                    task_sender_for_worker,
+                                    state_sender,
+                                ).await
+                            }
+                            ResolvedFrontendKind::HyperCore => {
+                                ParticipantInner::run(
+                                    participant_config,
+                                    cookie,
+                                    cookie_manager,
+                                    receiver_tx,
+                                    task_sender_for_worker,
+                                    state_sender,
+                                ).await
+                            }
                         }
                     } => {
                         if let Err(err) = result {

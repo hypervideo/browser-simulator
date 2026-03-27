@@ -8,11 +8,9 @@ mod client_config;
 pub mod media;
 mod participant_config;
 
-use crate::{
-    media::{
-        FakeMedia,
-        FakeMediaWithDescription,
-    },
+use crate::media::{
+    FakeMedia,
+    FakeMediaWithDescription,
 };
 use app_config::AppConfig;
 pub use app_config::{

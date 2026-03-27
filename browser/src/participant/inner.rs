@@ -7,15 +7,19 @@ use super::{
         get_outgoing_camera_resolution,
         set_noise_suppression,
     },
+    frontend::{
+        element_state,
+        run_local_participant,
+        DriverContext,
+        FrontendDriver,
+    },
     messages::ParticipantMessage,
-    ParticipantState,
 };
 use crate::{
     auth::{
         BorrowedCookie,
         HyperSessionCookieManger,
     },
-    create_browser,
     participant::{
         commands::{
             get_background_blur,
@@ -23,20 +27,15 @@ use crate::{
             set_force_webrtc,
             set_outgoing_camera_resolution,
         },
-        messages::ParticipantLogMessage,
         selectors::classic,
     },
     wait_for_element,
 };
 use chromiumoxide::{
-    cdp::browser_protocol::target::CreateTargetParams,
     Browser,
     Element,
-    Handler,
-    Page,
 };
 use client_simulator_config::{
-    BrowserConfig,
     Config,
     NoiseSuppression,
     ParticipantConfig,
@@ -44,35 +43,26 @@ use client_simulator_config::{
     WebcamResolution,
 };
 use eyre::{
-    bail,
     Context as _,
-    ContextCompat as _,
     Result,
 };
-use futures::StreamExt as _;
+use futures::{
+    future::BoxFuture,
+    FutureExt as _,
+};
 use std::time::Duration;
-use tokio::{
-    sync::{
-        mpsc::{
-            UnboundedReceiver,
-            UnboundedSender,
-        },
-        watch,
+use tokio::sync::{
+    mpsc::{
+        UnboundedReceiver,
+        UnboundedSender,
     },
-    task::JoinHandle,
+    watch,
 };
 
-/// Async participant "worker" that holds the browser and session.
-/// It has the direct command to the browser session that can modify the
-/// participant behavior in the space.
-/// It holds the message receiver that is used to handle the incoming messages
-/// from the sync TUI runtime.
+/// Frontend driver for the hyper.video ("hyper core") UI.
 #[derive(Debug)]
 pub(super) struct ParticipantInner {
-    participant_config: ParticipantConfig,
-    page: Page,
-    state: watch::Sender<ParticipantState>,
-    sender: UnboundedSender<ParticipantLogMessage>,
+    context: DriverContext,
     auth: BorrowedCookie,
 }
 
@@ -83,8 +73,8 @@ impl ParticipantInner {
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
         receiver: UnboundedReceiver<ParticipantMessage>,
-        sender: UnboundedSender<ParticipantLogMessage>,
-        state: watch::Sender<ParticipantState>,
+        sender: UnboundedSender<super::messages::ParticipantLogMessage>,
+        state: watch::Sender<super::ParticipantState>,
     ) -> Result<()> {
         let auth = if let Some(cookie) = cookie {
             cookie
@@ -94,260 +84,54 @@ impl ParticipantInner {
                 .await?
         };
 
-        let (mut browser, handler) = create_browser(&BrowserConfig::from(&participant_config)).await?;
-
-        let browser_event_task_handle = Self::drive_browser_events(&participant_config.username, handler);
-
-        let page = Self::create_page_retry(&participant_config, &mut browser).await?;
-
-        state.send_modify(|state| {
-            state.username = participant_config.username.clone();
-        });
-
-        let participant = Self {
-            participant_config,
-            page,
-            state: state.clone(),
-            sender,
+        run_local_participant(participant_config, receiver, sender, state, move |context| Self {
+            context,
             auth,
-        };
-
-        participant
-            .handle_actions(browser, receiver)
-            .await
-            .context("failed to handle actions")?;
-
-        browser_event_task_handle.await?;
-
-        Ok(())
-    }
-
-    fn drive_browser_events(name: impl ToString, mut handler: Handler) -> JoinHandle<()> {
-        let name = name.to_string();
-        tokio::task::spawn(async move {
-            while let Some(event) = handler.next().await {
-                if let Err(err) = event {
-                    if err.to_string().contains("ResetWithoutClosingHandshake") {
-                        error!(name, "Browser unexpectedly closed");
-                        break;
-                    }
-                    error!(name, "error in browser handler: {err:?}");
-                }
-            }
-            debug!(name, "Browser event handler stopped");
         })
+        .await
     }
 
-    async fn handle_actions(
-        mut self,
-        mut browser: Browser,
-        mut receiver: UnboundedReceiver<ParticipantMessage>,
-    ) -> Result<()> {
-        self.state.send_modify(|state| {
-            state.running = true;
-        });
-
-        if let Err(err) = self.join().await {
-            error!("Failed joining the session when starting the browser {err}");
-            self.send_log_message(
-                "error",
-                format!("Failed joining the session when starting the browser {err}"),
-            );
-
-            match browser.kill().await {
-                Some(Ok(_)) => {
-                    debug!("browser killed");
-                    self.send_log_message("debug", "browser killed");
-                }
-                Some(Err(err)) => {
-                    error!("failed to kill browser: {err}");
-                    self.send_log_message("error", format!("failed to kill browser: {err}"));
-                }
-                None => debug!("browser process not found"),
-            };
-            self.state.send_modify(|state| {
-                state.running = false;
-            });
-            return Ok(());
-        }
-
-        let mut detached_event = browser
-            .event_listener::<chromiumoxide::cdp::browser_protocol::target::EventDetachedFromTarget>()
-            .await
-            .expect("failed to create event listener");
-
-        loop {
-            let message = tokio::select! {
-                biased;
-
-                // Event is fired when the page is closed by the user
-                Some(_) = detached_event.next() => {
-                    warn!(self.participant_config.username, "Browser unexpectedly closed");
-                    match browser.kill().await {
-                        Some(Ok(_)) => {
-                            debug!("browser killed");
-                            self.send_log_message("debug", "browser killed");
-                        },
-                        Some(Err(err)) => {
-                            error!("failed to kill browser: {err}");
-                            self.send_log_message("error", format!("failed to kill browser: {err}"));
-                        },
-                        None => {
-                            debug!("browser process not found");
-                            self.send_log_message("debug", "browser process not found");
-                        },
-                    }
-                    break;
-                },
-
-                Some(message) = receiver.recv() => {
-                    message
-                }
-            };
-
-            if let Err(e) = match message {
-                ParticipantMessage::Join => self.join().await,
-                ParticipantMessage::Leave => self.leave().await,
-                ParticipantMessage::Close => {
-                    self.close(browser).await?;
-                    return Ok(());
-                }
-                ParticipantMessage::ToggleAudio => self.toggle_audio().await,
-                ParticipantMessage::ToggleVideo => self.toggle_video().await,
-                ParticipantMessage::ToggleScreenshare => self.toggle_screen_share().await,
-                ParticipantMessage::SetWebcamResolutions(value) => self.set_webcam_resolutions(value).await,
-                ParticipantMessage::SetNoiseSuppression(value) => self.set_noise_suppression(value).await,
-                ParticipantMessage::ToggleBackgroundBlur => self.toggle_background_blur().await,
-            } {
-                error!("Running action {message} failed with error: {e}.");
-                self.send_log_message("error", format!("Running action {message} failed with error: {e}."));
-            }
-
-            self.update_state().await;
-        }
-
-        self.state.send_modify(|state| {
-            state.running = false;
-        });
-
-        Ok(())
-    }
-
-    fn send_log_message(&self, level: &str, message: impl ToString) {
-        if let Err(err) = self.sender.send(ParticipantLogMessage::new(
-            level,
-            &self.participant_config.username,
-            message,
-        )) {
-            trace!("Failed to send log message: {err}");
-        }
-    }
-
-    async fn create_page(config: &ParticipantConfig, browser: &mut Browser) -> Result<Page> {
-        let page = if let Ok(Some(page)) = browser
-            .pages()
-            .await
-            .context("failed to get pages")
-            .map(|pages| pages.into_iter().next())
-        {
-            page.goto(config.session_url.to_string())
-                .await
-                .context("failed to navigate to session_url")?;
-            page
-        } else {
-            browser
-                .new_page(
-                    CreateTargetParams::builder()
-                        .url(config.session_url.to_string())
-                        .build()
-                        .map_err(|e| eyre::eyre!(e))?,
-                )
-                .await
-                .context("failed to create new page")?
-        };
-
-        let navigation = page
-            .wait_for_navigation_response()
-            .await
-            .context("Page could not navigate to session_url")?
-            .with_context(|| {
-                format!(
-                    "{}: No request returned when creating a page for {}",
-                    config.username, config.session_url,
-                )
-            })?;
-
-        if let Some(text) = &navigation.failure_text {
-            bail!(
-                "{}: When creating a new page request got a failure: {}",
-                config.username,
-                text
-            );
-        }
-
-        debug!(config.username, "Created a new page for the {}", config.session_url);
-
-        Ok(page)
-    }
-
-    async fn create_page_retry(config: &ParticipantConfig, browser: &mut Browser) -> Result<Page> {
-        let mut backoff = maybe_backoff::MaybeBackoff::default();
-        let mut attempt = 0;
-        loop {
-            backoff.sleep().await;
-            match Self::create_page(config, browser).await {
-                Ok(page) => return Ok(page),
-                Err(_) if attempt < 5 => {
-                    attempt += 1;
-                    backoff.arm();
-                    warn!(?attempt, "Failed to create a new page, retrying...");
-                }
-                Err(err) => return Err(err),
-            }
-        }
-    }
-}
-
-impl ParticipantInner {
     async fn set_cookie(&self) -> Result<()> {
-        let domain = self.participant_config.session_url.host_str().unwrap_or("localhost");
-
+        let domain = self
+            .context
+            .participant_config
+            .session_url
+            .host_str()
+            .unwrap_or("localhost");
         let cookie = self.auth.as_browser_cookie_for(domain)?;
 
-        self.page
+        self.context
+            .page
             .set_cookies(vec![cookie])
             .await
             .context("failed to set cookie")?;
 
-        debug!(self.participant_config.username, "Set cookie");
-        self.send_log_message("debug", format!("Set cookie for domain {domain}"));
+        debug!(participant = %self.participant_name(), "Set cookie");
+        self.context
+            .send_log_message("debug", format!("Set cookie for domain {domain}"));
 
         Ok(())
     }
 
-    async fn join(&mut self) -> Result<()> {
-        if self.state.borrow().joined {
-            warn!("Already joined.");
-            self.send_log_message("warn", "Already joined.");
+    async fn join_session(&mut self) -> Result<()> {
+        if self.context.state.borrow().joined {
+            warn!(participant = %self.participant_name(), "Already joined.");
+            self.context.send_log_message("warn", "Already joined.");
             return Ok(());
         }
 
-        // Create a new page if none exists
         self.set_cookie().await?;
 
-        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-        // Navigate to the session URL
-        self.page
-            .goto(self.participant_config.session_url.to_string())
+        self.context
+            .page
+            .goto(self.context.participant_config.session_url.to_string())
             .await
             .context("failed to wait for navigation response")?;
 
-        debug!(self.participant_config.username, "Navigated to page");
-        self.send_log_message("debug", "Navigated to page");
+        debug!(participant = %self.participant_name(), "Navigated to page");
+        self.context.send_log_message("debug", "Navigated to page");
 
-        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-        // Find the input box to enter the name
-        let input = wait_for_element(&self.page, classic::NAME_INPUT, Duration::from_secs(30))
+        let input = wait_for_element(&self.context.page, classic::NAME_INPUT, Duration::from_secs(30))
             .await
             .context("failed to find input name field")?;
         input
@@ -358,48 +142,43 @@ impl ParticipantInner {
             .await
             .context("failed to empty current name")?;
         input
-            .type_str(&self.participant_config.username)
+            .type_str(&self.context.participant_config.username)
             .await
             .context("failed to insert name")?;
 
-        debug!(self.participant_config.username, "Set the name of the participant");
-        self.send_log_message(
+        debug!(participant = %self.participant_name(), "Set the name of the participant");
+        self.context.send_log_message(
             "debug",
             format!(
                 "Set the name of the participant to {}",
-                self.participant_config.username
+                self.context.participant_config.username
             ),
         );
 
-        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-        // Find the join button
-        wait_for_element(&self.page, classic::JOIN_BUTTON, Duration::from_secs(30)).await?;
+        wait_for_element(&self.context.page, classic::JOIN_BUTTON, Duration::from_secs(30)).await?;
 
         if let Err(err) = self.apply_all_settings(true).await {
-            error!("Failed to apply settings before joining: {err}");
+            error!(participant = %self.participant_name(), "Failed to apply settings before joining: {err}");
         }
 
-        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-        // Click the join button
-        self.find_element(classic::JOIN_BUTTON)
+        self.context
+            .find_element(classic::JOIN_BUTTON)
             .await?
             .click()
             .await
             .context("failed to click join button")?;
 
-        debug!(self.participant_config.username, "Clicked on the join button");
-        self.send_log_message("debug", "Clicked on the join button");
+        debug!(participant = %self.participant_name(), "Clicked on the join button");
+        self.context.send_log_message("debug", "Clicked on the join button");
 
-        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-        // Ensure we have joined the space.
-        wait_for_element(&self.page, classic::LEAVE_BUTTON, Duration::from_secs(30))
+        wait_for_element(&self.context.page, classic::LEAVE_BUTTON, Duration::from_secs(30))
             .await
             .context("We haven't joined the space, cannot find the leave button")?;
 
-        info!(self.participant_config.username, "Joined the space");
-        self.send_log_message("info", "Joined the space");
+        info!(participant = %self.participant_name(), "Joined the space");
+        self.context.send_log_message("info", "Joined the space");
 
-        self.update_state().await;
+        self.update_state_inner().await;
 
         Ok(())
     }
@@ -414,36 +193,107 @@ impl ParticipantInner {
             video_enabled,
             screenshare_enabled,
             ..
-        } = &self.participant_config.app_config;
-        set_noise_suppression(&self.page, *noise_suppression)
+        } = &self.context.participant_config.app_config;
+
+        set_noise_suppression(&self.context.page, *noise_suppression)
             .await
             .context("failed to set noise suppression")?;
-        set_background_blur(&self.page, *blur)
+        set_background_blur(&self.context.page, *blur)
             .await
             .context("failed to set background blur")?;
-        set_outgoing_camera_resolution(&self.page, resolution)
+        set_outgoing_camera_resolution(&self.context.page, resolution)
             .await
             .context("failed to set outgoing camera resolution")?;
-        set_force_webrtc(&self.page, transport == &TransportMode::WebRTC)
+        set_force_webrtc(&self.context.page, transport == &TransportMode::WebRTC)
             .await
             .context("failed to set transport mode")?;
 
         if !audio_enabled {
-            self.toggle_audio().await?;
+            self.toggle_audio_inner().await?;
         }
 
         if !video_enabled {
-            self.toggle_video().await?;
+            self.toggle_video_inner().await?;
         }
 
         if !in_lobby && *screenshare_enabled {
-            self.toggle_screen_share().await?;
+            self.toggle_screen_share_inner().await?;
         }
 
         Ok(())
     }
 
-    async fn toggle_screen_share(&self) -> Result<()> {
+    async fn leave_session(&self) -> Result<()> {
+        self.leave_button()
+            .await?
+            .click()
+            .await
+            .context("Could not click on the leave space button")?;
+
+        info!(participant = %self.participant_name(), "Left the space");
+        self.context.send_log_message("info", "Left the space");
+
+        Ok(())
+    }
+
+    async fn close_browser(self, mut browser: Browser) -> Result<()> {
+        debug!(participant = %self.participant_name(), "Closing the browser...");
+
+        if let Err(err) = self.leave_session().await {
+            error!(
+                participant = %self.participant_name(),
+                "Failed leaving space while closing browser: {err}"
+            );
+            self.context
+                .send_log_message("error", format!("Failed leaving space while closing browser: {err}"));
+        }
+
+        if let Err(err) = self.context.page.clone().close().await {
+            error!(participant = %self.participant_name(), "Error closing page: {err}");
+            self.context
+                .send_log_message("error", format!("Error closing page: {err}"));
+        }
+
+        browser.close().await?;
+        browser.wait().await?;
+
+        info!(participant = %self.participant_name(), "Closed the browser");
+        self.context.send_log_message("info", "Closed the browser");
+
+        self.context.state.send_modify(|state| {
+            state.running = false;
+        });
+
+        Ok(())
+    }
+
+    async fn toggle_audio_inner(&self) -> Result<()> {
+        self.mute_button()
+            .await?
+            .click()
+            .await
+            .context("Could not click on the toggle audio button")?;
+
+        info!(participant = %self.participant_name(), "Toggled audio");
+        self.context.send_log_message("info", "Toggled audio");
+
+        Ok(())
+    }
+
+    async fn toggle_video_inner(&self) -> Result<()> {
+        self.camera_button()
+            .await?
+            .click()
+            .await
+            .context("Could not click on the toggle camera button")?;
+
+        info!(participant = %self.participant_name(), "Toggled camera");
+        self.context.send_log_message("info", "Toggled camera");
+
+        Ok(())
+    }
+
+    async fn toggle_screen_share_inner(&self) -> Result<()> {
         self.screen_share_button()
             .await?
             .click()
@@ -452,137 +302,56 @@ impl ParticipantInner {
             .map(|_| ())
     }
 
-    async fn leave(&self) -> Result<()> {
-        self.leave_button()
-            .await?
-            .click()
-            .await
-            .context("Could not click on the leave space button")?;
+    async fn set_webcam_resolutions_inner(&self, value: WebcamResolution) -> Result<()> {
+        debug!(participant = %self.participant_name(), "Changing to {value} resolution");
 
-        info!(self.participant_config.username, "Left the space");
-        self.send_log_message("info", "Left the space");
-
-        Ok(())
-    }
-
-    async fn close(self, mut browser: Browser) -> Result<()> {
-        debug!(self.participant_config.username, "Closing the browser...");
-
-        if let Err(err) = self.leave().await {
-            error!(
-                self.participant_config.username,
-                "Failed leaving space while closing browser: {}", err
-            );
-            self.send_log_message("error", format!("Failed leaving space while closing browser: {}", err));
-        }
-
-        if let Err(err) = self.page.clone().close().await {
-            error!("Error closing page: {err}");
-            self.send_log_message("error", format!("Error closing page: {err}"));
-        }
-
-        browser.close().await?;
-        browser.wait().await?;
-
-        info!(self.participant_config.username, "Closed the browser");
-        self.send_log_message("info", "Closed the browser");
-
-        self.state.send_modify(|state| {
-            state.running = false;
-        });
-
-        Ok(())
-    }
-
-    async fn toggle_audio(&self) -> Result<()> {
-        self.mute_button()
-            .await?
-            .click()
-            .await
-            .context("Could not click on the toggle audio button")?;
-
-        info!(self.participant_config.username, "Toggled audio");
-        self.send_log_message("info", "Toggled audio");
-        self.update_state().await;
-
-        Ok(())
-    }
-
-    async fn toggle_video(&self) -> Result<()> {
-        self.camera_button()
-            .await?
-            .click()
-            .await
-            .context("Could not click on the toggle camera button")?;
-
-        info!(self.participant_config.username, "Toggled camera");
-        self.send_log_message("info", "Toggled camera");
-        self.update_state().await;
-
-        Ok(())
-    }
-
-    async fn set_webcam_resolutions(&self, value: WebcamResolution) -> Result<()> {
-        debug!(self.participant_config.username, "Changing to {value} resolution");
-
-        set_outgoing_camera_resolution(&self.page, &value)
+        set_outgoing_camera_resolution(&self.context.page, &value)
             .await
             .context("Failed to set outgoing camera resolution")?;
-        self.update_state().await;
+
         Ok(())
     }
 
-    async fn set_noise_suppression(&self, value: NoiseSuppression) -> Result<()> {
+    async fn set_noise_suppression_inner(&self, value: NoiseSuppression) -> Result<()> {
         info!(
-            self.participant_config.username,
+            participant = %self.participant_name(),
             "Changing noise suppression to {value}"
         );
-        self.send_log_message("info", format!("Changing noise suppression to {}", value));
+        self.context
+            .send_log_message("info", format!("Changing noise suppression to {value}"));
 
-        set_noise_suppression(&self.page, value)
+        set_noise_suppression(&self.context.page, value)
             .await
             .context("Failed to set noise suppression level")?;
 
-        self.update_state().await;
-
         Ok(())
     }
 
-    async fn toggle_background_blur(&self) -> Result<()> {
-        let background_blur = get_background_blur(&self.page).await?;
-        set_background_blur(&self.page, !background_blur)
+    async fn toggle_background_blur_inner(&self) -> Result<()> {
+        let background_blur = get_background_blur(&self.context.page).await?;
+        set_background_blur(&self.context.page, !background_blur)
             .await
             .context("Failed to set background blur")?;
-        self.update_state().await;
         Ok(())
     }
-}
 
-impl ParticipantInner {
     async fn leave_button(&self) -> Result<Element> {
-        self.find_element(classic::LEAVE_BUTTON).await
+        self.context.find_element(classic::LEAVE_BUTTON).await
     }
 
     async fn mute_button(&self) -> Result<Element> {
-        self.find_element(classic::MUTE_BUTTON).await
+        self.context.find_element(classic::MUTE_BUTTON).await
     }
 
     async fn camera_button(&self) -> Result<Element> {
-        self.find_element(classic::VIDEO_BUTTON).await
+        self.context.find_element(classic::VIDEO_BUTTON).await
     }
 
     async fn screen_share_button(&self) -> Result<Element> {
-        self.find_element(classic::SCREEN_SHARE_BUTTON).await
+        self.context.find_element(classic::SCREEN_SHARE_BUTTON).await
     }
 
-    async fn find_element(&self, selector: &str) -> Result<Element> {
-        self.page
-            .find_element(selector)
-            .await
-            .context(format!("Could not find the {selector} element"))
-    }
-
-    async fn update_state(&self) {
+    async fn update_state_inner(&self) {
         let joined = self.leave_button().await.is_ok();
         let mut muted = false;
         let mut video_activated = false;
@@ -592,7 +361,7 @@ impl ParticipantInner {
         let mut background_blur = false;
         let mut screenshare_activated = false;
 
-        if let Ok(value) = get_noise_suppression(&self.page).await {
+        if let Ok(value) = get_noise_suppression(&self.context.page).await {
             noise_suppression = value;
         }
 
@@ -614,21 +383,21 @@ impl ParticipantInner {
             }
         }
 
-        if let Ok(value) = get_force_webrtc(&self.page).await {
+        if let Ok(value) = get_force_webrtc(&self.context.page).await {
             if value {
                 transport_mode = TransportMode::WebRTC;
             }
         }
 
-        if let Ok(value) = get_outgoing_camera_resolution(&self.page).await {
-            webcam_resolution = value
+        if let Ok(value) = get_outgoing_camera_resolution(&self.context.page).await {
+            webcam_resolution = value;
         }
 
-        if let Ok(blur) = get_background_blur(&self.page).await {
+        if let Ok(blur) = get_background_blur(&self.context.page).await {
             background_blur = blur;
         }
 
-        self.state.send_modify(|state| {
+        self.context.state.send_modify(|state| {
             state.joined = joined;
             state.muted = muted;
             state.video_activated = video_activated;
@@ -642,10 +411,56 @@ impl ParticipantInner {
     }
 }
 
-async fn element_state(el: &Element) -> Option<bool> {
-    el.attribute("data-test-state")
-        .await
-        .ok()
-        .unwrap_or(None)
-        .map(|v| v == "true")
+impl FrontendDriver for ParticipantInner {
+    fn participant_name(&self) -> &str {
+        self.context.participant_name()
+    }
+
+    fn state(&self) -> &watch::Sender<super::ParticipantState> {
+        &self.context.state
+    }
+
+    fn log_message(&self, level: &str, message: String) {
+        self.context.send_log_message(level, message);
+    }
+
+    fn join(&mut self) -> BoxFuture<'_, Result<()>> {
+        async move { self.join_session().await }.boxed()
+    }
+
+    fn leave(&self) -> BoxFuture<'_, Result<()>> {
+        async move { self.leave_session().await }.boxed()
+    }
+
+    fn close(self, browser: Browser) -> BoxFuture<'static, Result<()>> {
+        async move { self.close_browser(browser).await }.boxed()
+    }
+
+    fn toggle_audio(&self) -> BoxFuture<'_, Result<()>> {
+        async move { self.toggle_audio_inner().await }.boxed()
+    }
+
+    fn toggle_video(&self) -> BoxFuture<'_, Result<()>> {
+        async move { self.toggle_video_inner().await }.boxed()
+    }
+
+    fn toggle_screen_share(&self) -> BoxFuture<'_, Result<()>> {
+        async move { self.toggle_screen_share_inner().await }.boxed()
+    }
+
+    fn set_webcam_resolutions(&self, value: WebcamResolution) -> BoxFuture<'_, Result<()>> {
+        async move { self.set_webcam_resolutions_inner(value).await }.boxed()
+    }
+
+    fn set_noise_suppression(&self, value: NoiseSuppression) -> BoxFuture<'_, Result<()>> {
+        async move { self.set_noise_suppression_inner(value).await }.boxed()
+    }
+
+    fn toggle_background_blur(&self) -> BoxFuture<'_, Result<()>> {
+        async move { self.toggle_background_blur_inner().await }.boxed()
+    }
+
+    fn update_state(&self) -> BoxFuture<'_, ()> {
+        async move { self.update_state_inner().await }.boxed()
+    }
 }

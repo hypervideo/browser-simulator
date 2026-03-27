@@ -27,7 +27,6 @@ pub struct TuiArgs {
     ///  - adds `.with_head()` when starting the browser
     #[clap(long = "headless", action)]
     pub headless: Option<bool>,
-
 }
 
 mod config_ext {
