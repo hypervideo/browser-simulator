@@ -643,8 +643,8 @@ impl Component for BrowserStart {
                 }
 
                 if self.config.remote_url.is_some() {
-                    if let Err(e) = self.participant_store.spawn_remote(&self.config) {
-                        error!(?e, "Failed to spawn remote participant");
+                    if let Err(e) = self.participant_store.spawn_remote_stub(&self.config) {
+                        error!(?e, "Failed to spawn remote participant stub");
                     }
                 } else if let Err(e) = self.participant_store.spawn_local(&self.config) {
                     error!(?e, "Failed to spawn local participant");

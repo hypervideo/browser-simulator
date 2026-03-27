@@ -14,17 +14,6 @@ run-nix *flags="":
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-serve *flags="":
-    cargo run --release --bin client-simulator-http -- {{ flags }}
-
-serve-dev *flags="":
-    cargo run --package client-simulator-http -- {{ flags }}
-
-serve-nix *flags="":
-    nix run .#client-simulator-http -- {{ flags }}
-
-# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
 stats-gatherer *flags="":
     cargo run --release --bin client-simulator-stats-gatherer -- {{ flags }}
 
@@ -58,6 +47,5 @@ fetch-cookie username="simulator-user" server-url="http://localhost:8081":
 cachix-push:
     nix build --no-link --print-out-paths \
         .#client-simulator \
-        .#client-simulator-http \
         .#client-simulator-stats-gatherer \
       | cachix push hyper-video

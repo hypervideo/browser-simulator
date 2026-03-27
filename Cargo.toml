@@ -4,7 +4,6 @@ members = [
   ".",
   "browser",
   "config",
-  "http",
   "stats-gatherer",
   "tui",
 ]
@@ -16,9 +15,6 @@ edition = "2021"
 repository = "https://github.com/hypervideo/hyper.video"
 
 [workspace.dependencies]
-axum = { version = "0.8.3" }
-axum-server = "0.7.2"
-base64 = "0.22.1"
 better-panic = "0.3.0"
 # TODO: fix for https://github.com/mattsse/chromiumoxide/issues/243
 chromiumoxide = { git = "https://github.com/caido/dependency-chromiumoxide", branch = "ef-json-parsing", features = ["tokio-runtime", "bytes"], default-features = false }
@@ -49,7 +45,6 @@ strum = { version = "0.27.1", features = ["derive"] }
 temp-dir = "0.1.16"
 thiserror = "2.0.6"
 tokio = { version = "1.46.1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "signal"] }
-tokio-tungstenite = "0.26.2"
 tokio-util = "0.7.12"
 tracing = "0.1.41"
 tracing-error = "0.2.0"

@@ -2,5 +2,4 @@ This is a **Hyper.Video Browser Client Simulator** - a Rust-based testing framew
 
 The project is a Cargo workspace with multiple binaries for different use cases:
 - **client-simulator** (main TUI): Interactive terminal UI for manual testing
-- **client-simulator-http**: HTTP/WebSocket server for remote control
 - **client-simulator-stats-gatherer**: Analytics collection from ClickHouse

@@ -41,8 +41,8 @@ impl ParticipantStore {
         Ok(())
     }
 
-    pub fn spawn_remote(&self, config: &Config) -> Result<()> {
-        let participant = Participant::spawn_remote(config, self.cookies.clone())?;
+    pub fn spawn_remote_stub(&self, config: &Config) -> Result<()> {
+        let participant = Participant::spawn_remote_stub(config, self.cookies.clone())?;
         self.add(participant);
         Ok(())
     }

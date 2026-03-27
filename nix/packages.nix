@@ -45,14 +45,6 @@ rec {
     env.LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
   };
 
-  client-simulator-http = mkSimulatorPackage {
-    pname = "client-simulator-http";
-    description = "Hyper browser client simulator HTTP server";
-    buildInputs = [ openssl clang ];
-    cargoBuildFlags = [ "--package" "client-simulator-http" ];
-    env.LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
-  };
-
   client-simulator-stats-gatherer = mkSimulatorPackage {
     pname = "client-simulator-stats-gatherer";
     description = "Hyper browser client simulator stats gatherer";

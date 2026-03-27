@@ -5,8 +5,7 @@ use super::auth::{
 };
 use crate::participant::{
     messages::ParticipantLogMessage,
-    remote::spawn_remote,
-    transport_data::ParticipantConfigQuery,
+    remote_stub::spawn_remote_stub,
 };
 use chrono::Utc;
 use client_simulator_config::{
@@ -38,11 +37,10 @@ mod commands;
 mod inner;
 mod inner_lite;
 pub mod messages;
-mod remote;
+mod remote_stub;
 mod selectors;
 mod state;
 mod store;
-pub mod transport_data;
 
 use inner::ParticipantInner;
 pub use state::ParticipantState;
@@ -152,12 +150,13 @@ impl Participant {
         ))
     }
 
-    pub fn spawn_remote(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+    pub fn spawn_remote_stub(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
         let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
         let base_url = session_url.origin().unicode_serialization();
         let cookie = cookie_manager.give_cookie(&base_url);
-        let query = ParticipantConfigQuery::new(config, cookie.as_ref())?;
-        let name = query.username.clone();
+        let name = cookie.as_ref().map(|entry| entry.username());
+        let participant_config = ParticipantConfig::new(config, name)?;
+        let name = participant_config.username.clone();
 
         let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
         let task_cancellation_token = CancellationToken::new();
@@ -170,9 +169,9 @@ impl Participant {
                     biased;
                     _ = task_cancellation_token.cancelled() => {},
 
-                    result = spawn_remote(receiver, state_sender, query, cookie, cookie_manager) => {
+                    result = spawn_remote_stub(receiver, state_sender, participant_config) => {
                         if let Err(err) = result {
-                            error!("Failed to spawn remote participant: {err}");
+                            error!("Failed to spawn remote participant stub: {err}");
                         }
                     }
                 };

@@ -8,7 +8,6 @@ This is a **Hyper.Video Browser Client Simulator** - a Rust-based testing framew
 
 The project is a Cargo workspace with multiple binaries for different use cases:
 - **client-simulator** (main TUI): Interactive terminal UI for manual testing
-- **client-simulator-http**: HTTP/WebSocket server for remote control
 - **client-simulator-stats-gatherer**: Analytics collection from ClickHouse
 
 ## Build & Development Commands
@@ -22,10 +21,6 @@ cargo build --release
 # Run the main TUI simulator
 just run              # release mode
 just dev              # dev mode (faster compilation)
-
-# Run HTTP server (for remote control)
-just serve            # release mode
-just serve-dev        # dev mode
 
 # Run stats gatherer
 just stats-gatherer --clickhouse-url http://localhost:8123 --space-url https://...
@@ -60,12 +55,10 @@ The project includes Nix flake support for reproducible builds:
 ```bash
 # Build via Nix
 nix build .#client-simulator
-nix build .#client-simulator-http
 nix build .#client-simulator-stats-gatherer
 
 # Run via Nix
 just run-nix
-just serve-nix
 ```
 
 ### Fetch Session Cookie
@@ -86,7 +79,6 @@ client-simulator/           # Main binary (TUI)
 ├── browser/                # Browser automation core
 ├── config/                 # Configuration management
 ├── tui/                    # Terminal UI (ratatui-based)
-├── http/                   # HTTP/WebSocket API server
 └── stats-gatherer/         # ClickHouse analytics
 ```
 
@@ -99,14 +91,16 @@ The foundation of all simulation modes. Key responsibilities:
 - **Browser Lifecycle**: Launches headless/headed Chromium instances using `chromiumoxide`
 - **Participant**: Central abstraction representing a simulated user
   - `ParticipantInner`: Full browser-based participant (uses Chromium DevTools Protocol)
-  - `ParticipantInnerLite`: Lightweight participant (direct WebSocket, no browser)
+  - `ParticipantInnerLite`: Browser-based automation for the lite frontend
+  - `remote_stub.rs`: In-process placeholder for the future remote backend
 - **Authentication**: `HyperSessionCookieStash` manages persistent user sessions
 - **Media Handling**: Supports fake media sources (builtin, custom video/audio files)
 
 Key files:
 - `browser/src/participant/mod.rs`: Participant API and lifecycle
 - `browser/src/participant/inner.rs`: Full browser implementation
-- `browser/src/participant/inner_lite.rs`: Lite WebSocket-only implementation
+- `browser/src/participant/inner_lite.rs`: Lite frontend browser implementation
+- `browser/src/participant/remote_stub.rs`: Endpoint-free remote participant stub
 - `browser/src/auth.rs`: Cookie/session management
 
 #### 2. Config Module (`config/`)
@@ -124,14 +118,6 @@ Interactive terminal interface built with `ratatui`:
 - Toggle audio/video/screenshare
 - View logs in real-time
 - Persist configuration across sessions
-
-#### 4. HTTP Server Mode (`http/`)
-
-Exposes participants via REST API and WebSocket:
-- Create participants remotely
-- Send control commands (join, toggle media, etc.)
-- Stream logs over WebSocket
-- Useful for CI/CD integration
 
 #### 5. Stats Gatherer (`stats-gatherer/`)
 
@@ -200,7 +186,7 @@ cargo nextest run -p client-simulator-browser
 1. Add variant to `ParticipantMessage` enum in `browser/src/participant/messages.rs`
 2. Handle in `ParticipantInner::run()` message loop (`browser/src/participant/inner.rs`)
 3. Add public method to `Participant` struct in `browser/src/participant/mod.rs`
-4. Expose in TUI/HTTP as needed
+4. Expose in the TUI as needed
 
 ### Debugging Browser Issues
 
