@@ -45,12 +45,5 @@ rec {
     env.LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
   };
 
-  client-simulator-stats-gatherer = mkSimulatorPackage {
-    pname = "client-simulator-stats-gatherer";
-    description = "Hyper browser client simulator stats gatherer";
-    buildInputs = [ openssl ];
-    cargoBuildFlags = [ "--package" "client-simulator-stats-gatherer" ];
-  };
-
   default = client-simulator;
 }

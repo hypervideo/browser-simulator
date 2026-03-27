@@ -4,7 +4,6 @@ members = [
   ".",
   "browser",
   "config",
-  "stats-gatherer",
   "tui",
 ]
 
@@ -43,7 +42,6 @@ signal-hook = "0.3.17"
 strip-ansi-escapes = "0.2.0"
 strum = { version = "0.27.1", features = ["derive"] }
 temp-dir = "0.1.16"
-thiserror = "2.0.6"
 tokio = { version = "1.46.1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "signal"] }
 tokio-util = "0.7.12"
 tracing = "0.1.41"

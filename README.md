@@ -1,5 +1,7 @@
-This is a **Hyper.Video Browser Client Simulator** - a Rust-based testing framework that simulates multiple browser clients connecting to Hyper.Video sessions. It automates browser interactions using Chromium via the `chromiumoxide` library to test real-time video conferencing functionality at scale.
+This is a **Hyper.Video Browser Client Simulator**: a Rust TUI for spawning and controlling Chromium-backed browser participants against Hyper.Video sessions.
 
-The project is a Cargo workspace with multiple binaries for different use cases:
-- **client-simulator** (main TUI): Interactive terminal UI for manual testing
-- **client-simulator-stats-gatherer**: Analytics collection from ClickHouse
+The active workspace is centered on:
+- **client-simulator**: the main TUI binary
+- **browser/**: participant automation and remote stub support
+- **config/**: CLI and YAML configuration
+- **tui/**: terminal UI components
