@@ -1,3 +1,5 @@
+//! Browser interaction for the hyper.video ("hyper core") frontend.
+
 use super::{
     commands::{
         get_force_webrtc,

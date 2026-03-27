@@ -1,3 +1,5 @@
+//! Browser interaction for the hyper-lite ("hyper lite") frontend.
+
 use super::{
     messages::ParticipantMessage,
     ParticipantState,
