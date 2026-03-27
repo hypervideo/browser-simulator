@@ -28,9 +28,6 @@ pub struct TuiArgs {
     #[clap(long = "headless", action)]
     pub headless: Option<bool>,
 
-    /// Optional remote URL for the server running a participant
-    #[clap(long, value_name = "remote-URL")]
-    pub remote_url: Option<String>,
 }
 
 mod config_ext {
@@ -66,9 +63,6 @@ mod config_ext {
             }
             if let Some(headless) = &self.headless {
                 cache.insert("headless".to_string(), (*headless).into());
-            }
-            if let Some(remote_url) = &self.remote_url {
-                cache.insert("remote_url".to_string(), remote_url.clone().into());
             }
             Ok(cache)
         }

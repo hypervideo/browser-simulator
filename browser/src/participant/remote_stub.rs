@@ -18,7 +18,6 @@ pub async fn spawn_remote_stub(
     participant_config: ParticipantConfig,
 ) -> Result<()> {
     let username = participant_config.username.clone();
-    let configured_remote_url = participant_config.app_config.remote_url();
 
     state_sender.send_modify(|state| {
         state.username = username.clone();
@@ -33,13 +32,8 @@ pub async fn spawn_remote_stub(
         state.screenshare_activated = participant_config.app_config.screenshare_enabled;
     });
 
-    let backend_message = match configured_remote_url {
-        Some(url) => format!(
-            "remote backend is a local stub; no connection will be made and configured remote URL {url} is ignored"
-        ),
-        None => "remote backend is a local stub; commands are simulated locally".to_string(),
-    };
-    ParticipantLogMessage::new("warn", &username, backend_message).write();
+    ParticipantLogMessage::new("warn", &username, "remote backend is a local stub; commands are simulated locally")
+        .write();
 
     while let Some(message) = receiver.recv().await {
         match message {

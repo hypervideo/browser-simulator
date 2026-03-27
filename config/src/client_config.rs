@@ -65,3 +65,18 @@ pub enum NoiseSuppression {
     #[serde(rename = "krisp-medium-with-bvc")]
     KrispMediumWithBVC,
 }
+
+#[derive(Debug, Default, Clone, Copy, Display, EnumIter, EnumString, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum ParticipantBackendKind {
+    #[default]
+    Local,
+    RemoteStub,
+}
+
+impl ParticipantBackendKind {
+    pub const fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
+}

@@ -7,14 +7,12 @@ mod browser_config;
 mod client_config;
 pub mod media;
 mod participant_config;
-pub mod remote_url_option;
 
 use crate::{
     media::{
         FakeMedia,
         FakeMediaWithDescription,
     },
-    remote_url_option::RemoteUrlOption,
 };
 use app_config::AppConfig;
 pub use app_config::{
@@ -26,6 +24,7 @@ pub use browser_config::BrowserConfig;
 pub use client_config::{
     NoiseSuppression,
     NoiseSuppressionIter,
+    ParticipantBackendKind,
     TransportMode,
     TransportModeIter,
     WebcamResolution,
@@ -58,6 +57,8 @@ pub struct Config {
     pub fake_media_sources: Vec<FakeMediaWithDescription>,
     #[serde(default)]
     pub headless: bool,
+    #[serde(default, skip_serializing_if = "ParticipantBackendKind::is_local")]
+    pub backend: ParticipantBackendKind,
     #[serde(default)]
     pub audio_enabled: bool,
     #[serde(default)]
@@ -72,10 +73,6 @@ pub struct Config {
     pub resolution: WebcamResolution,
     #[serde(default)]
     pub blur: bool,
-    #[serde(default)]
-    pub remote_url: Option<usize>,
-    #[serde(default)]
-    pub remote_url_options: Vec<RemoteUrlOption>,
 }
 
 const DEFAULT_CONFIG: &str = include_str!("default-config.yaml");
@@ -93,13 +90,21 @@ impl config::Source for Config {
 
     fn collect(&self) -> Result<config::Map<String, config::Value>, config::ConfigError> {
         let mut cache = HashMap::<String, config::Value>::new();
+        cache.insert("backend".to_string(), self.backend.to_string().into());
         if let Some(url) = &self.url {
             cache.insert("url".to_string(), url.to_string().into());
         }
-        if let Some(url) = &self.remote_url {
-            cache.insert("remote_url".to_string(), url.to_string().into());
-        }
         cache.insert("headless".to_string(), (self.headless).into());
+        cache.insert("audio_enabled".to_string(), self.audio_enabled.into());
+        cache.insert("video_enabled".to_string(), self.video_enabled.into());
+        cache.insert("screenshare_enabled".to_string(), self.screenshare_enabled.into());
+        cache.insert(
+            "noise_suppression".to_string(),
+            self.noise_suppression.to_string().into(),
+        );
+        cache.insert("transport".to_string(), self.transport.to_string().into());
+        cache.insert("resolution".to_string(), self.resolution.to_string().into());
+        cache.insert("blur".to_string(), self.blur.into());
         if let Some(value) = self.fake_media_selected {
             cache.insert("fake_media_selected".to_string(), (value as u64).into());
         }
@@ -112,24 +117,6 @@ impl config::Source for Config {
                         config::ValueKind::Table(HashMap::from_iter([
                             ("description".to_string(), ea.description().to_string().into()),
                             ("fake_media".to_string(), ea.fake_media().to_string().into()),
-                        ]))
-                    })
-                    .collect::<Vec<_>>()
-                    .into(),
-            );
-        }
-        if let Some(remote_url) = &self.remote_url {
-            cache.insert("remote_url".to_string(), remote_url.to_string().into());
-        }
-        if !self.remote_url_options.is_empty() {
-            cache.insert(
-                "remote_url_options".to_string(),
-                self.remote_url_options
-                    .iter()
-                    .map(|item| {
-                        config::ValueKind::Table(HashMap::from_iter([
-                            ("description".to_string(), item.description().to_string().into()),
-                            ("url".to_string(), item.url().to_string().into()),
                         ]))
                     })
                     .collect::<Vec<_>>()
@@ -177,17 +164,6 @@ impl Config {
         self.fake_media_with_description().fake_media().clone()
     }
 
-    pub fn remote_url_option(&self) -> Option<RemoteUrlOption> {
-        match (self.remote_url, &self.remote_url_options) {
-            (Some(selected), sources) => sources.get(selected).cloned(),
-            _ => None,
-        }
-    }
-
-    pub fn remote_url(&self) -> Option<url::Url> {
-        self.remote_url_option().map(|o| o.url().clone())
-    }
-
     pub fn add_custom_fake_media(&mut self, content: String) -> Option<usize> {
         let media = if content.trim().is_empty() {
             return None;
@@ -202,16 +178,6 @@ impl Config {
             fake_media_sources.push(media);
             Some(fake_media_sources.len() - 1)
         }
-    }
-
-    pub fn add_remote_url(&mut self, content: String) -> Option<usize> {
-        let url = match url::Url::parse(&content) {
-            Ok(url) => url,
-            Err(_) => return None,
-        };
-        let option = RemoteUrlOption::new(url, None);
-        self.remote_url_options.push(option);
-        Some(self.remote_url_options.len() - 1)
     }
 
     pub fn data_dir(&self) -> &Path {
@@ -231,9 +197,6 @@ impl Config {
         }
         if self.url == default.url {
             clone.url = None;
-        }
-        if self.remote_url == default.remote_url {
-            clone.remote_url = None;
         }
 
         std::fs::create_dir_all(&self.app_config.config_dir).context("Failed to create config directory")?;
@@ -275,5 +238,36 @@ impl Config {
             debug!("No configuration changes from command-line arguments.");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_old_config_file_without_remote_url_fields() {
+        let config: Config = config::Config::builder()
+            .add_source(Config::default())
+            .add_source(config::File::from_str(
+                r#"
+url: https://example.com/space/demo
+remote_url: 0
+remote_url_options:
+  - description: old worker
+    url: https://remote.example.com
+"#,
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .expect("failed to build config")
+            .try_deserialize()
+            .expect("failed to deserialize config");
+
+        assert_eq!(
+            config.url,
+            Some(url::Url::parse("https://example.com/space/demo").expect("valid url"))
+        );
+        assert_eq!(config.backend, ParticipantBackendKind::Local);
     }
 }
