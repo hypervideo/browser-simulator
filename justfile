@@ -25,17 +25,6 @@ serve-nix *flags="":
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-orchestrator *flags="":
-    cargo run --release --bin client-simulator-orchestrator -- {{ flags }}
-
-orchestrator-dev *flags="":
-    cargo run --package client-simulator-orchestrator -- {{ flags }}
-
-orchestrator-nix *flags="":
-    nix run .#client-simulator-orchestrator -- {{ flags }}
-
-# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
 stats-gatherer *flags="":
     cargo run --release --bin client-simulator-stats-gatherer -- {{ flags }}
 
@@ -70,6 +59,5 @@ cachix-push:
     nix build --no-link --print-out-paths \
         .#client-simulator \
         .#client-simulator-http \
-        .#client-simulator-orchestrator \
         .#client-simulator-stats-gatherer \
       | cachix push hyper-video

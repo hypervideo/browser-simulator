@@ -660,26 +660,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "client-simulator-orchestrator"
-version = "0.1.0"
-dependencies = [
- "clap",
- "client-simulator-browser",
- "client-simulator-config",
- "color-eyre",
- "eyre",
- "futures",
- "serde",
- "serde_yml",
- "tokio",
- "tokio-tungstenite 0.26.2",
- "tracing",
- "tracing-error",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
 name = "client-simulator-stats-gatherer"
 version = "0.1.0"
 dependencies = [

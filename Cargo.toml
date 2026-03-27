@@ -5,7 +5,6 @@ members = [
   "browser",
   "config",
   "http",
-  "orchestrator",
   "stats-gatherer",
   "tui",
 ]
@@ -62,7 +61,6 @@ which = "8.0.0"
 
 client-simulator-browser = { path = "./browser" }
 client-simulator-config = { path = "./config" }
-client-simulator-orchestrator = { path = "./orchestrator" }
 client-simulator-tui = { path = "./tui" }
 
 [workspace.lints.clippy]

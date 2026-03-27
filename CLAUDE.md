@@ -9,7 +9,6 @@ This is a **Hyper.Video Browser Client Simulator** - a Rust-based testing framew
 The project is a Cargo workspace with multiple binaries for different use cases:
 - **client-simulator** (main TUI): Interactive terminal UI for manual testing
 - **client-simulator-http**: HTTP/WebSocket server for remote control
-- **client-simulator-orchestrator**: Batch orchestration of multiple simulated clients
 - **client-simulator-stats-gatherer**: Analytics collection from ClickHouse
 
 ## Build & Development Commands
@@ -27,10 +26,6 @@ just dev              # dev mode (faster compilation)
 # Run HTTP server (for remote control)
 just serve            # release mode
 just serve-dev        # dev mode
-
-# Run orchestrator (batch mode)
-just orchestrator --config path/to/config.yaml
-just orchestrator-dev --config path/to/config.yaml
 
 # Run stats gatherer
 just stats-gatherer --clickhouse-url http://localhost:8123 --space-url https://...
@@ -66,7 +61,6 @@ The project includes Nix flake support for reproducible builds:
 # Build via Nix
 nix build .#client-simulator
 nix build .#client-simulator-http
-nix build .#client-simulator-orchestrator
 nix build .#client-simulator-stats-gatherer
 
 # Run via Nix
@@ -93,7 +87,6 @@ client-simulator/           # Main binary (TUI)
 ├── config/                 # Configuration management
 ├── tui/                    # Terminal UI (ratatui-based)
 ├── http/                   # HTTP/WebSocket API server
-├── orchestrator/           # Batch orchestration
 └── stats-gatherer/         # ClickHouse analytics
 ```
 
@@ -140,29 +133,7 @@ Exposes participants via REST API and WebSocket:
 - Stream logs over WebSocket
 - Useful for CI/CD integration
 
-#### 5. Orchestrator Mode (`orchestrator/`)
-
-Batch mode for large-scale testing:
-- YAML-based configuration with participant specs
-- Distributes participants across multiple HTTP workers (round-robin)
-- Supports participant-specific settings and staggered join times
-- Configuration validation before execution
-
-Example orchestrator config structure:
-```yaml
-session_url: https://hyper.video/space/SPACE_ID
-workers:
-  - url: http://worker1:8081
-  - url: http://worker2:8081
-defaults:
-  headless: true
-  audio_enabled: true
-participants_specs:
-  - username: "user-1"
-    wait_to_join_seconds: 5
-```
-
-#### 6. Stats Gatherer (`stats-gatherer/`)
+#### 5. Stats Gatherer (`stats-gatherer/`)
 
 Connects directly to ClickHouse to collect analytics:
 - Server-level metrics
@@ -229,7 +200,7 @@ cargo nextest run -p client-simulator-browser
 1. Add variant to `ParticipantMessage` enum in `browser/src/participant/messages.rs`
 2. Handle in `ParticipantInner::run()` message loop (`browser/src/participant/inner.rs`)
 3. Add public method to `Participant` struct in `browser/src/participant/mod.rs`
-4. Expose in TUI/HTTP/orchestrator as needed
+4. Expose in TUI/HTTP as needed
 
 ### Debugging Browser Issues
 
@@ -277,7 +248,6 @@ Participants can use different WebRTC transport modes:
 
 - Noise suppression levels: `Off`, `Low`, `Medium`, `High`
 - Webcam resolutions: Multiple presets from 180p to 1080p
-- Configurable per-participant in orchestrator mode
 
 ## Important File Locations
 
