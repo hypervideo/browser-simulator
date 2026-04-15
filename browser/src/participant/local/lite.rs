@@ -1,23 +1,23 @@
-//! Browser interaction for the hyper-lite ("hyper lite") frontend.
+//! Local DOM automation for the hyper-lite frontend.
 
-use super::frontend::{
-    element_state,
-    run_local_participant,
-    DriverContext,
-    FrontendDriver,
+use super::{
+    super::shared::{
+        messages::ParticipantMessage,
+        ParticipantState,
+    },
+    frontend::{
+        element_state,
+        FrontendAutomation,
+        FrontendContext,
+    },
 };
 use crate::{
-    participant::selectors::lite,
-    wait_for_element,
+    participant::local::selectors::lite,
+    util::wait_for_element,
 };
-use chromiumoxide::{
-    Browser,
-    Element,
-};
+use chromiumoxide::Element;
 use client_simulator_config::{
-    Config,
     NoiseSuppression,
-    ParticipantConfig,
     TransportMode,
     WebcamResolution,
 };
@@ -30,42 +30,26 @@ use futures::{
     FutureExt as _,
 };
 use std::time::Duration;
-use tokio::sync::{
-    mpsc::{
-        UnboundedReceiver,
-        UnboundedSender,
-    },
-    watch,
-};
 
-/// Frontend driver for the hyper-lite UI.
+/// Local frontend automation for the hyper-lite UI.
 #[derive(Debug)]
 pub(super) struct ParticipantInnerLite {
-    context: DriverContext,
+    context: FrontendContext,
 }
 
 impl ParticipantInnerLite {
-    #[instrument(level = "debug", skip_all, fields(name = %participant_config.username))]
-    pub(super) async fn run(
-        participant_config: ParticipantConfig,
-        receiver: UnboundedReceiver<super::messages::ParticipantMessage>,
-        sender: UnboundedSender<super::messages::ParticipantLogMessage>,
-        state: watch::Sender<super::ParticipantState>,
-    ) -> Result<()> {
-        debug!(participant = %participant_config.username, "Starting participant inner lite...");
-        run_local_participant(participant_config, receiver, sender, state, |context| Self { context }).await
+    pub(super) fn new(context: FrontendContext) -> Self {
+        Self { context }
+    }
+
+    fn participant_name(&self) -> &str {
+        self.context.participant_name()
     }
 
     async fn join_session(&mut self) -> Result<()> {
-        if self.context.state.borrow().joined {
-            warn!(participant = %self.participant_name(), "Already joined.");
-            self.context.send_log_message("warn", "Already joined.");
-            return Ok(());
-        }
-
         self.context
             .page
-            .goto(self.context.participant_config.session_url.to_string())
+            .goto(self.context.launch_spec.session_url.to_string())
             .await
             .context("failed to wait for navigation response")?;
 
@@ -92,40 +76,36 @@ impl ParticipantInnerLite {
         self.context.send_log_message("info", "Joined the space");
 
         if let Err(err) = self.apply_all_settings().await {
-            error!(participant = %self.participant_name(), "Failed to apply settings after joining: {err}");
+            error!(
+                participant = %self.participant_name(),
+                "Failed to apply settings after joining: {err}"
+            );
             self.context
                 .send_log_message("error", format!("Failed to apply settings after joining: {err}"));
         }
-
-        self.update_state_inner().await;
 
         Ok(())
     }
 
     async fn apply_all_settings(&self) -> Result<()> {
-        let Config {
-            audio_enabled,
-            video_enabled,
-            screenshare_enabled,
-            ..
-        } = &self.context.participant_config.app_config;
+        let settings = &self.context.launch_spec.settings;
 
-        if !audio_enabled {
+        if !settings.audio_enabled {
             self.toggle_audio_inner().await?;
         }
 
-        if !video_enabled {
+        if !settings.video_enabled {
             self.toggle_video_inner().await?;
         }
 
-        if *screenshare_enabled {
+        if settings.screenshare_enabled {
             self.toggle_screen_share_inner().await?;
         }
 
         Ok(())
     }
 
-    async fn leave_session(&self) -> Result<()> {
+    async fn leave_session(&mut self) -> Result<()> {
         self.leave_button()
             .await?
             .click()
@@ -133,20 +113,6 @@ impl ParticipantInnerLite {
             .context("Could not click on the leave space button")?;
         info!(participant = %self.participant_name(), "Left the space");
         self.context.send_log_message("info", "Left the space");
-        Ok(())
-    }
-
-    async fn close_browser(self, mut browser: Browser) -> Result<()> {
-        debug!(participant = %self.participant_name(), "Closing the browser...");
-        let _ = self.leave_session().await;
-        let _ = self.context.page.clone().close().await;
-        browser.close().await?;
-        browser.wait().await?;
-        info!(participant = %self.participant_name(), "Closed the browser");
-        self.context.send_log_message("info", "Closed the browser");
-        self.context.state.send_modify(|state| {
-            state.running = false;
-        });
         Ok(())
     }
 
@@ -224,93 +190,66 @@ impl ParticipantInnerLite {
         self.context.find_element(lite::SCREEN_SHARE_BUTTON).await
     }
 
-    async fn update_state_inner(&self) {
+    async fn refresh_state_inner(&self) -> Result<ParticipantState> {
         let joined = self.leave_button().await.is_ok();
-        let mut muted = false;
-        let mut video_activated = false;
-        let mut screenshare_activated = false;
+        let mut state = ParticipantState {
+            username: self.context.launch_spec.username.clone(),
+            running: true,
+            joined,
+            transport_mode: TransportMode::default(),
+            webcam_resolution: WebcamResolution::default(),
+            noise_suppression: NoiseSuppression::default(),
+            ..Default::default()
+        };
 
         if let Ok(mute_button) = self.mute_button().await {
             if let Some(value) = element_state(&mute_button).await {
-                muted = !value;
+                state.muted = !value;
             }
         }
         if let Ok(camera_button) = self.camera_button().await {
             if let Some(value) = element_state(&camera_button).await {
-                video_activated = value;
+                state.video_activated = value;
             }
         }
         if let Ok(screen_share_button) = self.screen_share_button().await {
             debug!(participant = %self.participant_name(), "Screen share button: {screen_share_button:?}");
             if let Some(value) = element_state(&screen_share_button).await {
-                screenshare_activated = value;
+                state.screenshare_activated = value;
             }
         }
 
-        self.context.state.send_modify(|state| {
-            state.joined = joined;
-            state.muted = muted;
-            state.video_activated = video_activated;
-            state.screenshare_activated = screenshare_activated;
-            state.transport_mode = TransportMode::default();
-            state.webcam_resolution = WebcamResolution::default();
-            state.noise_suppression = NoiseSuppression::default();
-            state.background_blur = false;
-            debug!("Sending state update: {state:?}");
-        });
+        Ok(state)
     }
 }
 
-impl FrontendDriver for ParticipantInnerLite {
-    fn participant_name(&self) -> &str {
-        self.context.participant_name()
-    }
-
-    fn state(&self) -> &watch::Sender<super::ParticipantState> {
-        &self.context.state
-    }
-
-    fn log_message(&self, level: &str, message: String) {
-        self.context.send_log_message(level, message);
-    }
-
+impl FrontendAutomation for ParticipantInnerLite {
     fn join(&mut self) -> BoxFuture<'_, Result<()>> {
         async move { self.join_session().await }.boxed()
     }
 
-    fn leave(&self) -> BoxFuture<'_, Result<()>> {
+    fn leave(&mut self) -> BoxFuture<'_, Result<()>> {
         async move { self.leave_session().await }.boxed()
     }
 
-    fn close(self, browser: Browser) -> BoxFuture<'static, Result<()>> {
-        async move { self.close_browser(browser).await }.boxed()
+    fn handle_command(&mut self, message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
+        async move {
+            match message {
+                ParticipantMessage::Join => self.join_session().await,
+                ParticipantMessage::Leave => self.leave_session().await,
+                ParticipantMessage::Close => Ok(()),
+                ParticipantMessage::ToggleAudio => self.toggle_audio_inner().await,
+                ParticipantMessage::ToggleVideo => self.toggle_video_inner().await,
+                ParticipantMessage::ToggleScreenshare => self.toggle_screen_share_inner().await,
+                ParticipantMessage::SetWebcamResolutions(value) => self.set_webcam_resolutions_inner(value).await,
+                ParticipantMessage::SetNoiseSuppression(value) => self.set_noise_suppression_inner(value).await,
+                ParticipantMessage::ToggleBackgroundBlur => self.toggle_background_blur_inner().await,
+            }
+        }
+        .boxed()
     }
 
-    fn toggle_audio(&self) -> BoxFuture<'_, Result<()>> {
-        async move { self.toggle_audio_inner().await }.boxed()
-    }
-
-    fn toggle_video(&self) -> BoxFuture<'_, Result<()>> {
-        async move { self.toggle_video_inner().await }.boxed()
-    }
-
-    fn toggle_screen_share(&self) -> BoxFuture<'_, Result<()>> {
-        async move { self.toggle_screen_share_inner().await }.boxed()
-    }
-
-    fn set_webcam_resolutions(&self, value: WebcamResolution) -> BoxFuture<'_, Result<()>> {
-        async move { self.set_webcam_resolutions_inner(value).await }.boxed()
-    }
-
-    fn set_noise_suppression(&self, value: NoiseSuppression) -> BoxFuture<'_, Result<()>> {
-        async move { self.set_noise_suppression_inner(value).await }.boxed()
-    }
-
-    fn toggle_background_blur(&self) -> BoxFuture<'_, Result<()>> {
-        async move { self.toggle_background_blur_inner().await }.boxed()
-    }
-
-    fn update_state(&self) -> BoxFuture<'_, ()> {
-        async move { self.update_state_inner().await }.boxed()
+    fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
+        async move { self.refresh_state_inner().await }.boxed()
     }
 }

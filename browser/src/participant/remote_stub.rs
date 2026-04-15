@@ -1,123 +1,137 @@
-use crate::participant::{
+use crate::participant::shared::{
     messages::{
         ParticipantLogMessage,
         ParticipantMessage,
     },
+    DriverTermination,
+    ParticipantDriverSession,
+    ParticipantLaunchSpec,
     ParticipantState,
 };
-use client_simulator_config::ParticipantConfig;
 use eyre::Result;
-use tokio::sync::{
-    mpsc::UnboundedReceiver,
-    watch,
+use futures::{
+    future::BoxFuture,
+    FutureExt as _,
 };
+use std::future::pending;
+use tokio::sync::mpsc::UnboundedSender;
 
-pub async fn spawn_remote_stub(
-    mut receiver: UnboundedReceiver<ParticipantMessage>,
-    state_sender: watch::Sender<ParticipantState>,
-    participant_config: ParticipantConfig,
-) -> Result<()> {
-    let username = participant_config.username.clone();
+pub(super) struct RemoteStubSession {
+    launch_spec: ParticipantLaunchSpec,
+    sender: UnboundedSender<ParticipantLogMessage>,
+    state: ParticipantState,
+}
 
-    state_sender.send_modify(|state| {
-        state.username = username.clone();
-        state.running = true;
-        state.joined = true;
-        state.muted = !participant_config.app_config.audio_enabled;
-        state.video_activated = participant_config.app_config.video_enabled;
-        state.noise_suppression = participant_config.app_config.noise_suppression;
-        state.transport_mode = participant_config.app_config.transport;
-        state.webcam_resolution = participant_config.app_config.resolution;
-        state.background_blur = participant_config.app_config.blur;
-        state.screenshare_activated = participant_config.app_config.screenshare_enabled;
-    });
-
-    ParticipantLogMessage::new(
-        "warn",
-        &username,
-        "remote backend is a local stub; commands are simulated locally",
-    )
-    .write();
-
-    while let Some(message) = receiver.recv().await {
-        match message {
-            ParticipantMessage::Join => {
-                state_sender.send_modify(|state| {
-                    state.joined = true;
-                });
-                ParticipantLogMessage::new("info", &username, "remote stub join simulated").write();
-            }
-            ParticipantMessage::Leave => {
-                state_sender.send_modify(|state| {
-                    state.joined = false;
-                    state.screenshare_activated = false;
-                });
-                ParticipantLogMessage::new("info", &username, "remote stub leave simulated").write();
-            }
-            ParticipantMessage::Close => {
-                state_sender.send_modify(|state| {
-                    state.running = false;
-                    state.joined = false;
-                    state.screenshare_activated = false;
-                });
-                ParticipantLogMessage::new("debug", &username, "remote stub closed").write();
-                return Ok(());
-            }
-            ParticipantMessage::ToggleAudio => {
-                state_sender.send_modify(|state| {
-                    state.muted = !state.muted;
-                });
-                ParticipantLogMessage::new("debug", &username, "remote stub toggled audio").write();
-            }
-            ParticipantMessage::ToggleVideo => {
-                state_sender.send_modify(|state| {
-                    state.video_activated = !state.video_activated;
-                });
-                ParticipantLogMessage::new("debug", &username, "remote stub toggled video").write();
-            }
-            ParticipantMessage::ToggleScreenshare => {
-                state_sender.send_modify(|state| {
-                    state.screenshare_activated = !state.screenshare_activated;
-                });
-                ParticipantLogMessage::new("debug", &username, "remote stub toggled screenshare").write();
-            }
-            ParticipantMessage::SetNoiseSuppression(value) => {
-                state_sender.send_modify(|state| {
-                    state.noise_suppression = value;
-                });
-                ParticipantLogMessage::new(
-                    "debug",
-                    &username,
-                    format!("remote stub set noise suppression to {value}"),
-                )
-                .write();
-            }
-            ParticipantMessage::SetWebcamResolutions(value) => {
-                state_sender.send_modify(|state| {
-                    state.webcam_resolution = value;
-                });
-                ParticipantLogMessage::new(
-                    "debug",
-                    &username,
-                    format!("remote stub set camera resolution to {value}"),
-                )
-                .write();
-            }
-            ParticipantMessage::ToggleBackgroundBlur => {
-                state_sender.send_modify(|state| {
-                    state.background_blur = !state.background_blur;
-                });
-                ParticipantLogMessage::new("debug", &username, "remote stub toggled background blur").write();
-            }
+impl RemoteStubSession {
+    pub(super) fn new(launch_spec: ParticipantLaunchSpec, sender: UnboundedSender<ParticipantLogMessage>) -> Self {
+        Self {
+            state: ParticipantState {
+                username: launch_spec.username.clone(),
+                ..Default::default()
+            },
+            launch_spec,
+            sender,
         }
     }
 
-    state_sender.send_modify(|state| {
-        state.running = false;
-        state.joined = false;
-        state.screenshare_activated = false;
-    });
-    ParticipantLogMessage::new("debug", &username, "remote stub channel closed").write();
+    fn log_message(&self, level: &str, message: impl ToString) {
+        let log_message = ParticipantLogMessage::new(level, &self.launch_spec.username, message);
+        log_message.write();
+        if let Err(err) = self.sender.send(log_message) {
+            trace!(
+                participant = %self.launch_spec.username,
+                "Failed to send remote stub log message: {err}"
+            );
+        }
+    }
+}
 
-    Ok(())
+impl ParticipantDriverSession for RemoteStubSession {
+    fn participant_name(&self) -> &str {
+        &self.launch_spec.username
+    }
+
+    fn start(&mut self) -> BoxFuture<'_, Result<()>> {
+        async move {
+            self.state = ParticipantState {
+                username: self.launch_spec.username.clone(),
+                running: true,
+                joined: true,
+                muted: !self.launch_spec.settings.audio_enabled,
+                video_activated: self.launch_spec.settings.video_enabled,
+                noise_suppression: self.launch_spec.settings.noise_suppression,
+                transport_mode: self.launch_spec.settings.transport,
+                webcam_resolution: self.launch_spec.settings.resolution,
+                background_blur: self.launch_spec.settings.blur,
+                screenshare_activated: self.launch_spec.settings.screenshare_enabled,
+            };
+
+            self.log_message("warn", "remote backend is a local stub; commands are simulated locally");
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn handle_command(&mut self, message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
+        async move {
+            match message {
+                ParticipantMessage::Join => {
+                    self.state.joined = true;
+                    self.log_message("info", "remote stub join simulated");
+                }
+                ParticipantMessage::Leave => {
+                    self.state.joined = false;
+                    self.state.screenshare_activated = false;
+                    self.log_message("info", "remote stub leave simulated");
+                }
+                ParticipantMessage::Close => {}
+                ParticipantMessage::ToggleAudio => {
+                    self.state.muted = !self.state.muted;
+                    self.log_message("debug", "remote stub toggled audio");
+                }
+                ParticipantMessage::ToggleVideo => {
+                    self.state.video_activated = !self.state.video_activated;
+                    self.log_message("debug", "remote stub toggled video");
+                }
+                ParticipantMessage::ToggleScreenshare => {
+                    self.state.screenshare_activated = !self.state.screenshare_activated;
+                    self.log_message("debug", "remote stub toggled screenshare");
+                }
+                ParticipantMessage::SetNoiseSuppression(value) => {
+                    self.state.noise_suppression = value;
+                    self.log_message("debug", format!("remote stub set noise suppression to {value}"));
+                }
+                ParticipantMessage::SetWebcamResolutions(value) => {
+                    self.state.webcam_resolution = value;
+                    self.log_message("debug", format!("remote stub set camera resolution to {value}"));
+                }
+                ParticipantMessage::ToggleBackgroundBlur => {
+                    self.state.background_blur = !self.state.background_blur;
+                    self.log_message("debug", "remote stub toggled background blur");
+                }
+            }
+
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
+        async move { Ok(self.state.clone()) }.boxed()
+    }
+
+    fn close(&mut self) -> BoxFuture<'_, Result<()>> {
+        async move {
+            self.state.running = false;
+            self.state.joined = false;
+            self.state.screenshare_activated = false;
+            self.log_message("debug", "remote stub closed");
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
+        async move { pending::<DriverTermination>().await }.boxed()
+    }
 }

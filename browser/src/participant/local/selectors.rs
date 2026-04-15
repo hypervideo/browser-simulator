@@ -1,4 +1,4 @@
-/// Selectors for UI elements in the classic frontend
+/// Selectors for UI elements in the Hyper Core ("classic") frontend.
 pub mod classic {
     /// Selector for the leave button
     pub const LEAVE_BUTTON: &str = r#"[data-testid="trigger-leave-call"]"#;
@@ -19,7 +19,7 @@ pub mod classic {
     pub const JOIN_BUTTON: &str = r#"button[type="submit"]:not([disabled])"#;
 }
 
-/// Selectors for UI elements in the lite frontend
+/// Selectors for UI elements in the Hyper Lite frontend.
 pub mod lite {
     /// Selector for the join button
     pub const JOIN_BUTTON: &str = r#"button[data-testid="join-button"]:not([disabled])"#;

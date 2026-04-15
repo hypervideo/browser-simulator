@@ -61,7 +61,7 @@ impl HyperSessionCookieManger {
     pub async fn fetch_new_cookie(&self, base_url: url::Url, username: impl AsRef<str>) -> Result<BorrowedCookie> {
         let cookie = HyperSessionCookie::fetch_token_and_set_name(base_url.clone(), username).await?;
 
-        // Safe the new cookie so we can reuse it later.
+        // Save the new cookie so we can reuse it later.
 
         let mut stash = HyperSessionCookieStash::load(&self.stash_file);
         stash
@@ -150,7 +150,7 @@ pub struct HyperSessionCookieStash {
 }
 
 impl HyperSessionCookieStash {
-    /// Load the cookies from the given directory.
+    /// Load the cookies from the simulator data directory.
     fn load(file: impl AsRef<Path>) -> Self {
         let file = file.as_ref();
         file.exists()

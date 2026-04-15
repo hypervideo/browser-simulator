@@ -1,8 +1,10 @@
-use super::{
-    HyperSessionCookieStash,
-    Participant,
+use crate::{
+    auth::{
+        HyperSessionCookieManger,
+        HyperSessionCookieStash,
+    },
+    participant::Participant,
 };
-use crate::auth::HyperSessionCookieManger;
 use client_simulator_config::Config;
 use eyre::Result;
 use std::{
@@ -15,8 +17,7 @@ use std::{
     vec::IntoIter,
 };
 
-/// Store for all the participants that we will expose to the TUI
-/// for displaying and control.
+/// Store of active participants exposed to the TUI for display and control.
 #[derive(Debug, Clone)]
 pub struct ParticipantStore {
     cookies: HyperSessionCookieManger,
