@@ -40,8 +40,7 @@ pub trait Component {
     /// # Returns
     ///
     /// * `Result<()>` - An Ok result or an error.
-    fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> Result<()> {
-        let _ = tx; // to appease clippy
+    fn register_action_handler(&mut self, _tx: UnboundedSender<Action>) -> Result<()> {
         Ok(())
     }
 
@@ -54,9 +53,7 @@ pub trait Component {
     /// # Returns
     ///
     /// * `Result<()>` - An Ok result or an error.
-    fn register_config_handler(&mut self, config: Config, keybindings: KeyBindings) -> Result<()> {
-        let _ = config; // to appease clippy
-        let _ = keybindings; // to appease clippy
+    fn register_config_handler(&mut self, _config: Config, _keybindings: KeyBindings) -> Result<()> {
         Ok(())
     }
 
@@ -69,8 +66,7 @@ pub trait Component {
     /// # Returns
     ///
     /// * `Result<()>` - An Ok result or an error.
-    fn init(&mut self, area: Size) -> Result<()> {
-        let _ = area; // to appease clippy
+    fn init(&mut self, _area: Size) -> Result<()> {
         Ok(())
     }
 
@@ -101,8 +97,7 @@ pub trait Component {
     /// # Returns
     ///
     /// * `Result<Option<Action>>` - An action to be processed or none.
-    fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        let _ = key; // to appease clippy
+    fn handle_key_event(&mut self, _key: KeyEvent) -> Result<Option<Action>> {
         Ok(None)
     }
 
@@ -115,8 +110,7 @@ pub trait Component {
     /// # Returns
     ///
     /// * `Result<Option<Action>>` - An action to be processed or none.
-    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<Option<Action>> {
-        let _ = mouse; // to appease clippy
+    fn handle_mouse_event(&mut self, _mouse: MouseEvent) -> Result<Option<Action>> {
         Ok(None)
     }
 
@@ -129,10 +123,7 @@ pub trait Component {
     /// # Returns
     ///
     /// * `Result<Option<Action>>` - An action to be processed or none.
-    fn update(&mut self, action: Action) -> Result<Option<Action>> {
-        let _ = action; // to appease clippy
-        Ok(None)
-    }
+    fn update(&mut self, action: Action) -> Result<Option<Action>>;
 
     /// Render the component on the screen. (REQUIRED)
     ///
@@ -144,9 +135,5 @@ pub trait Component {
     /// # Returns
     ///
     /// * `Result<()>` - An Ok result or an error.
-    fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        let _ = frame; // to appease clippy
-        let _ = area; // to appease clippy
-        Ok(())
-    }
+    fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()>;
 }
