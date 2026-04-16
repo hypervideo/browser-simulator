@@ -529,6 +529,18 @@ fn map_settings(settings: &crate::participant::shared::ParticipantSettings) -> t
             client_simulator_config::NoiseSuppression::KrispMediumWithBVC => {
                 types::ParticipantSettingsNoiseSuppression::KrispMediumWithBvc
             }
+            client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs => {
+                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowXxs
+            }
+            client_simulator_config::NoiseSuppression::AiCousticsSparrowXs => {
+                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowXs
+            }
+            client_simulator_config::NoiseSuppression::AiCousticsSparrowS => {
+                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowS
+            }
+            client_simulator_config::NoiseSuppression::AiCousticsSparrowL => {
+                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowL
+            }
         },
         resolution: match settings.resolution {
             client_simulator_config::WebcamResolution::Auto => types::ParticipantSettingsResolution::Auto,
@@ -578,6 +590,18 @@ fn map_state(state: &types::ParticipantState) -> ParticipantState {
             types::ParticipantStateNoiseSuppression::KrispMediumWithBvc => {
                 client_simulator_config::NoiseSuppression::KrispMediumWithBVC
             }
+            types::ParticipantStateNoiseSuppression::AiCousticsSparrowXxs => {
+                client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs
+            }
+            types::ParticipantStateNoiseSuppression::AiCousticsSparrowXs => {
+                client_simulator_config::NoiseSuppression::AiCousticsSparrowXs
+            }
+            types::ParticipantStateNoiseSuppression::AiCousticsSparrowS => {
+                client_simulator_config::NoiseSuppression::AiCousticsSparrowS
+            }
+            types::ParticipantStateNoiseSuppression::AiCousticsSparrowL => {
+                client_simulator_config::NoiseSuppression::AiCousticsSparrowL
+            }
         },
         transport_mode: match state.transport_mode {
             types::ParticipantStateTransportMode::Webrtc => client_simulator_config::TransportMode::WebRTC,
@@ -622,6 +646,18 @@ fn map_command_noise_suppression(
         }
         client_simulator_config::NoiseSuppression::KrispMediumWithBVC => {
             types::SessionCommandRequestNoiseSuppression::KrispMediumWithBvc
+        }
+        client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs => {
+            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowXxs
+        }
+        client_simulator_config::NoiseSuppression::AiCousticsSparrowXs => {
+            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowXs
+        }
+        client_simulator_config::NoiseSuppression::AiCousticsSparrowS => {
+            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowS
+        }
+        client_simulator_config::NoiseSuppression::AiCousticsSparrowL => {
+            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowL
         }
     }
 }
@@ -839,6 +875,66 @@ mod tests {
 
         assert_eq!(requests[3].method, "POST");
         assert_eq!(requests[3].path, "/sessions/cf-session-123/close");
+    }
+
+    #[tokio::test]
+    async fn start_accepts_ai_coustics_noise_suppression_from_worker_state() {
+        let responses = VecDeque::from(vec![
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-ai-coustics",
+                    "state": {
+                        "running": true,
+                        "joined": true,
+                        "muted": false,
+                        "videoActivated": true,
+                        "screenshareActivated": false,
+                        "noiseSuppression": "ai-coustics-sparrow-s",
+                        "transportMode": "webrtc",
+                        "webcamResolution": "p720",
+                        "backgroundBlur": true
+                    },
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-ai-coustics",
+                    "log": [],
+                }),
+            ),
+        ]);
+        let (base_url, _requests, server) = spawn_http_server(responses).await;
+        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+        let (log_sender, _log_receiver) = unbounded_channel();
+        let mut session = CloudflareSession::new_for_test(
+            launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
+            launch_options(false, FakeMedia::None),
+            CloudflareConfig {
+                base_url: Url::parse(&base_url).unwrap(),
+                request_timeout_seconds: 5,
+                session_timeout_ms: 120_000,
+                navigation_timeout_ms: 30_000,
+                selector_timeout_ms: 10_000,
+                debug: false,
+                health_poll_interval_ms: 60_000,
+            },
+            log_sender,
+            None,
+            cookie_manager,
+        );
+
+        session.start().await.unwrap();
+
+        let state = session.refresh_state().await.unwrap();
+        assert_eq!(state.noise_suppression, NoiseSuppression::AiCousticsSparrowS);
+
+        session.close().await.unwrap();
+        server.abort();
     }
 
     #[tokio::test]

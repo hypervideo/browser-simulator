@@ -246,7 +246,11 @@
               "krisp-medium",
               "krisp-low",
               "krisp-high-with-bvc",
-              "krisp-medium-with-bvc"
+              "krisp-medium-with-bvc",
+              "ai-coustics-sparrow-xxs",
+              "ai-coustics-sparrow-xs",
+              "ai-coustics-sparrow-s",
+              "ai-coustics-sparrow-l"
             ]
           },
           "transportMode": {
@@ -456,7 +460,11 @@
               "krisp-medium",
               "krisp-low",
               "krisp-high-with-bvc",
-              "krisp-medium-with-bvc"
+              "krisp-medium-with-bvc",
+              "ai-coustics-sparrow-xxs",
+              "ai-coustics-sparrow-xs",
+              "ai-coustics-sparrow-s",
+              "ai-coustics-sparrow-l"
             ]
           },
           "transport": {
@@ -617,7 +625,11 @@
                   "krisp-medium",
                   "krisp-low",
                   "krisp-high-with-bvc",
-                  "krisp-medium-with-bvc"
+              "krisp-medium-with-bvc",
+              "ai-coustics-sparrow-xxs",
+              "ai-coustics-sparrow-xs",
+              "ai-coustics-sparrow-s",
+              "ai-coustics-sparrow-l"
                 ]
               }
             },

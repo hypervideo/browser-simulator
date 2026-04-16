@@ -64,6 +64,18 @@ pub enum NoiseSuppression {
     #[strum(to_string = "krisp-medium-with-bvc")]
     #[serde(rename = "krisp-medium-with-bvc")]
     KrispMediumWithBVC,
+    #[strum(to_string = "ai-coustics-sparrow-xxs")]
+    #[serde(rename = "ai-coustics-sparrow-xxs")]
+    AiCousticsSparrowXxs,
+    #[strum(to_string = "ai-coustics-sparrow-xs")]
+    #[serde(rename = "ai-coustics-sparrow-xs")]
+    AiCousticsSparrowXs,
+    #[strum(to_string = "ai-coustics-sparrow-s")]
+    #[serde(rename = "ai-coustics-sparrow-s")]
+    AiCousticsSparrowS,
+    #[strum(to_string = "ai-coustics-sparrow-l")]
+    #[serde(rename = "ai-coustics-sparrow-l")]
+    AiCousticsSparrowL,
 }
 
 #[derive(Debug, Default, Clone, Copy, Display, EnumIter, EnumString, Serialize, Deserialize, PartialEq, Eq)]
