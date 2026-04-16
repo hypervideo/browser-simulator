@@ -30,13 +30,22 @@ use futures::{
     future::BoxFuture,
     FutureExt as _,
 };
-#[cfg(test)]
-use std::sync::Mutex;
 use std::{
-    future::pending,
+    sync::{
+        Arc,
+        Mutex,
+    },
     time::Duration,
 };
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::{
+    sync::{
+        mpsc::UnboundedSender,
+        oneshot,
+        watch,
+    },
+    task::JoinHandle,
+    time::MissedTickBehavior,
+};
 
 enum CloudflareAuth {
     HyperCore {
@@ -52,7 +61,46 @@ pub(super) struct CloudflareSession {
     sender: UnboundedSender<ParticipantLogMessage>,
     auth: CloudflareAuth,
     session_id: Option<String>,
-    state: ParticipantState,
+    cached_state: Arc<Mutex<ParticipantState>>,
+    termination_tx: watch::Sender<Option<DriverTermination>>,
+    termination_rx: watch::Receiver<Option<DriverTermination>>,
+    poller_shutdown_tx: Option<oneshot::Sender<()>>,
+    poller_task: Option<JoinHandle<()>>,
+}
+
+fn emit_log_message(
+    sender: &UnboundedSender<ParticipantLogMessage>,
+    participant_name: &str,
+    level: &str,
+    message: impl ToString,
+) {
+    let log_message = ParticipantLogMessage::new(level, participant_name, message);
+    log_message.write();
+    if let Err(err) = sender.send(log_message) {
+        trace!(
+            participant = %participant_name,
+            "Failed to send cloudflare driver log message: {err}"
+        );
+    }
+}
+
+fn forward_worker_entries(
+    sender: &UnboundedSender<ParticipantLogMessage>,
+    participant_name: &str,
+    entries: &[types::AutomationLogEntry],
+) {
+    for entry in entries {
+        emit_log_message(
+            sender,
+            participant_name,
+            "debug",
+            format!("worker {} {}", entry.at.to_rfc3339(), entry.step),
+        );
+    }
+}
+
+fn store_cached_state(cached_state: &Arc<Mutex<ParticipantState>>, state: &types::ParticipantState) {
+    *cached_state.lock().unwrap() = map_state(state);
 }
 
 impl CloudflareSession {
@@ -72,11 +120,11 @@ impl CloudflareSession {
         sender: UnboundedSender<ParticipantLogMessage>,
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
-        track_spawn: bool,
+        _track_spawn: bool,
     ) -> Self {
         #[cfg(test)]
         {
-            if track_spawn {
+            if _track_spawn {
                 spawned_participants_for_test()
                     .lock()
                     .unwrap()
@@ -88,17 +136,22 @@ impl CloudflareSession {
             ResolvedFrontendKind::HyperCore => CloudflareAuth::HyperCore { cookie, cookie_manager },
             ResolvedFrontendKind::HyperLite => CloudflareAuth::HyperLite,
         };
+        let (termination_tx, termination_rx) = watch::channel(None);
 
         Self {
-            state: ParticipantState {
+            cached_state: Arc::new(Mutex::new(ParticipantState {
                 username: launch_spec.username.clone(),
                 ..Default::default()
-            },
+            })),
             launch_spec,
             cloudflare_config,
             sender,
             auth,
             session_id: None,
+            termination_tx,
+            termination_rx,
+            poller_shutdown_tx: None,
+            poller_task: None,
         }
     }
 
@@ -114,14 +167,7 @@ impl CloudflareSession {
     }
 
     fn log_message(&self, level: &str, message: impl ToString) {
-        let log_message = ParticipantLogMessage::new(level, &self.launch_spec.username, message);
-        log_message.write();
-        if let Err(err) = self.sender.send(log_message) {
-            trace!(
-                participant = %self.launch_spec.username,
-                "Failed to send cloudflare driver log message: {err}"
-            );
-        }
+        emit_log_message(&self.sender, &self.launch_spec.username, level, message);
     }
 
     fn worker_client(&self) -> Result<CloudflareWorkerClient> {
@@ -133,9 +179,7 @@ impl CloudflareSession {
     }
 
     fn log_worker_entries(&self, entries: &[types::AutomationLogEntry]) {
-        for entry in entries {
-            self.log_message("debug", format!("worker {} {}", entry.at.to_rfc3339(), entry.step));
-        }
+        forward_worker_entries(&self.sender, &self.launch_spec.username, entries);
     }
 
     async fn ensure_hyper_session_cookie(&mut self) -> Result<Option<String>> {
@@ -177,6 +221,97 @@ impl CloudflareSession {
         })
     }
 
+    fn command_request(message: ParticipantMessage) -> types::SessionCommandRequest {
+        match message {
+            ParticipantMessage::Join => types::SessionCommandRequest::Join,
+            ParticipantMessage::Leave => types::SessionCommandRequest::Leave,
+            ParticipantMessage::Close => types::SessionCommandRequest::Leave,
+            ParticipantMessage::ToggleAudio => types::SessionCommandRequest::ToggleAudio,
+            ParticipantMessage::ToggleVideo => types::SessionCommandRequest::ToggleVideo,
+            ParticipantMessage::ToggleScreenshare => types::SessionCommandRequest::ToggleScreenshare,
+            ParticipantMessage::SetNoiseSuppression(value) => types::SessionCommandRequest::SetNoiseSuppression {
+                noise_suppression: map_command_noise_suppression(value),
+            },
+            ParticipantMessage::SetWebcamResolutions(value) => types::SessionCommandRequest::SetWebcamResolution {
+                webcam_resolution: map_command_webcam_resolution(value),
+            },
+            ParticipantMessage::ToggleBackgroundBlur => types::SessionCommandRequest::ToggleBackgroundBlur,
+        }
+    }
+
+    fn cached_state(&self) -> ParticipantState {
+        self.cached_state.lock().unwrap().clone()
+    }
+
+    fn update_cached_state(&self, state: &types::ParticipantState) {
+        store_cached_state(&self.cached_state, state);
+    }
+
+    async fn stop_termination_poller(&mut self) {
+        if let Some(shutdown_tx) = self.poller_shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+
+        if let Some(task) = self.poller_task.take() {
+            let _ = task.await;
+        }
+    }
+
+    fn start_termination_poller(&mut self, session_id: String) -> Result<()> {
+        let client = self.worker_client()?;
+        let poll_interval = Duration::from_millis(self.cloudflare_config.health_poll_interval_ms);
+        let cached_state = Arc::clone(&self.cached_state);
+        let participant_name = self.launch_spec.username.clone();
+        let sender = self.sender.clone();
+        let termination_tx = self.termination_tx.clone();
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
+        let task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(poll_interval);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            interval.tick().await;
+
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    _ = interval.tick() => {
+                        match client.get_session_state(&session_id).await {
+                            Ok(response) => {
+                                forward_worker_entries(&sender, &participant_name, &response.log);
+
+                                store_cached_state(&cached_state, &response.state);
+
+                                if !response.state.running {
+                                    let _ = termination_tx.send(Some(DriverTermination::new(
+                                        "warn",
+                                        format!(
+                                            "Cloudflare worker session {session_id} is no longer running"
+                                        ),
+                                    )));
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                let _ = termination_tx.send(Some(DriverTermination::new(
+                                    "warn",
+                                    format!(
+                                        "Cloudflare worker session {session_id} terminated unexpectedly: {err}"
+                                    ),
+                                )));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        self.poller_shutdown_tx = Some(shutdown_tx);
+        self.poller_task = Some(task);
+
+        Ok(())
+    }
+
     async fn start_inner(&mut self) -> Result<()> {
         if self.session_id.is_some() {
             bail!("Cloudflare session already started");
@@ -194,8 +329,10 @@ impl CloudflareSession {
         let response = self.worker_client()?.create_session(&request).await?;
         self.log_worker_entries(&response.log);
 
-        self.state = map_state(&response.state);
+        self.termination_tx.send_replace(None);
+        self.update_cached_state(&response.state);
         self.session_id = Some(response.session_id.clone());
+        self.start_termination_poller(response.session_id.clone())?;
 
         self.log_message(
             "info",
@@ -206,6 +343,8 @@ impl CloudflareSession {
     }
 
     async fn close_inner(&mut self) -> Result<()> {
+        self.stop_termination_poller().await;
+
         let Some(session_id) = self.session_id.clone() else {
             self.log_message("debug", "Cloudflare worker session already closed");
             return Ok(());
@@ -216,12 +355,41 @@ impl CloudflareSession {
         let response = self.worker_client()?.close_session(&session_id).await?;
         self.log_worker_entries(&response.log);
         self.session_id = None;
-        self.state.joined = false;
-        self.state.screenshare_activated = false;
+        self.termination_tx.send_replace(None);
+        {
+            let mut cached_state = self.cached_state.lock().unwrap();
+            cached_state.running = false;
+            cached_state.joined = false;
+            cached_state.screenshare_activated = false;
+        }
 
         self.log_message("info", format!("Closed Cloudflare worker session {session_id}"));
 
         Ok(())
+    }
+
+    async fn handle_command_inner(&mut self, message: ParticipantMessage) -> Result<()> {
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or_else(|| eyre!("Cloudflare session is not started"))?;
+        let request = Self::command_request(message);
+        let response = self.worker_client()?.command_session(&session_id, &request).await?;
+        self.log_worker_entries(&response.log);
+        self.update_cached_state(&response.state);
+        Ok(())
+    }
+
+    async fn wait_for_termination_inner(&mut self) -> DriverTermination {
+        loop {
+            if let Some(termination) = self.termination_rx.borrow().clone() {
+                return termination;
+            }
+
+            if self.termination_rx.changed().await.is_err() {
+                return DriverTermination::new("warn", "cloudflare driver termination channel closed");
+            }
+        }
     }
 }
 
@@ -235,11 +403,11 @@ impl ParticipantDriverSession for CloudflareSession {
     }
 
     fn handle_command(&mut self, message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
-        async move { bail!("Cloudflare runtime command handling is not implemented yet: {message}") }.boxed()
+        self.handle_command_inner(message).boxed()
     }
 
     fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
-        async move { Ok(self.state.clone()) }.boxed()
+        async move { Ok(self.cached_state()) }.boxed()
     }
 
     fn close(&mut self) -> BoxFuture<'_, Result<()>> {
@@ -247,7 +415,7 @@ impl ParticipantDriverSession for CloudflareSession {
     }
 
     fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
-        async move { pending::<DriverTermination>().await }.boxed()
+        self.wait_for_termination_inner().boxed()
     }
 }
 
@@ -355,6 +523,49 @@ fn map_state(state: &types::ParticipantState) -> ParticipantState {
     }
 }
 
+fn map_command_noise_suppression(
+    noise_suppression: client_simulator_config::NoiseSuppression,
+) -> types::SessionCommandRequestNoiseSuppression {
+    match noise_suppression {
+        client_simulator_config::NoiseSuppression::Disabled => types::SessionCommandRequestNoiseSuppression::None,
+        client_simulator_config::NoiseSuppression::Deepfilternet => {
+            types::SessionCommandRequestNoiseSuppression::Deepfilternet
+        }
+        client_simulator_config::NoiseSuppression::RNNoise => types::SessionCommandRequestNoiseSuppression::Rnnoise,
+        client_simulator_config::NoiseSuppression::IRISCarthy => {
+            types::SessionCommandRequestNoiseSuppression::IrisCarthy
+        }
+        client_simulator_config::NoiseSuppression::KrispHigh => types::SessionCommandRequestNoiseSuppression::KrispHigh,
+        client_simulator_config::NoiseSuppression::KrispMedium => {
+            types::SessionCommandRequestNoiseSuppression::KrispMedium
+        }
+        client_simulator_config::NoiseSuppression::KrispLow => types::SessionCommandRequestNoiseSuppression::KrispLow,
+        client_simulator_config::NoiseSuppression::KrispHighWithBVC => {
+            types::SessionCommandRequestNoiseSuppression::KrispHighWithBvc
+        }
+        client_simulator_config::NoiseSuppression::KrispMediumWithBVC => {
+            types::SessionCommandRequestNoiseSuppression::KrispMediumWithBvc
+        }
+    }
+}
+
+fn map_command_webcam_resolution(
+    webcam_resolution: client_simulator_config::WebcamResolution,
+) -> types::SessionCommandRequestWebcamResolution {
+    match webcam_resolution {
+        client_simulator_config::WebcamResolution::Auto => types::SessionCommandRequestWebcamResolution::Auto,
+        client_simulator_config::WebcamResolution::P144 => types::SessionCommandRequestWebcamResolution::P144,
+        client_simulator_config::WebcamResolution::P240 => types::SessionCommandRequestWebcamResolution::P240,
+        client_simulator_config::WebcamResolution::P360 => types::SessionCommandRequestWebcamResolution::P360,
+        client_simulator_config::WebcamResolution::P480 => types::SessionCommandRequestWebcamResolution::P480,
+        client_simulator_config::WebcamResolution::P720 => types::SessionCommandRequestWebcamResolution::P720,
+        client_simulator_config::WebcamResolution::P1080 => types::SessionCommandRequestWebcamResolution::P1080,
+        client_simulator_config::WebcamResolution::P1440 => types::SessionCommandRequestWebcamResolution::P1440,
+        client_simulator_config::WebcamResolution::P2160 => types::SessionCommandRequestWebcamResolution::P2160,
+        client_simulator_config::WebcamResolution::P4320 => types::SessionCommandRequestWebcamResolution::P4320,
+    }
+}
+
 #[cfg(test)]
 fn spawned_participants_for_test() -> &'static Mutex<Vec<String>> {
     static SPAWNED: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -372,9 +583,11 @@ mod tests {
     use crate::{
         auth::HyperSessionCookieManger,
         participant::shared::{
+            messages::ParticipantMessage,
             ParticipantDriverSession,
             ParticipantLaunchSpec,
             ParticipantSettings,
+            ParticipantState,
             ResolvedFrontendKind,
         },
     };
@@ -398,6 +611,7 @@ mod tests {
             Mutex,
         },
         time::{
+            Duration,
             SystemTime,
             UNIX_EPOCH,
         },
@@ -545,6 +759,312 @@ mod tests {
         assert_eq!(requests[3].path, "/sessions/cf-session-123/close");
     }
 
+    #[tokio::test]
+    async fn commands_map_to_worker_requests_and_refresh_state_uses_cache() {
+        let responses = VecDeque::from(vec![
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-commands",
+                    "state": worker_state_json(false, false, false, false, "none", "auto", false),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-commands",
+                    "state": worker_state_json(true, false, false, false, "none", "auto", false),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-commands",
+                    "state": worker_state_json(true, true, false, false, "none", "auto", false),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-commands",
+                    "state": worker_state_json(true, true, true, false, "none", "auto", false),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-commands",
+                    "state": worker_state_json(true, true, true, true, "none", "auto", false),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-commands",
+                    "state": worker_state_json(true, true, true, true, "deepfilternet", "auto", false),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-commands",
+                    "state": worker_state_json(true, true, true, true, "deepfilternet", "p1080", false),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-commands",
+                    "state": worker_state_json(true, true, true, true, "deepfilternet", "p1080", true),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-commands",
+                    "state": worker_state_json(false, true, true, false, "deepfilternet", "p1080", true),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-commands",
+                    "log": [],
+                }),
+            ),
+        ]);
+        let (base_url, requests, server) = spawn_http_server(responses).await;
+        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+        let (log_sender, _log_receiver) = unbounded_channel();
+        let mut session = CloudflareSession::new_for_test(
+            launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
+            CloudflareConfig {
+                base_url: Url::parse(&base_url).unwrap(),
+                request_timeout_seconds: 5,
+                session_timeout_ms: 120_000,
+                navigation_timeout_ms: 30_000,
+                selector_timeout_ms: 10_000,
+                debug: false,
+                health_poll_interval_ms: 60_000,
+            },
+            log_sender,
+            None,
+            cookie_manager,
+        );
+
+        session.start().await.unwrap();
+
+        let cases = vec![
+            (
+                ParticipantMessage::Join,
+                json!({ "type": "join" }),
+                expected_state(
+                    true,
+                    false,
+                    false,
+                    false,
+                    NoiseSuppression::Disabled,
+                    WebcamResolution::Auto,
+                    false,
+                ),
+            ),
+            (
+                ParticipantMessage::ToggleAudio,
+                json!({ "type": "toggle-audio" }),
+                expected_state(
+                    true,
+                    true,
+                    false,
+                    false,
+                    NoiseSuppression::Disabled,
+                    WebcamResolution::Auto,
+                    false,
+                ),
+            ),
+            (
+                ParticipantMessage::ToggleVideo,
+                json!({ "type": "toggle-video" }),
+                expected_state(
+                    true,
+                    true,
+                    true,
+                    false,
+                    NoiseSuppression::Disabled,
+                    WebcamResolution::Auto,
+                    false,
+                ),
+            ),
+            (
+                ParticipantMessage::ToggleScreenshare,
+                json!({ "type": "toggle-screenshare" }),
+                expected_state(
+                    true,
+                    true,
+                    true,
+                    true,
+                    NoiseSuppression::Disabled,
+                    WebcamResolution::Auto,
+                    false,
+                ),
+            ),
+            (
+                ParticipantMessage::SetNoiseSuppression(NoiseSuppression::Deepfilternet),
+                json!({ "type": "set-noise-suppression", "noiseSuppression": "deepfilternet" }),
+                expected_state(
+                    true,
+                    true,
+                    true,
+                    true,
+                    NoiseSuppression::Deepfilternet,
+                    WebcamResolution::Auto,
+                    false,
+                ),
+            ),
+            (
+                ParticipantMessage::SetWebcamResolutions(WebcamResolution::P1080),
+                json!({ "type": "set-webcam-resolution", "webcamResolution": "p1080" }),
+                expected_state(
+                    true,
+                    true,
+                    true,
+                    true,
+                    NoiseSuppression::Deepfilternet,
+                    WebcamResolution::P1080,
+                    false,
+                ),
+            ),
+            (
+                ParticipantMessage::ToggleBackgroundBlur,
+                json!({ "type": "toggle-background-blur" }),
+                expected_state(
+                    true,
+                    true,
+                    true,
+                    true,
+                    NoiseSuppression::Deepfilternet,
+                    WebcamResolution::P1080,
+                    true,
+                ),
+            ),
+            (
+                ParticipantMessage::Leave,
+                json!({ "type": "leave" }),
+                expected_state(
+                    false,
+                    true,
+                    true,
+                    false,
+                    NoiseSuppression::Deepfilternet,
+                    WebcamResolution::P1080,
+                    true,
+                ),
+            ),
+        ];
+
+        for (index, (message, expected_body, expected_state)) in cases.into_iter().enumerate() {
+            session.handle_command(message).await.unwrap();
+            let request_count_before_refresh = requests.lock().unwrap().len();
+            let state = session.refresh_state().await.unwrap();
+            assert_eq!(
+                requests.lock().unwrap().len(),
+                request_count_before_refresh,
+                "refresh_state unexpectedly triggered a network call for case {index}"
+            );
+            assert_state_matches(&state, &expected_state);
+            let request = requests.lock().unwrap().get(index + 1).unwrap().clone();
+            assert_eq!(request.method, "POST");
+            assert_eq!(request.path, "/sessions/cf-session-commands/commands");
+            assert_eq!(serde_json::from_str::<Value>(&request.body).unwrap(), expected_body);
+        }
+
+        session.close().await.unwrap();
+        server.abort();
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(requests[0].path, "/sessions");
+        assert_eq!(requests[9].method, "POST");
+        assert_eq!(requests[9].path, "/sessions/cf-session-commands/close");
+    }
+
+    #[tokio::test]
+    async fn termination_poller_reports_worker_state_failures() {
+        let responses = VecDeque::from(vec![
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-terminated",
+                    "state": worker_state_json(true, false, false, false, "none", "auto", false),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                500,
+                json!({
+                    "ok": false,
+                    "sessionId": "cf-session-terminated",
+                    "error": "Browser session missing",
+                    "log": [],
+                }),
+            ),
+        ]);
+        let (base_url, requests, server) = spawn_http_server(responses).await;
+        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+        let (log_sender, _log_receiver) = unbounded_channel();
+        let mut session = CloudflareSession::new_for_test(
+            launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
+            CloudflareConfig {
+                base_url: Url::parse(&base_url).unwrap(),
+                request_timeout_seconds: 5,
+                session_timeout_ms: 120_000,
+                navigation_timeout_ms: 30_000,
+                selector_timeout_ms: 10_000,
+                debug: false,
+                health_poll_interval_ms: 5,
+            },
+            log_sender,
+            None,
+            cookie_manager,
+        );
+
+        session.start().await.unwrap();
+
+        let termination = tokio::time::timeout(Duration::from_secs(1), session.wait_for_termination())
+            .await
+            .expect("timed out waiting for Cloudflare termination");
+
+        assert_eq!(termination.level, "warn");
+        assert!(termination.message.contains("cf-session-terminated"));
+        assert!(termination.message.contains("Browser session missing"));
+
+        server.abort();
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].method, "GET");
+        assert_eq!(requests[1].path, "/sessions/cf-session-terminated/state");
+    }
+
     fn launch_spec(frontend_kind: ResolvedFrontendKind, room_url: &str) -> ParticipantLaunchSpec {
         ParticipantLaunchSpec {
             username: "cloudflare-sim".to_owned(),
@@ -560,6 +1080,64 @@ mod tests {
                 blur: true,
             },
         }
+    }
+
+    fn worker_state_json(
+        joined: bool,
+        muted: bool,
+        video_activated: bool,
+        screenshare_activated: bool,
+        noise_suppression: &str,
+        webcam_resolution: &str,
+        background_blur: bool,
+    ) -> Value {
+        json!({
+            "running": true,
+            "joined": joined,
+            "muted": muted,
+            "videoActivated": video_activated,
+            "screenshareActivated": screenshare_activated,
+            "noiseSuppression": noise_suppression,
+            "transportMode": "webrtc",
+            "webcamResolution": webcam_resolution,
+            "backgroundBlur": background_blur,
+        })
+    }
+
+    fn expected_state(
+        joined: bool,
+        muted: bool,
+        video_activated: bool,
+        screenshare_activated: bool,
+        noise_suppression: NoiseSuppression,
+        webcam_resolution: WebcamResolution,
+        background_blur: bool,
+    ) -> ParticipantState {
+        ParticipantState {
+            username: String::new(),
+            running: true,
+            joined,
+            muted,
+            video_activated,
+            noise_suppression,
+            transport_mode: TransportMode::WebRTC,
+            webcam_resolution,
+            background_blur,
+            screenshare_activated,
+        }
+    }
+
+    fn assert_state_matches(actual: &ParticipantState, expected: &ParticipantState) {
+        assert_eq!(actual.username, expected.username);
+        assert_eq!(actual.running, expected.running);
+        assert_eq!(actual.joined, expected.joined);
+        assert_eq!(actual.muted, expected.muted);
+        assert_eq!(actual.video_activated, expected.video_activated);
+        assert_eq!(actual.noise_suppression, expected.noise_suppression);
+        assert_eq!(actual.transport_mode, expected.transport_mode);
+        assert_eq!(actual.webcam_resolution, expected.webcam_resolution);
+        assert_eq!(actual.background_blur, expected.background_blur);
+        assert_eq!(actual.screenshare_activated, expected.screenshare_activated);
     }
 
     async fn spawn_http_server(

@@ -138,7 +138,7 @@ Explicit non-goals for v1:
 
 ## Progress Tracker
 
-Overall status: `phase 3 complete`
+Overall status: `phase 4 complete`
 
 Cross-repo dependency:
 
@@ -149,7 +149,7 @@ Milestones:
 - [x] Phase 1: Freeze the worker contract and add the generated-client crate
 - [x] Phase 2: Add Cloudflare backend config and spawn wiring
 - [x] Phase 3: Implement `CloudflareSession` start and close
-- [ ] Phase 4: Implement command handling, cached state, and termination polling
+- [x] Phase 4: Implement command handling, cached state, and termination polling
 - [ ] Phase 5: Add TUI and UX handling for backend-specific limitations
 - [ ] Phase 6: Validate with unit, integration, and manual tests
 
@@ -345,10 +345,23 @@ Termination handling:
 
 TDD steps:
 
-- [ ] add one failing test per command mapping
-- [ ] add a failing test proving `refresh_state()` reflects command responses without extra network calls
-- [ ] add a failing test for unexpected termination on worker `404` or equivalent closed-session signal
-- [ ] implement command handling and polling until the tests pass
+- [x] add one failing test per command mapping
+- [x] add a failing test proving `refresh_state()` reflects command responses without extra network calls
+- [x] add a failing test for unexpected termination on worker `404` or equivalent closed-session signal
+- [x] implement command handling and polling until the tests pass
+
+Implemented in this phase:
+
+- mapped the full `ParticipantMessage` surface onto the worker command API and updated the Cloudflare cached state from each command response
+- changed `refresh_state()` to return the in-memory cached worker state instead of making extra network calls
+- added a background worker-state poller that refreshes cached state during health checks and reports unexpected worker-side session loss through `wait_for_termination()`
+- stopped the poller cleanly during intentional close so the runtime can distinguish expected shutdown from backend loss
+- expanded the Cloudflare driver tests to cover command payload mapping, cache-only refresh behavior, and termination reporting on worker-state failures
+
+Notes:
+
+- the driver now reaches command/state parity with the shared runtime contract
+- Phase 5 is still the next unimplemented slice and will focus on backend-specific UX and limitation handling
 
 Completion criteria:
 
