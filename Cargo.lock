@@ -435,6 +435,7 @@ dependencies = [
  "chromiumoxide",
  "chrono",
  "client-simulator-config",
+ "cloudflare-worker-client",
  "derive_more",
  "eyre",
  "futures",

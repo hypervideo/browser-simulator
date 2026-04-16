@@ -11,6 +11,7 @@ pub(in crate::participant) use runtime::{
 };
 pub(in crate::participant) use spec::{
     ParticipantLaunchSpec,
+    ParticipantSettings,
     ResolvedFrontendKind,
 };
 pub use state::ParticipantState;

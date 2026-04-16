@@ -13,6 +13,7 @@ use crate::participant::{
         run_participant_runtime,
         ParticipantDriverSession,
         ParticipantLaunchSpec,
+        ResolvedFrontendKind,
     },
 };
 use chrono::Utc;
@@ -150,8 +151,15 @@ impl Participant {
         })
     }
 
-    pub fn spawn_cloudflare(config: &Config, _cookie_manager: HyperSessionCookieManger) -> Result<Self> {
-        let participant_config = ParticipantConfig::new(config, None::<String>)?;
+    pub fn spawn_cloudflare(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+        let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
+        let frontend_kind = ResolvedFrontendKind::from_session_url(&session_url);
+        let base_url = session_url.origin().unicode_serialization();
+        let cookie = matches!(frontend_kind, ResolvedFrontendKind::HyperCore)
+            .then(|| cookie_manager.give_cookie(&base_url))
+            .flatten();
+        let name = cookie.as_ref().map(BorrowedCookie::username);
+        let participant_config = ParticipantConfig::new(config, name)?;
         let launch_spec = ParticipantLaunchSpec::from(participant_config);
         let name = launch_spec.username.clone();
 
@@ -161,7 +169,13 @@ impl Participant {
             name.clone(),
             receiver,
             log_sender.clone(),
-            cloudflare::CloudflareSession::new(launch_spec, config.cloudflare.clone(), log_sender),
+            cloudflare::CloudflareSession::new(
+                launch_spec,
+                config.cloudflare.clone(),
+                log_sender,
+                cookie,
+                cookie_manager,
+            ),
         );
 
         Ok(Self {

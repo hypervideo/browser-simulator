@@ -138,7 +138,7 @@ Explicit non-goals for v1:
 
 ## Progress Tracker
 
-Overall status: `phase 2 complete`
+Overall status: `phase 3 complete`
 
 Cross-repo dependency:
 
@@ -148,7 +148,7 @@ Milestones:
 
 - [x] Phase 1: Freeze the worker contract and add the generated-client crate
 - [x] Phase 2: Add Cloudflare backend config and spawn wiring
-- [ ] Phase 3: Implement `CloudflareSession` start and close
+- [x] Phase 3: Implement `CloudflareSession` start and close
 - [ ] Phase 4: Implement command handling, cached state, and termination polling
 - [ ] Phase 5: Add TUI and UX handling for backend-specific limitations
 - [ ] Phase 6: Validate with unit, integration, and manual tests
@@ -264,12 +264,8 @@ Recommended `CloudflareSession` fields:
 - `launch_spec: ParticipantLaunchSpec`
 - `cloudflare_config: CloudflareConfig`
 - `log_sender: UnboundedSender<ParticipantLogMessage>`
-- `api: CloudflareWorkerClient`
 - `session_id: Option<String>`
 - `cached_state: ParticipantState`
-- `termination_task: Option<JoinHandle<DriverTermination>>`
-- `termination_rx: watch::Receiver<Option<DriverTermination>>`
-- `closing: bool`
 - auth dependencies needed to lazily obtain a cookie for Hyper Core
 
 `start()` should:
@@ -280,21 +276,34 @@ Recommended `CloudflareSession` fields:
 - store `sessionId`
 - initialize `cached_state` from the worker response
 - forward worker log entries into the participant log channel
-- start the background health poll used by `wait_for_termination()`
 
 `close()` should:
 
 - call the worker close endpoint if a session exists
-- stop the termination poll
 - clear local session state
 - be idempotent
 
 TDD steps:
 
-- [ ] add a failing integration test against a mock worker for successful start
-- [ ] add a failing integration test for close-after-start
-- [ ] add a failing test for Hyper Core cookie injection into the create request
-- [ ] implement `start()` and `close()` until those tests pass
+- [x] add a failing integration test against a mock worker for successful start
+- [x] add a failing integration test for close-after-start
+- [x] add a failing test for Hyper Core cookie injection into the create request
+- [x] implement `start()` and `close()` until those tests pass
+
+Implemented in this phase:
+
+- added `cloudflare-worker-client` as a browser-crate dependency and used it from the Cloudflare driver lifecycle
+- replaced the placeholder `CloudflareSession` start failure with real worker `create_session` and `close_session` calls
+- reused an already-borrowed Hyper Core cookie when available and otherwise fetched one locally through `HyperSessionCookieManger` before sending only the raw cookie value to the worker
+- mapped `ParticipantLaunchSpec` settings into the worker create request and mapped worker participant state back into Rust `ParticipantState`
+- cached the initial worker state locally so the shared runtime can publish accurate state immediately after startup
+- made `close()` idempotent when no worker session exists
+- added a mock-HTTP lifecycle test covering guest-cookie fetch, worker create payload, initial state caching, and worker close dispatch
+
+Notes:
+
+- `handle_command()` still returns an explicit "not implemented yet" error for Cloudflare commands
+- `wait_for_termination()` is still pending and will be implemented with worker state polling in Phase 4
 
 Completion criteria:
 
