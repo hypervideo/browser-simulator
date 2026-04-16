@@ -67,7 +67,7 @@ impl ParticipantStore {
 
     fn sorted(&self) -> IntoIter<Participant> {
         let mut participants = self.inner.lock().unwrap().values().cloned().collect::<Vec<_>>();
-        participants.sort_by(|a, b| a.created.cmp(&b.created));
+        participants.sort_by_key(|a| a.created);
 
         participants.into_iter()
     }
