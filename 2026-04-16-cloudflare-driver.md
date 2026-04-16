@@ -138,7 +138,7 @@ Explicit non-goals for v1:
 
 ## Progress Tracker
 
-Overall status: `phase 4 complete`
+Overall status: `phase 5 complete`
 
 Cross-repo dependency:
 
@@ -150,7 +150,7 @@ Milestones:
 - [x] Phase 2: Add Cloudflare backend config and spawn wiring
 - [x] Phase 3: Implement `CloudflareSession` start and close
 - [x] Phase 4: Implement command handling, cached state, and termination polling
-- [ ] Phase 5: Add TUI and UX handling for backend-specific limitations
+- [x] Phase 5: Add TUI and UX handling for backend-specific limitations
 - [ ] Phase 6: Validate with unit, integration, and manual tests
 
 ## Detailed Plan
@@ -393,9 +393,22 @@ Optional follow-up, not required for the first implementation:
 
 TDD steps:
 
-- [ ] add a failing test for transport normalization
-- [ ] add a failing test for ignored fake-media settings producing a log entry
-- [ ] implement the minimal UX behavior needed for those tests
+- [x] add a failing test for transport normalization
+- [x] add a failing test for ignored fake-media settings producing a log entry
+- [x] implement the minimal UX behavior needed for those tests
+
+Implemented in this phase:
+
+- added Cloudflare-only launch-option handling so the driver can reason about headless and fake-media selections without introducing TUI-specific branching into the shared runtime
+- normalized Cloudflare create-session requests to `WebRTC` when the user configured `WebTransport`, and emitted a warning log explaining the normalization
+- added warning logs when the Cloudflare backend is asked to honor `headless: false` or a local fake-media file/URL selection that the worker cannot use
+- kept the existing TUI layout and controls unchanged so backend-specific behavior stays visible through logs and resulting participant state instead of extra UI forks
+- expanded the Cloudflare driver tests to cover transport normalization plus ignored-setting log emission
+
+Notes:
+
+- the simulator still exposes the existing controls, but Cloudflare-specific limitations are now surfaced predictably at session start
+- Phase 6 remains the next open slice and is limited to broader automated and manual validation
 
 Completion criteria:
 

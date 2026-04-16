@@ -171,6 +171,7 @@ impl Participant {
             log_sender.clone(),
             cloudflare::CloudflareSession::new(
                 launch_spec,
+                cloudflare::CloudflareLaunchOptions::from(config),
                 config.cloudflare.clone(),
                 log_sender,
                 cookie,

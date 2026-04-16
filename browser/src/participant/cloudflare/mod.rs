@@ -15,7 +15,11 @@ use crate::{
         ResolvedFrontendKind,
     },
 };
-use client_simulator_config::CloudflareConfig;
+use client_simulator_config::{
+    media::FakeMedia,
+    CloudflareConfig,
+    TransportMode,
+};
 use cloudflare_worker_client::{
     types,
     CloudflareWorkerClient,
@@ -55,8 +59,24 @@ enum CloudflareAuth {
     HyperLite,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct CloudflareLaunchOptions {
+    headless: bool,
+    fake_media: FakeMedia,
+}
+
+impl From<&client_simulator_config::Config> for CloudflareLaunchOptions {
+    fn from(config: &client_simulator_config::Config) -> Self {
+        Self {
+            headless: config.headless,
+            fake_media: config.fake_media(),
+        }
+    }
+}
+
 pub(super) struct CloudflareSession {
     launch_spec: ParticipantLaunchSpec,
+    launch_options: CloudflareLaunchOptions,
     cloudflare_config: CloudflareConfig,
     sender: UnboundedSender<ParticipantLogMessage>,
     auth: CloudflareAuth,
@@ -106,16 +126,26 @@ fn store_cached_state(cached_state: &Arc<Mutex<ParticipantState>>, state: &types
 impl CloudflareSession {
     pub(super) fn new(
         launch_spec: ParticipantLaunchSpec,
+        launch_options: CloudflareLaunchOptions,
         cloudflare_config: CloudflareConfig,
         sender: UnboundedSender<ParticipantLogMessage>,
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
     ) -> Self {
-        Self::build(launch_spec, cloudflare_config, sender, cookie, cookie_manager, true)
+        Self::build(
+            launch_spec,
+            launch_options,
+            cloudflare_config,
+            sender,
+            cookie,
+            cookie_manager,
+            true,
+        )
     }
 
     fn build(
         launch_spec: ParticipantLaunchSpec,
+        launch_options: CloudflareLaunchOptions,
         cloudflare_config: CloudflareConfig,
         sender: UnboundedSender<ParticipantLogMessage>,
         cookie: Option<BorrowedCookie>,
@@ -144,6 +174,7 @@ impl CloudflareSession {
                 ..Default::default()
             })),
             launch_spec,
+            launch_options,
             cloudflare_config,
             sender,
             auth,
@@ -158,12 +189,21 @@ impl CloudflareSession {
     #[cfg(test)]
     fn new_for_test(
         launch_spec: ParticipantLaunchSpec,
+        launch_options: CloudflareLaunchOptions,
         cloudflare_config: CloudflareConfig,
         sender: UnboundedSender<ParticipantLogMessage>,
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
     ) -> Self {
-        Self::build(launch_spec, cloudflare_config, sender, cookie, cookie_manager, false)
+        Self::build(
+            launch_spec,
+            launch_options,
+            cloudflare_config,
+            sender,
+            cookie,
+            cookie_manager,
+            false,
+        )
     }
 
     fn log_message(&self, level: &str, message: impl ToString) {
@@ -180,6 +220,41 @@ impl CloudflareSession {
 
     fn log_worker_entries(&self, entries: &[types::AutomationLogEntry]) {
         forward_worker_entries(&self.sender, &self.launch_spec.username, entries);
+    }
+
+    fn log_backend_limitations(&self) {
+        if !self.launch_options.headless {
+            self.log_message(
+                "warn",
+                "Cloudflare backend ignores headless=false because worker sessions are always headless",
+            );
+        }
+
+        if let FakeMedia::FileOrUrl(source) = &self.launch_options.fake_media {
+            self.log_message(
+                "warn",
+                format!(
+                    "Cloudflare backend ignores local fake media source `{source}` and will use worker-provided media instead"
+                ),
+            );
+        }
+    }
+
+    fn normalized_settings(&self) -> crate::participant::shared::ParticipantSettings {
+        let mut settings = self.launch_spec.settings.clone();
+
+        if settings.transport != TransportMode::WebRTC {
+            self.log_message(
+                "warn",
+                format!(
+                    "Cloudflare backend only supports WebRTC transport; normalizing configured {} transport to WebRTC",
+                    settings.transport
+                ),
+            );
+            settings.transport = TransportMode::WebRTC;
+        }
+
+        settings
     }
 
     async fn ensure_hyper_session_cookie(&mut self) -> Result<Option<String>> {
@@ -200,6 +275,8 @@ impl CloudflareSession {
     }
 
     async fn build_create_request(&mut self) -> Result<types::SessionCreateRequest> {
+        self.log_backend_limitations();
+        let normalized_settings = self.normalized_settings();
         let hyper_session_cookie = self
             .ensure_hyper_session_cookie()
             .await?
@@ -217,7 +294,7 @@ impl CloudflareSession {
             room_url: self.launch_spec.session_url.to_string(),
             selector_timeout_ms: Some(self.cloudflare_config.selector_timeout_ms as f64),
             session_timeout_ms: Some(self.cloudflare_config.session_timeout_ms as f64),
-            settings: map_settings(&self.launch_spec.settings),
+            settings: map_settings(&normalized_settings),
         })
     }
 
@@ -579,7 +656,10 @@ pub(crate) fn take_spawned_participants_for_test() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::CloudflareSession;
+    use super::{
+        CloudflareLaunchOptions,
+        CloudflareSession,
+    };
     use crate::{
         auth::HyperSessionCookieManger,
         participant::shared::{
@@ -593,6 +673,7 @@ mod tests {
     };
     use chrono::Utc;
     use client_simulator_config::{
+        media::FakeMedia,
         CloudflareConfig,
         NoiseSuppression,
         TransportMode,
@@ -686,6 +767,7 @@ mod tests {
         let (log_sender, _log_receiver) = unbounded_channel();
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperCore, &format!("{base_url}/room/demo")),
+            launch_options(false, FakeMedia::None),
             CloudflareConfig {
                 base_url: Url::parse(&base_url).unwrap(),
                 request_timeout_seconds: 5,
@@ -857,6 +939,7 @@ mod tests {
         let (log_sender, _log_receiver) = unbounded_channel();
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
+            launch_options(false, FakeMedia::None),
             CloudflareConfig {
                 base_url: Url::parse(&base_url).unwrap(),
                 request_timeout_seconds: 5,
@@ -1007,6 +1090,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_normalizes_webtransport_to_webrtc_for_cloudflare() {
+        let responses = VecDeque::from(vec![
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-webrtc",
+                    "state": worker_state_json(false, false, false, false, "rnnoise", "p720", true),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-webrtc",
+                    "log": [],
+                }),
+            ),
+        ]);
+        let (base_url, requests, server) = spawn_http_server(responses).await;
+        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+        let (log_sender, mut log_receiver) = unbounded_channel();
+        let mut spec = launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo"));
+        spec.settings.transport = TransportMode::WebTransport;
+        let mut session = CloudflareSession::new_for_test(
+            spec,
+            launch_options(false, FakeMedia::None),
+            CloudflareConfig {
+                base_url: Url::parse(&base_url).unwrap(),
+                request_timeout_seconds: 5,
+                session_timeout_ms: 120_000,
+                navigation_timeout_ms: 30_000,
+                selector_timeout_ms: 10_000,
+                debug: false,
+                health_poll_interval_ms: 60_000,
+            },
+            log_sender,
+            None,
+            cookie_manager,
+        );
+
+        session.start().await.unwrap();
+
+        let state = session.refresh_state().await.unwrap();
+        assert_eq!(state.transport_mode, TransportMode::WebRTC);
+
+        session.close().await.unwrap();
+        server.abort();
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(requests[0].path, "/sessions");
+        assert_eq!(
+            serde_json::from_str::<Value>(&requests[0].body).unwrap()["settings"]["transport"],
+            json!("webrtc")
+        );
+
+        let logs = drain_log_messages(&mut log_receiver);
+        assert!(logs.iter().any(|message| {
+            message.contains("only supports WebRTC transport") && message.contains("normalizing configured")
+        }));
+    }
+
+    #[tokio::test]
+    async fn start_logs_ignored_headless_and_fake_media_settings_for_cloudflare() {
+        let responses = VecDeque::from(vec![
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-limitations",
+                    "state": worker_state_json(false, false, false, false, "rnnoise", "p720", true),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-limitations",
+                    "log": [],
+                }),
+            ),
+        ]);
+        let (base_url, _requests, server) = spawn_http_server(responses).await;
+        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+        let (log_sender, mut log_receiver) = unbounded_channel();
+        let mut session = CloudflareSession::new_for_test(
+            launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
+            launch_options(
+                false,
+                FakeMedia::FileOrUrl("https://example.com/fake-media.mp4".to_owned()),
+            ),
+            CloudflareConfig {
+                base_url: Url::parse(&base_url).unwrap(),
+                request_timeout_seconds: 5,
+                session_timeout_ms: 120_000,
+                navigation_timeout_ms: 30_000,
+                selector_timeout_ms: 10_000,
+                debug: false,
+                health_poll_interval_ms: 60_000,
+            },
+            log_sender,
+            None,
+            cookie_manager,
+        );
+
+        session.start().await.unwrap();
+        session.close().await.unwrap();
+        server.abort();
+
+        let logs = drain_log_messages(&mut log_receiver);
+        assert!(logs.iter().any(|message| message.contains("ignores headless=false")));
+        assert!(logs.iter().any(|message| {
+            message.contains("ignores local fake media source")
+                && message.contains("https://example.com/fake-media.mp4")
+        }));
+    }
+
+    #[tokio::test]
     async fn termination_poller_reports_worker_state_failures() {
         let responses = VecDeque::from(vec![
             MockResponse::json(
@@ -1033,6 +1237,7 @@ mod tests {
         let (log_sender, _log_receiver) = unbounded_channel();
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
+            launch_options(false, FakeMedia::None),
             CloudflareConfig {
                 base_url: Url::parse(&base_url).unwrap(),
                 request_timeout_seconds: 5,
@@ -1063,6 +1268,10 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1].method, "GET");
         assert_eq!(requests[1].path, "/sessions/cf-session-terminated/state");
+    }
+
+    fn launch_options(headless: bool, fake_media: FakeMedia) -> CloudflareLaunchOptions {
+        CloudflareLaunchOptions { headless, fake_media }
     }
 
     fn launch_spec(frontend_kind: ResolvedFrontendKind, room_url: &str) -> ParticipantLaunchSpec {
@@ -1138,6 +1347,18 @@ mod tests {
         assert_eq!(actual.webcam_resolution, expected.webcam_resolution);
         assert_eq!(actual.background_blur, expected.background_blur);
         assert_eq!(actual.screenshare_activated, expected.screenshare_activated);
+    }
+
+    fn drain_log_messages(
+        log_receiver: &mut tokio::sync::mpsc::UnboundedReceiver<
+            crate::participant::shared::messages::ParticipantLogMessage,
+        >,
+    ) -> Vec<String> {
+        let mut messages = Vec::new();
+        while let Ok(message) = log_receiver.try_recv() {
+            messages.push(message.message);
+        }
+        messages
     }
 
     async fn spawn_http_server(
