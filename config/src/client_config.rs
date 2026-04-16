@@ -72,6 +72,7 @@ pub enum NoiseSuppression {
 pub enum ParticipantBackendKind {
     #[default]
     Local,
+    Cloudflare,
     RemoteStub,
 }
 

@@ -5,7 +5,10 @@ use crate::{
     },
     participant::Participant,
 };
-use client_simulator_config::Config;
+use client_simulator_config::{
+    Config,
+    ParticipantBackendKind,
+};
 use eyre::Result;
 use std::{
     collections::HashMap,
@@ -36,16 +39,22 @@ impl ParticipantStore {
         &self.cookies
     }
 
-    pub fn spawn_local(&self, config: &Config) -> Result<()> {
-        let participant = Participant::spawn_with_app_config(config, self.cookies.clone())?;
+    pub fn spawn(&self, config: &Config) -> Result<()> {
+        let participant = Participant::spawn(config, self.cookies.clone())?;
         self.add(participant);
         Ok(())
     }
 
+    pub fn spawn_local(&self, config: &Config) -> Result<()> {
+        let mut config = config.clone();
+        config.backend = ParticipantBackendKind::Local;
+        self.spawn(&config)
+    }
+
     pub fn spawn_remote_stub(&self, config: &Config) -> Result<()> {
-        let participant = Participant::spawn_remote_stub(config, self.cookies.clone())?;
-        self.add(participant);
-        Ok(())
+        let mut config = config.clone();
+        config.backend = ParticipantBackendKind::RemoteStub;
+        self.spawn(&config)
     }
 
     pub fn len(&self) -> usize {
@@ -87,5 +96,54 @@ impl ParticipantStore {
         let sorted = self.sorted().collect::<Vec<_>>();
         let index = sorted.iter().position(|p| p.name == name)?;
         (index > 0).then(|| sorted[index - 1].name.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ParticipantStore;
+    use crate::participant::cloudflare::take_spawned_participants_for_test;
+    use client_simulator_config::{
+        Config,
+        ParticipantBackendKind,
+    };
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{
+            SystemTime,
+            UNIX_EPOCH,
+        },
+    };
+    use url::Url;
+
+    #[tokio::test]
+    async fn spawn_dispatches_cloudflare_backend_to_cloudflare_constructor() {
+        let _ = take_spawned_participants_for_test();
+
+        let data_dir = unique_test_data_dir();
+        fs::create_dir_all(&data_dir).expect("create temp data dir");
+
+        let store = ParticipantStore::new(&data_dir);
+        let config = Config {
+            url: Some(Url::parse("https://example.com/space/demo").expect("valid url")),
+            backend: ParticipantBackendKind::Cloudflare,
+            ..Default::default()
+        };
+
+        store.spawn(&config).expect("spawn should dispatch");
+        tokio::task::yield_now().await;
+
+        let spawned = take_spawned_participants_for_test();
+        assert_eq!(spawned.len(), 1);
+        assert_eq!(spawned, store.keys());
+    }
+
+    fn unique_test_data_dir() -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("hyper-browser-simulator-store-test-{timestamp}"))
     }
 }

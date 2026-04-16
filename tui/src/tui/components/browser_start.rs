@@ -596,17 +596,8 @@ impl Component for BrowserStart {
                     return Ok(None);
                 }
 
-                match self.config.backend {
-                    ParticipantBackendKind::Local => {
-                        if let Err(e) = self.participant_store.spawn_local(&self.config) {
-                            error!(?e, "Failed to spawn local participant");
-                        }
-                    }
-                    ParticipantBackendKind::RemoteStub => {
-                        if let Err(e) = self.participant_store.spawn_remote_stub(&self.config) {
-                            error!(?e, "Failed to spawn remote participant stub");
-                        }
-                    }
+                if let Err(e) = self.participant_store.spawn(&self.config) {
+                    error!(backend = %self.config.backend, ?e, "Failed to spawn participant");
                 }
 
                 return Ok(Some(Action::ParticipantCountChanged(self.participant_store.len())));

@@ -18,6 +18,7 @@ use crate::participant::{
 use chrono::Utc;
 use client_simulator_config::{
     Config,
+    ParticipantBackendKind,
     ParticipantConfig,
 };
 use eyre::{
@@ -68,6 +69,14 @@ impl Participant {
     pub fn spawn_with_app_config(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
         let (participant, _) = Self::spawn_with_app_config_and_receiver(config, cookie_manager)?;
         Ok(participant)
+    }
+
+    pub fn spawn(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+        match config.backend {
+            ParticipantBackendKind::Local => Self::spawn_with_app_config(config, cookie_manager),
+            ParticipantBackendKind::Cloudflare => Self::spawn_cloudflare(config, cookie_manager),
+            ParticipantBackendKind::RemoteStub => Self::spawn_remote_stub(config, cookie_manager),
+        }
     }
 
     pub fn spawn_with_app_config_and_receiver(
@@ -130,6 +139,29 @@ impl Participant {
             receiver,
             log_sender.clone(),
             RemoteStubSession::new(launch_spec, log_sender),
+        );
+
+        Ok(Self {
+            name,
+            created: Utc::now(),
+            state: state_receiver,
+            _participant_task_guard: task_guard,
+            sender,
+        })
+    }
+
+    pub fn spawn_cloudflare(config: &Config, _cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+        let participant_config = ParticipantConfig::new(config, None::<String>)?;
+        let launch_spec = ParticipantLaunchSpec::from(participant_config);
+        let name = launch_spec.username.clone();
+
+        let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
+        let (log_sender, _log_receiver) = unbounded_channel::<ParticipantLogMessage>();
+        let (state_receiver, task_guard) = spawn_session(
+            name.clone(),
+            receiver,
+            log_sender.clone(),
+            cloudflare::CloudflareSession::new(launch_spec, config.cloudflare.clone(), log_sender),
         );
 
         Ok(Self {

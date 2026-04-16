@@ -138,7 +138,7 @@ Explicit non-goals for v1:
 
 ## Progress Tracker
 
-Overall status: `phase 1 complete`
+Overall status: `phase 2 complete`
 
 Cross-repo dependency:
 
@@ -147,7 +147,7 @@ Cross-repo dependency:
 Milestones:
 
 - [x] Phase 1: Freeze the worker contract and add the generated-client crate
-- [ ] Phase 2: Add Cloudflare backend config and spawn wiring
+- [x] Phase 2: Add Cloudflare backend config and spawn wiring
 - [ ] Phase 3: Implement `CloudflareSession` start and close
 - [ ] Phase 4: Implement command handling, cached state, and termination polling
 - [ ] Phase 5: Add TUI and UX handling for backend-specific limitations
@@ -230,9 +230,23 @@ Recommended simplification:
 
 TDD steps:
 
-- [ ] add failing config parsing tests for `backend: cloudflare` and the nested `cloudflare` block
-- [ ] add a failing store test proving backend dispatch reaches the Cloudflare constructor
-- [ ] implement the config and dispatch changes until the tests pass
+- [x] add failing config parsing tests for `backend: cloudflare` and the nested `cloudflare` block
+- [x] add a failing store test proving backend dispatch reaches the Cloudflare constructor
+- [x] implement the config and dispatch changes until the tests pass
+
+Implemented in this phase:
+
+- extended `ParticipantBackendKind` with `cloudflare`
+- added `CloudflareConfig` in `config/` and threaded it through `Config` plus the default YAML
+- updated config parsing tests to cover `backend: cloudflare` and the nested `cloudflare` block
+- replaced the TUI's direct local vs remote-stub branching with `ParticipantStore::spawn(config)` backend dispatch
+- added `Participant::spawn(config, ...)` and `Participant::spawn_cloudflare(...)` dispatch wiring
+- added a minimal `CloudflareSession` placeholder so the Cloudflare backend path can be constructed and routed without implementing the real driver yet
+- added a browser-store test proving Cloudflare backend dispatch reaches the Cloudflare constructor
+
+Notes:
+
+- the Cloudflare backend now parses and dispatches correctly, but the placeholder session still returns an explicit "not implemented yet" start error until Phase 3
 
 Completion criteria:
 
