@@ -138,7 +138,7 @@ Explicit non-goals for v1:
 
 ## Progress Tracker
 
-Overall status: `phase 5 complete`
+Overall status: `phase 6 automated validation added; manual smoke validation pending`
 
 Cross-repo dependency:
 
@@ -445,6 +445,19 @@ Manual validation:
 - join a Hyper Core room
 - join a Hyper Lite room
 - exercise audio, video, screenshare, noise suppression, resolution, blur, leave, and close
+
+Implemented in this phase:
+
+- added `browser/tests/cloudflare_driver.rs` to exercise the Cloudflare backend through the public `Participant` runtime instead of the driver internals
+- covered a Hyper Lite end-to-end flow where mocked worker responses drive the shared participant state through start, join, audio toggle, video toggle, and close
+- covered a command-failure path to prove the shared runtime keeps the participant alive after a worker command error and can still close cleanly
+- covered unexpected termination handling by letting the worker state poll fail and asserting the public participant state transitions to stopped
+- covered the Hyper Core auth path through the public backend spawn flow, including guest-cookie fetch, `/api/v1/auth/me/name`, and propagation of the fetched `hyper_session` cookie into the worker create request
+
+Notes:
+
+- existing unit coverage in `browser/src/participant/cloudflare/mod.rs` and config/runtime tests remain in place; this phase adds the missing browser-level integration layer on top
+- manual smoke validation against a real local worker has not been executed yet, so this phase is not marked complete
 
 Completion criteria:
 
