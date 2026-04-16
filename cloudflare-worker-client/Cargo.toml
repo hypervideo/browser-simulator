@@ -1,0 +1,30 @@
+[package]
+name = "cloudflare-worker-client"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+[dependencies]
+chrono.workspace = true
+eyre.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+
+progenitor-client = "0.13.0"
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "query", "rustls", "stream"] }
+
+[build-dependencies]
+openapiv3 = "2.2.0"
+prettyplease = "0.2.37"
+progenitor = "0.13.0"
+serde_json.workspace = true
+syn = "2.0.106"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "net", "time"] }
+
+[lints]
+workspace = true

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   ".",
   "browser",
+  "cloudflare-worker-client",
   "config",
   "tui",
 ]
@@ -55,6 +56,7 @@ which = "8.0.0"
 client-simulator-browser = { path = "./browser" }
 client-simulator-config = { path = "./config" }
 client-simulator-tui = { path = "./tui" }
+cloudflare-worker-client = { path = "./cloudflare-worker-client" }
 
 [workspace.lints.clippy]
 # Allows for simpler exports.

@@ -138,7 +138,7 @@ Explicit non-goals for v1:
 
 ## Progress Tracker
 
-Overall status: `not started`
+Overall status: `phase 1 complete`
 
 Cross-repo dependency:
 
@@ -146,7 +146,7 @@ Cross-repo dependency:
 
 Milestones:
 
-- [ ] Phase 1: Freeze the worker contract and add the generated-client crate
+- [x] Phase 1: Freeze the worker contract and add the generated-client crate
 - [ ] Phase 2: Add Cloudflare backend config and spawn wiring
 - [ ] Phase 3: Implement `CloudflareSession` start and close
 - [ ] Phase 4: Implement command handling, cached state, and termination polling
@@ -175,9 +175,17 @@ Changes:
 
 TDD steps:
 
-- [ ] add a failing test for client construction and base URL normalization
-- [ ] add a failing test for worker error translation into actionable Rust errors
-- [ ] implement the wrapper until those tests pass
+- [x] add a failing test for client construction and base URL normalization
+- [x] add a failing test for worker error translation into actionable Rust errors
+- [x] implement the wrapper until those tests pass
+
+Implemented in this phase:
+
+- added the `cloudflare-worker-client` workspace crate
+- copied the canonical worker OpenAPI spec into `cloudflare-worker-client/openapi/cloudflare-browser-simulator.json`
+- added `build.rs`-driven client generation with `progenitor`
+- exposed a thin wrapper with base URL normalization, typed session helpers, and `eyre` error formatting
+- added focused unit tests covering base URL normalization and actionable worker error translation
 
 Completion criteria:
 
