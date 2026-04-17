@@ -13,47 +13,50 @@ use crate::{
             lite::ParticipantInnerLite,
         },
         shared::{
-            messages::{
-                ParticipantLogMessage,
-                ParticipantMessage,
-            },
             DriverTermination,
             ParticipantDriverSession,
             ParticipantLaunchSpec,
             ResolvedFrontendKind,
+            messages::{
+                ParticipantLogMessage,
+                ParticipantMessage,
+            },
         },
     },
 };
 use chromiumoxide::{
+    Browser,
+    Handler,
+    Page,
     browser,
     cdp::browser_protocol::target::{
         CreateTargetParams,
         EventDetachedFromTarget,
     },
-    Browser,
-    Handler,
-    Page,
 };
 use client_simulator_config::{
+    BrowserConfig,
     media::{
         FakeMedia,
         FakeMediaFiles,
     },
-    BrowserConfig,
 };
 use eyre::{
-    bail,
     Context as _,
     ContextCompat as _,
     Result,
+    bail,
 };
 use futures::{
-    future::BoxFuture,
     FutureExt as _,
     StreamExt as _,
+    future::BoxFuture,
 };
 use std::{
-    path::PathBuf,
+    path::{
+        Path,
+        PathBuf,
+    },
     sync::Arc,
 };
 use tokio::{
@@ -297,18 +300,94 @@ impl LocalFrontendBuilder {
     }
 }
 
+const CHROME_BINARY_NAMES: &[&str] = &["chromium", "google-chrome", "google-chrome-stable", "chrome"];
+const MACOS_GOOGLE_CHROME_APP_BINARY: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const MACOS_CHROMIUM_APP_BINARY: &str = "/Applications/Chromium.app/Contents/MacOS/Chromium";
+const MACOS_USER_GOOGLE_CHROME_APP_BINARY: &str = "Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
 fn get_binary() -> Result<PathBuf> {
-    let chrome = ["chromium", "google-chrome", "google-chrome-stable", "chrome"]
+    let chrome = resolve_binary_with(
+        |name| which::which(name).ok(),
+        macos_app_bundle_candidates(),
+        is_executable_file,
+    )
+    .ok_or_else(|| eyre::eyre!("failed to find chromium or google-chrome binary"))?;
+    debug!(?chrome, "chrome found at");
+    Ok(chrome)
+}
+
+fn resolve_binary_with<Lookup, Candidates, Exists>(
+    path_lookup: Lookup,
+    fallback_candidates: Candidates,
+    is_executable: Exists,
+) -> Option<PathBuf>
+where
+    Lookup: Fn(&str) -> Option<PathBuf>,
+    Candidates: IntoIterator<Item = PathBuf>,
+    Exists: Fn(&Path) -> bool,
+{
+    CHROME_BINARY_NAMES
         .iter()
         .find_map(|name| {
-            which::which(name).ok().map(|path| {
+            path_lookup(name).map(|path| {
                 debug!(?path, "found {} at", name);
                 path
             })
         })
-        .ok_or_else(|| eyre::eyre!("failed to find chromium or google-chrome binary"))?;
-    debug!(?chrome, "chrome found at");
-    Ok(chrome)
+        .or_else(|| {
+            fallback_candidates.into_iter().find(|path| {
+                let found = is_executable(path);
+                if found {
+                    debug!(?path, "found chrome app-bundle executable");
+                }
+                found
+            })
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_bundle_candidates() -> Vec<PathBuf> {
+    build_macos_app_bundle_candidates(std::env::var_os("HOME").map(PathBuf::from))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_app_bundle_candidates() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+fn build_macos_app_bundle_candidates(home_dir: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut candidates = vec![
+        PathBuf::from(MACOS_GOOGLE_CHROME_APP_BINARY),
+        PathBuf::from(MACOS_CHROMIUM_APP_BINARY),
+    ];
+
+    if let Some(home_dir) = home_dir {
+        candidates.push(home_dir.join(MACOS_USER_GOOGLE_CHROME_APP_BINARY));
+    }
+
+    candidates
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        metadata.permissions().mode() & 0o111 != 0
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Handler)> {
@@ -372,6 +451,62 @@ async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Hand
     browser::Browser::launch(config)
         .await
         .context("failed to launch browser")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn resolve_binary_prefers_path_lookup_before_fallbacks() {
+        let looked_up = RefCell::new(Vec::new());
+
+        let resolved = resolve_binary_with(
+            |name| {
+                looked_up.borrow_mut().push(name.to_string());
+                (name == "google-chrome").then(|| PathBuf::from("/usr/local/bin/google-chrome"))
+            },
+            vec![PathBuf::from(MACOS_GOOGLE_CHROME_APP_BINARY)],
+            |_| true,
+        );
+
+        assert_eq!(resolved, Some(PathBuf::from("/usr/local/bin/google-chrome")));
+        assert_eq!(
+            looked_up.into_inner(),
+            vec!["chromium".to_string(), "google-chrome".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_binary_returns_first_existing_fallback() {
+        let first = PathBuf::from(MACOS_GOOGLE_CHROME_APP_BINARY);
+        let second = PathBuf::from(MACOS_CHROMIUM_APP_BINARY);
+
+        let resolved = resolve_binary_with(
+            |_| None,
+            vec![first.clone(), second.clone()],
+            |path| path == second.as_path(),
+        );
+
+        assert_eq!(resolved, Some(second));
+    }
+
+    #[test]
+    fn build_macos_candidates_adds_user_applications_chrome() {
+        let home_dir = PathBuf::from("/Users/tester");
+
+        let candidates = build_macos_app_bundle_candidates(Some(home_dir.clone()));
+
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from(MACOS_GOOGLE_CHROME_APP_BINARY),
+                PathBuf::from(MACOS_CHROMIUM_APP_BINARY),
+                home_dir.join(MACOS_USER_GOOGLE_CHROME_APP_BINARY),
+            ]
+        );
+    }
 }
 
 fn drive_browser_events(

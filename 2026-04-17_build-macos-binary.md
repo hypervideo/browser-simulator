@@ -81,7 +81,7 @@ Notes:
 
 ### 3. Extend Chrome discovery for normal macOS installs
 
-STATUS: unimplemented
+STATUS: completed
 
 Objective:
 
