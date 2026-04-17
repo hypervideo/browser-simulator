@@ -12,7 +12,8 @@ members = [
 version = "0.1.0"
 authors = ["hyper.video <info@hyper.video>"]
 edition = "2021"
-repository = "https://github.com/hypervideo/hyper.video"
+homepage = "https://github.com/hypervideo/browser-simulator"
+repository = "https://github.com/hypervideo/browser-simulator"
 
 [workspace.dependencies]
 better-panic = "0.3.0"
@@ -74,6 +75,8 @@ name = "client-simulator"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
+description = "A Rust TUI for simulating Chromium-backed browser participants against hyper.video sessions."
+homepage.workspace = true
 repository.workspace = true
 
 [dependencies]
@@ -105,3 +108,8 @@ development = [
 
 [lints]
 workspace = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
