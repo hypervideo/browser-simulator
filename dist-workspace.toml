@@ -13,3 +13,7 @@ installers = []
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 # Where to host releases
 hosting = "github"
+
+[dist.github-custom-runners]
+aarch64-apple-darwin = "blacksmith-12vcpu-macos-latest"
+x86_64-apple-darwin = "blacksmith-12vcpu-macos-latest"

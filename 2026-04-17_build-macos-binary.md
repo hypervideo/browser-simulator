@@ -143,7 +143,7 @@ Notes:
 
 ### 5. Route macOS targets to Blacksmith macOS runners
 
-STATUS: unimplemented
+STATUS: completed
 
 Objective:
 
