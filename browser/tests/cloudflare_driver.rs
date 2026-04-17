@@ -92,8 +92,11 @@ async fn cloudflare_runtime_updates_public_participant_state_from_worker_command
     ]);
     let (base_url, requests, server) = spawn_http_server(responses).await;
     let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
-    let participant = Participant::spawn(&cloudflare_config(&format!("{base_url}/m/demo"), &base_url, 60_000), cookie_manager)
-        .expect("cloudflare participant should spawn");
+    let participant = Participant::spawn(
+        &cloudflare_config(&format!("{base_url}/m/demo"), &base_url, 60_000),
+        cookie_manager,
+    )
+    .expect("cloudflare participant should spawn");
     let state = participant.state.clone();
 
     let started = wait_for_state(&state, |current| {
@@ -113,8 +116,10 @@ async fn cloudflare_runtime_updates_public_participant_state_from_worker_command
     assert!(muted.muted);
 
     participant.toggle_video();
-    let video_activated =
-        wait_for_state(&state, |current| current.running && current.joined && current.video_activated).await;
+    let video_activated = wait_for_state(&state, |current| {
+        current.running && current.joined && current.video_activated
+    })
+    .await;
     assert!(video_activated.video_activated);
 
     participant.close().await;
@@ -163,8 +168,11 @@ async fn cloudflare_runtime_survives_command_failures_and_can_still_close() {
     ]);
     let (base_url, requests, server) = spawn_http_server(responses).await;
     let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
-    let participant = Participant::spawn(&cloudflare_config(&format!("{base_url}/m/demo"), &base_url, 60_000), cookie_manager)
-        .expect("cloudflare participant should spawn");
+    let participant = Participant::spawn(
+        &cloudflare_config(&format!("{base_url}/m/demo"), &base_url, 60_000),
+        cookie_manager,
+    )
+    .expect("cloudflare participant should spawn");
     let state = participant.state.clone();
 
     wait_for_state(&state, |current| {
@@ -213,8 +221,11 @@ async fn cloudflare_runtime_marks_participant_stopped_when_worker_state_poll_fai
     ]);
     let (base_url, requests, server) = spawn_http_server(responses).await;
     let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
-    let participant = Participant::spawn(&cloudflare_config(&format!("{base_url}/m/demo"), &base_url, 5), cookie_manager)
-        .expect("cloudflare participant should spawn");
+    let participant = Participant::spawn(
+        &cloudflare_config(&format!("{base_url}/m/demo"), &base_url, 5),
+        cookie_manager,
+    )
+    .expect("cloudflare participant should spawn");
     let state = participant.state.clone();
 
     wait_for_state(&state, |current| {
@@ -271,12 +282,18 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
     ]);
     let (base_url, requests, server) = spawn_http_server(responses).await;
     let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
-    let participant = Participant::spawn(&cloudflare_config(&format!("{base_url}/room/demo"), &base_url, 60_000), cookie_manager)
-        .expect("cloudflare participant should spawn");
+    let participant = Participant::spawn(
+        &cloudflare_config(&format!("{base_url}/room/demo"), &base_url, 60_000),
+        cookie_manager,
+    )
+    .expect("cloudflare participant should spawn");
     let state = participant.state.clone();
 
     let started = wait_for_state(&state, |current| {
-        current.running && current.joined && current.video_activated && current.webcam_resolution == WebcamResolution::P1080
+        current.running
+            && current.joined
+            && current.video_activated
+            && current.webcam_resolution == WebcamResolution::P1080
     })
     .await;
     assert!(started.running);
@@ -305,7 +322,10 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
     let set_name_body = request_json(&requests[1]);
     let display_name = request_json(&requests[2])["displayName"].clone();
     assert_eq!(requests[2].path, "/sessions");
-    assert_eq!(request_json(&requests[2])["hyperSessionCookie"], json!("fetched-cookie"));
+    assert_eq!(
+        request_json(&requests[2])["hyperSessionCookie"],
+        json!("fetched-cookie")
+    );
     assert_eq!(display_name, set_name_body["name"]);
     assert_eq!(requests[3].path, "/sessions/cf-runtime-core/close");
 }
