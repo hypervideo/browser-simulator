@@ -28,6 +28,7 @@ pub(in crate::participant) struct ParticipantSettings {
     pub(in crate::participant) audio_enabled: bool,
     pub(in crate::participant) video_enabled: bool,
     pub(in crate::participant) screenshare_enabled: bool,
+    pub(in crate::participant) auto_gain_control: bool,
     pub(in crate::participant) noise_suppression: NoiseSuppression,
     pub(in crate::participant) transport: TransportMode,
     pub(in crate::participant) resolution: WebcamResolution,
@@ -41,6 +42,7 @@ impl From<&ParticipantConfig> for ParticipantSettings {
             audio_enabled: app_config.audio_enabled,
             video_enabled: app_config.video_enabled,
             screenshare_enabled: app_config.screenshare_enabled,
+            auto_gain_control: app_config.auto_gain_control,
             noise_suppression: app_config.noise_suppression,
             transport: app_config.transport,
             resolution: app_config.resolution,
@@ -100,6 +102,7 @@ mod tests {
                 audio_enabled: true,
                 video_enabled: false,
                 screenshare_enabled: true,
+                auto_gain_control: true,
                 noise_suppression: NoiseSuppression::RNNoise,
                 transport: TransportMode::WebRTC,
                 resolution: WebcamResolution::P720,
@@ -116,6 +119,7 @@ mod tests {
         assert!(spec.settings.audio_enabled);
         assert!(!spec.settings.video_enabled);
         assert!(spec.settings.screenshare_enabled);
+        assert!(spec.settings.auto_gain_control);
         assert_eq!(spec.settings.noise_suppression, NoiseSuppression::RNNoise);
         assert_eq!(spec.settings.transport, TransportMode::WebRTC);
         assert_eq!(spec.settings.resolution, WebcamResolution::P720);

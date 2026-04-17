@@ -67,6 +67,8 @@ pub struct Config {
     pub video_enabled: bool,
     #[serde(default)]
     pub screenshare_enabled: bool,
+    #[serde(default = "default_auto_gain_control")]
+    pub auto_gain_control: bool,
     #[serde(default)]
     pub noise_suppression: NoiseSuppression,
     #[serde(default)]
@@ -78,6 +80,10 @@ pub struct Config {
 }
 
 const DEFAULT_CONFIG: &str = include_str!("default-config.yaml");
+
+const fn default_auto_gain_control() -> bool {
+    true
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -130,6 +136,7 @@ impl config::Source for Config {
         cache.insert("audio_enabled".to_string(), self.audio_enabled.into());
         cache.insert("video_enabled".to_string(), self.video_enabled.into());
         cache.insert("screenshare_enabled".to_string(), self.screenshare_enabled.into());
+        cache.insert("auto_gain_control".to_string(), self.auto_gain_control.into());
         cache.insert(
             "noise_suppression".to_string(),
             self.noise_suppression.to_string().into(),

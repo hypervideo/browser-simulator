@@ -31,6 +31,7 @@ async fn run(Args { url }: Args) -> Result<()> {
             session_url: url.clone(),
             app_config: Config {
                 headless: false,
+                auto_gain_control: true,
                 ..Default::default()
             },
         },

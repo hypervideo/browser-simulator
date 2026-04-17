@@ -6,10 +6,12 @@ use super::{
         ParticipantState,
     },
     commands::{
+        get_auto_gain_control,
         get_background_blur,
         get_force_webrtc,
         get_noise_suppression,
         get_outgoing_camera_resolution,
+        set_auto_gain_control,
         set_background_blur,
         set_force_webrtc,
         set_noise_suppression,
@@ -143,6 +145,9 @@ impl ParticipantInner {
     async fn apply_all_settings(&self, in_lobby: bool) -> Result<()> {
         let settings = &self.context.launch_spec.settings;
 
+        set_auto_gain_control(&self.context.page, settings.auto_gain_control)
+            .await
+            .context("failed to set auto gain control")?;
         set_noise_suppression(&self.context.page, settings.noise_suppression)
             .await
             .context("failed to set noise suppression")?;
@@ -244,6 +249,14 @@ impl ParticipantInner {
         Ok(())
     }
 
+    async fn toggle_auto_gain_control_inner(&self) -> Result<()> {
+        let auto_gain_control = get_auto_gain_control(&self.context.page).await?;
+        set_auto_gain_control(&self.context.page, !auto_gain_control)
+            .await
+            .context("Failed to set auto gain control")?;
+        Ok(())
+    }
+
     async fn toggle_background_blur_inner(&self) -> Result<()> {
         let background_blur = get_background_blur(&self.context.page).await?;
         set_background_blur(&self.context.page, !background_blur)
@@ -279,6 +292,10 @@ impl ParticipantInner {
 
         if let Ok(value) = get_noise_suppression(&self.context.page).await {
             state.noise_suppression = value;
+        }
+
+        if let Ok(value) = get_auto_gain_control(&self.context.page).await {
+            state.auto_gain_control = value;
         }
 
         if let Ok(mute_button) = self.mute_button().await {
@@ -335,6 +352,7 @@ impl FrontendAutomation for ParticipantInner {
                 ParticipantMessage::ToggleAudio => self.toggle_audio_inner().await,
                 ParticipantMessage::ToggleVideo => self.toggle_video_inner().await,
                 ParticipantMessage::ToggleScreenshare => self.toggle_screen_share_inner().await,
+                ParticipantMessage::ToggleAutoGainControl => self.toggle_auto_gain_control_inner().await,
                 ParticipantMessage::SetWebcamResolutions(value) => self.set_webcam_resolutions_inner(value).await,
                 ParticipantMessage::SetNoiseSuppression(value) => self.set_noise_suppression_inner(value).await,
                 ParticipantMessage::ToggleBackgroundBlur => self.toggle_background_blur_inner().await,

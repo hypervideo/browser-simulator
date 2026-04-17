@@ -35,6 +35,7 @@ cloudflare:
   health_poll_interval_ms: 5000
 audio_enabled: true
 video_enabled: true
+auto_gain_control: true
 noise_suppression: none
 transport: webtransport
 resolution: auto

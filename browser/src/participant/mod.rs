@@ -302,6 +302,10 @@ impl Participant {
         self.toggle_screen_share();
     }
 
+    pub fn toggle_auto_gain_control(&self) {
+        self.send_message(ParticipantMessage::ToggleAutoGainControl);
+    }
+
     pub fn set_noise_suppression(&self, value: client_simulator_config::NoiseSuppression) {
         self.send_message(ParticipantMessage::SetNoiseSuppression(value));
     }

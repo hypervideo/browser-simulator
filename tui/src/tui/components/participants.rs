@@ -314,6 +314,13 @@ impl Component for Participants {
                 None
             }
 
+            (KeyCode::Char('g'), Some(selected)) => {
+                if let Some(participant) = self.participants.get(selected) {
+                    participant.toggle_auto_gain_control();
+                }
+                None
+            }
+
             (KeyCode::Char('n'), Some(_)) => Some(Action::ParticipantsAction(
                 ParticipantsAction::StartSelectNoiseSuppression,
             )),
@@ -344,7 +351,7 @@ impl Component for Participants {
         let [_, _, area] = header_and_two_main_areas(area)?;
 
         let help = if self.selected.is_some() {
-            " <del> to shutdown, <j>oin, <l>eave, <m>ute, <v>ideo, <s>creenshare, <n>oise suppression, <r>esolutions, <b>lur "
+            " <del> to shutdown, <j>oin, <l>eave, <m>ute, <v>ideo, <s>creenshare, auto <g>ain, <n>oise suppression, <r>esolutions, <b>lur "
         } else {
             ""
         };
@@ -369,6 +376,7 @@ impl Component for Participants {
             "Muted",
             "Video active",
             "Screenshare active",
+            "Auto gain",
             "Noise Suppression",
             "Transport",
             "Resolution",
@@ -397,6 +405,7 @@ impl Component for Participants {
                 let muted = format_bool(state.muted);
                 let video = format_bool(state.video_activated);
                 let screenshare = format_bool(state.screenshare_activated);
+                let auto_gain_control = format_bool(state.auto_gain_control);
                 let noise_suppression = state.noise_suppression.to_string();
                 let transport_mode = state.transport_mode.to_string();
                 let resolution = state.webcam_resolution.to_string();
@@ -409,6 +418,7 @@ impl Component for Participants {
                     Cell::from(muted),
                     Cell::from(video),
                     Cell::from(screenshare),
+                    Cell::from(auto_gain_control),
                     Cell::from(noise_suppression),
                     Cell::from(transport_mode),
                     Cell::from(resolution),
@@ -435,16 +445,17 @@ impl Component for Participants {
             )
             .widths([
                 Constraint::Percentage(10), // Name
-                Constraint::Percentage(10), // Created
-                Constraint::Percentage(10), // Running
-                Constraint::Percentage(10), // Joined
-                Constraint::Percentage(10), // Muted
-                Constraint::Percentage(10), // Video active
-                Constraint::Percentage(10), // Screenshare active
-                Constraint::Percentage(10), // Noise suppressed
-                Constraint::Percentage(10), // Transport mode
-                Constraint::Percentage(10), // Resolution
-                Constraint::Percentage(10), // Blur
+                Constraint::Percentage(8),  // Created
+                Constraint::Percentage(7),  // Running
+                Constraint::Percentage(7),  // Joined
+                Constraint::Percentage(7),  // Muted
+                Constraint::Percentage(7),  // Video active
+                Constraint::Percentage(9),  // Screenshare active
+                Constraint::Percentage(8),  // Auto gain
+                Constraint::Percentage(12), // Noise suppression
+                Constraint::Percentage(8),  // Transport mode
+                Constraint::Percentage(8),  // Resolution
+                Constraint::Percentage(9),  // Blur
             ])
             .column_spacing(1);
 

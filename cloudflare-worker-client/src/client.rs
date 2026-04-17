@@ -297,6 +297,7 @@ mod tests {
             session_timeout_ms: Some(600_000.0),
             settings: ParticipantSettings {
                 audio_enabled: true,
+                auto_gain_control: true,
                 blur: false,
                 noise_suppression: ParticipantSettingsNoiseSuppression::None,
                 resolution: ParticipantSettingsResolution::Auto,

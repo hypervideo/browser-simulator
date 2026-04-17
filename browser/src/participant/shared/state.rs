@@ -11,6 +11,7 @@ pub struct ParticipantState {
     pub joined: bool,
     pub muted: bool,
     pub video_activated: bool,
+    pub auto_gain_control: bool,
     pub noise_suppression: NoiseSuppression,
     pub transport_mode: TransportMode,
     pub webcam_resolution: WebcamResolution,

@@ -235,6 +235,9 @@
           "screenshareActivated": {
             "type": "boolean"
           },
+          "autoGainControl": {
+            "type": "boolean"
+          },
           "noiseSuppression": {
             "type": "string",
             "enum": [
@@ -285,6 +288,7 @@
           "muted",
           "videoActivated",
           "screenshareActivated",
+          "autoGainControl",
           "noiseSuppression",
           "transportMode",
           "webcamResolution",
@@ -449,6 +453,10 @@
             "type": "boolean",
             "description": "Whether the participant should start screensharing after join."
           },
+          "autoGainControl": {
+            "type": "boolean",
+            "description": "Whether Hyper should automatically adjust microphone volume."
+          },
           "noiseSuppression": {
             "type": "string",
             "enum": [
@@ -498,6 +506,7 @@
           "audioEnabled",
           "videoEnabled",
           "screenshareEnabled",
+          "autoGainControl",
           "noiseSuppression",
           "transport",
           "resolution",
@@ -685,6 +694,20 @@
                 "type": "string",
                 "enum": [
                   "toggle-screenshare"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "toggle-auto-gain-control"
                 ]
               }
             },

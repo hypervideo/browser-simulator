@@ -44,6 +44,7 @@ enum SelectedField {
     Mute,
     VideoDisable,
     ScreenshareDisable,
+    AutoGainControl,
     NoiseSuppression,
     Transport,
     Resolution,
@@ -63,6 +64,7 @@ impl SelectedField {
             SelectedField::Mute => " Mute audio? <enter> to toggle. ",
             SelectedField::VideoDisable => " Enable video? <enter> to toggle. ",
             SelectedField::ScreenshareDisable => " Enable screenshare? <enter> to toggle. ",
+            SelectedField::AutoGainControl => " Automatically adjust volume? <enter> to toggle. ",
             SelectedField::NoiseSuppression => " Enable noise suppression? <enter> to select noise suppression model. ",
             SelectedField::Transport => " Select transport protocol. <enter> to select. ",
             SelectedField::Resolution => " Select resolution for video (camera). <enter> to select. ",
@@ -166,6 +168,7 @@ impl Component for BrowserStart {
                         SelectedField::Mute
                         | SelectedField::VideoDisable
                         | SelectedField::ScreenshareDisable
+                        | SelectedField::AutoGainControl
                         | SelectedField::NoiseSuppression
                         | SelectedField::Transport
                         | SelectedField::Resolution
@@ -360,6 +363,7 @@ impl Component for BrowserStart {
             KeyCode::Enter if self.selected == SelectedField::Mute => Some(BrowserStartAction::Toggle),
             KeyCode::Enter if self.selected == SelectedField::VideoDisable => Some(BrowserStartAction::Toggle),
             KeyCode::Enter if self.selected == SelectedField::ScreenshareDisable => Some(BrowserStartAction::Toggle),
+            KeyCode::Enter if self.selected == SelectedField::AutoGainControl => Some(BrowserStartAction::Toggle),
             KeyCode::Enter if self.selected == SelectedField::NoiseSuppression => {
                 Some(BrowserStartAction::StartSelectNoiseSuppression)
             }
@@ -441,7 +445,8 @@ impl Component for BrowserStart {
                     SelectedField::Mute => SelectedField::FakeMedia,
                     SelectedField::VideoDisable => SelectedField::Mute,
                     SelectedField::ScreenshareDisable => SelectedField::VideoDisable,
-                    SelectedField::NoiseSuppression => SelectedField::ScreenshareDisable,
+                    SelectedField::AutoGainControl => SelectedField::ScreenshareDisable,
+                    SelectedField::NoiseSuppression => SelectedField::AutoGainControl,
                     SelectedField::Transport => SelectedField::NoiseSuppression,
                     SelectedField::Resolution => SelectedField::Transport,
                     SelectedField::BackgroundBlur => SelectedField::Resolution,
@@ -457,7 +462,8 @@ impl Component for BrowserStart {
                     SelectedField::FakeMedia => SelectedField::Mute,
                     SelectedField::Mute => SelectedField::VideoDisable,
                     SelectedField::VideoDisable => SelectedField::ScreenshareDisable,
-                    SelectedField::ScreenshareDisable => SelectedField::NoiseSuppression,
+                    SelectedField::ScreenshareDisable => SelectedField::AutoGainControl,
+                    SelectedField::AutoGainControl => SelectedField::NoiseSuppression,
                     SelectedField::NoiseSuppression => SelectedField::Transport,
                     SelectedField::Transport => SelectedField::Resolution,
                     SelectedField::Resolution => SelectedField::BackgroundBlur,
@@ -579,6 +585,9 @@ impl Component for BrowserStart {
                     SelectedField::ScreenshareDisable => {
                         self.config.screenshare_enabled = !self.config.screenshare_enabled;
                     }
+                    SelectedField::AutoGainControl => {
+                        self.config.auto_gain_control = !self.config.auto_gain_control;
+                    }
                     SelectedField::BackgroundBlur => {
                         self.config.blur = !self.config.blur;
                     }
@@ -638,6 +647,7 @@ impl Component for BrowserStart {
                 Constraint::Length(1), // Muted checkbox
                 Constraint::Length(1), // Video disabled checkbox
                 Constraint::Length(1), // Screenshare disabled checkbox
+                Constraint::Length(1), // Auto gain control checkbox
                 Constraint::Length(1), // Noise suppression checkbox
                 Constraint::Length(1), // Transport
                 Constraint::Length(1), // Resolution
@@ -658,6 +668,7 @@ impl Component for BrowserStart {
             "Audio enabled:",
             "Video enabled:",
             "Screenshare enabled:",
+            "Auto gain control:",
             "Noise suppression:",
             "Transport:",
             "Resolution:",
@@ -723,6 +734,17 @@ impl Component for BrowserStart {
             self.config.screenshare_enabled,
             max_length,
             self.focused && self.selected == SelectedField::ScreenshareDisable,
+            &theme,
+        );
+        frame.render_widget(widget, rows[current_row_index]);
+        current_row_index += 1;
+
+        // --- Auto gain control ---
+        let widget = widgets::label_and_bool(
+            form_labels[current_row_index],
+            self.config.auto_gain_control,
+            max_length,
+            self.focused && self.selected == SelectedField::AutoGainControl,
             &theme,
         );
         frame.render_widget(widget, rows[current_row_index]);

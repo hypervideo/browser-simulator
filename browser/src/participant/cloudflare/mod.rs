@@ -306,6 +306,7 @@ impl CloudflareSession {
             ParticipantMessage::ToggleAudio => types::SessionCommandRequest::ToggleAudio,
             ParticipantMessage::ToggleVideo => types::SessionCommandRequest::ToggleVideo,
             ParticipantMessage::ToggleScreenshare => types::SessionCommandRequest::ToggleScreenshare,
+            ParticipantMessage::ToggleAutoGainControl => types::SessionCommandRequest::ToggleAutoGainControl,
             ParticipantMessage::SetNoiseSuppression(value) => types::SessionCommandRequest::SetNoiseSuppression {
                 noise_suppression: map_command_noise_suppression(value),
             },
@@ -524,6 +525,7 @@ fn map_frontend_kind(frontend_kind: ResolvedFrontendKind) -> types::SessionCreat
 fn map_settings(settings: &crate::participant::shared::ParticipantSettings) -> types::ParticipantSettings {
     types::ParticipantSettings {
         audio_enabled: settings.audio_enabled,
+        auto_gain_control: settings.auto_gain_control,
         blur: settings.blur,
         noise_suppression: match settings.noise_suppression {
             client_simulator_config::NoiseSuppression::Disabled => types::ParticipantSettingsNoiseSuppression::None,
@@ -588,6 +590,7 @@ fn map_state(state: &types::ParticipantState) -> ParticipantState {
         joined: state.joined,
         muted: state.muted,
         video_activated: state.video_activated,
+        auto_gain_control: state.auto_gain_control,
         noise_suppression: match state.noise_suppression {
             types::ParticipantStateNoiseSuppression::None => client_simulator_config::NoiseSuppression::Disabled,
             types::ParticipantStateNoiseSuppression::Deepfilternet => {
@@ -789,6 +792,7 @@ mod tests {
                         "muted": false,
                         "videoActivated": true,
                         "screenshareActivated": false,
+                        "autoGainControl": true,
                         "noiseSuppression": "rnnoise",
                         "transportMode": "webrtc",
                         "webcamResolution": "p720",
@@ -844,6 +848,7 @@ mod tests {
         assert_eq!(state.noise_suppression, NoiseSuppression::RNNoise);
         assert_eq!(state.transport_mode, TransportMode::WebRTC);
         assert_eq!(state.webcam_resolution, WebcamResolution::P720);
+        assert!(state.auto_gain_control);
         assert!(state.background_blur);
 
         session.close().await.unwrap();
@@ -881,6 +886,7 @@ mod tests {
                 "sessionTimeoutMs": 120000.0,
                 "settings": {
                     "audioEnabled": true,
+                    "autoGainControl": true,
                     "blur": true,
                     "noiseSuppression": "rnnoise",
                     "resolution": "p720",
@@ -909,6 +915,7 @@ mod tests {
                         "muted": false,
                         "videoActivated": true,
                         "screenshareActivated": false,
+                        "autoGainControl": true,
                         "noiseSuppression": "ai-coustics-sparrow-s",
                         "transportMode": "webrtc",
                         "webcamResolution": "p720",
@@ -949,6 +956,7 @@ mod tests {
         session.start().await.unwrap();
 
         let state = session.refresh_state().await.unwrap();
+        assert!(state.auto_gain_control);
         assert_eq!(state.noise_suppression, NoiseSuppression::AiCousticsSparrowS);
 
         session.close().await.unwrap();
@@ -963,7 +971,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(false, false, false, false, "none", "auto", false),
+                    "state": worker_state_json(false, false, false, false, true, "none", "auto", false),
                     "log": [],
                 }),
             ),
@@ -972,7 +980,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, false, false, false, "none", "auto", false),
+                    "state": worker_state_json(true, false, false, false, true, "none", "auto", false),
                     "log": [],
                 }),
             ),
@@ -981,7 +989,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, false, false, "none", "auto", false),
+                    "state": worker_state_json(true, true, false, false, true, "none", "auto", false),
                     "log": [],
                 }),
             ),
@@ -990,7 +998,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, false, "none", "auto", false),
+                    "state": worker_state_json(true, true, true, false, true, "none", "auto", false),
                     "log": [],
                 }),
             ),
@@ -999,7 +1007,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, "none", "auto", false),
+                    "state": worker_state_json(true, true, true, true, true, "none", "auto", false),
                     "log": [],
                 }),
             ),
@@ -1008,7 +1016,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, "deepfilternet", "auto", false),
+                    "state": worker_state_json(true, true, true, true, false, "none", "auto", false),
                     "log": [],
                 }),
             ),
@@ -1017,7 +1025,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, "deepfilternet", "p1080", false),
+                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "auto", false),
                     "log": [],
                 }),
             ),
@@ -1026,7 +1034,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, "deepfilternet", "p1080", true),
+                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "p1080", false),
                     "log": [],
                 }),
             ),
@@ -1035,7 +1043,16 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(false, true, true, false, "deepfilternet", "p1080", true),
+                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "p1080", true),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-commands",
+                    "state": worker_state_json(false, true, true, false, false, "deepfilternet", "p1080", true),
                     "log": [],
                 }),
             ),
@@ -1079,6 +1096,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    true,
                     NoiseSuppression::Disabled,
                     WebcamResolution::Auto,
                     false,
@@ -1092,6 +1110,7 @@ mod tests {
                     true,
                     false,
                     false,
+                    true,
                     NoiseSuppression::Disabled,
                     WebcamResolution::Auto,
                     false,
@@ -1105,6 +1124,7 @@ mod tests {
                     true,
                     true,
                     false,
+                    true,
                     NoiseSuppression::Disabled,
                     WebcamResolution::Auto,
                     false,
@@ -1118,6 +1138,21 @@ mod tests {
                     true,
                     true,
                     true,
+                    true,
+                    NoiseSuppression::Disabled,
+                    WebcamResolution::Auto,
+                    false,
+                ),
+            ),
+            (
+                ParticipantMessage::ToggleAutoGainControl,
+                json!({ "type": "toggle-auto-gain-control" }),
+                expected_state(
+                    true,
+                    true,
+                    true,
+                    true,
+                    false,
                     NoiseSuppression::Disabled,
                     WebcamResolution::Auto,
                     false,
@@ -1131,6 +1166,7 @@ mod tests {
                     true,
                     true,
                     true,
+                    false,
                     NoiseSuppression::Deepfilternet,
                     WebcamResolution::Auto,
                     false,
@@ -1144,6 +1180,7 @@ mod tests {
                     true,
                     true,
                     true,
+                    false,
                     NoiseSuppression::Deepfilternet,
                     WebcamResolution::P1080,
                     false,
@@ -1157,6 +1194,7 @@ mod tests {
                     true,
                     true,
                     true,
+                    false,
                     NoiseSuppression::Deepfilternet,
                     WebcamResolution::P1080,
                     true,
@@ -1169,6 +1207,7 @@ mod tests {
                     false,
                     true,
                     true,
+                    false,
                     false,
                     NoiseSuppression::Deepfilternet,
                     WebcamResolution::P1080,
@@ -1199,8 +1238,8 @@ mod tests {
         let requests = requests.lock().unwrap().clone();
         assert_eq!(requests[0].method, "POST");
         assert_eq!(requests[0].path, "/sessions");
-        assert_eq!(requests[9].method, "POST");
-        assert_eq!(requests[9].path, "/sessions/cf-session-commands/close");
+        assert_eq!(requests[10].method, "POST");
+        assert_eq!(requests[10].path, "/sessions/cf-session-commands/close");
     }
 
     #[tokio::test]
@@ -1211,7 +1250,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-webrtc",
-                    "state": worker_state_json(false, false, false, false, "rnnoise", "p720", true),
+                    "state": worker_state_json(false, false, false, false, true, "rnnoise", "p720", true),
                     "log": [],
                 }),
             ),
@@ -1276,7 +1315,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-limitations",
-                    "state": worker_state_json(false, false, false, false, "rnnoise", "p720", true),
+                    "state": worker_state_json(false, false, false, false, true, "rnnoise", "p720", true),
                     "log": [],
                 }),
             ),
@@ -1332,7 +1371,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-terminated",
-                    "state": worker_state_json(true, false, false, false, "none", "auto", false),
+                    "state": worker_state_json(true, false, false, false, true, "none", "auto", false),
                     "log": [],
                 }),
             ),
@@ -1397,6 +1436,7 @@ mod tests {
                 audio_enabled: true,
                 video_enabled: true,
                 screenshare_enabled: false,
+                auto_gain_control: true,
                 noise_suppression: NoiseSuppression::RNNoise,
                 transport: TransportMode::WebRTC,
                 resolution: WebcamResolution::P720,
@@ -1410,6 +1450,7 @@ mod tests {
         muted: bool,
         video_activated: bool,
         screenshare_activated: bool,
+        auto_gain_control: bool,
         noise_suppression: &str,
         webcam_resolution: &str,
         background_blur: bool,
@@ -1420,6 +1461,7 @@ mod tests {
             "muted": muted,
             "videoActivated": video_activated,
             "screenshareActivated": screenshare_activated,
+            "autoGainControl": auto_gain_control,
             "noiseSuppression": noise_suppression,
             "transportMode": "webrtc",
             "webcamResolution": webcam_resolution,
@@ -1432,6 +1474,7 @@ mod tests {
         muted: bool,
         video_activated: bool,
         screenshare_activated: bool,
+        auto_gain_control: bool,
         noise_suppression: NoiseSuppression,
         webcam_resolution: WebcamResolution,
         background_blur: bool,
@@ -1442,6 +1485,7 @@ mod tests {
             joined,
             muted,
             video_activated,
+            auto_gain_control,
             noise_suppression,
             transport_mode: TransportMode::WebRTC,
             webcam_resolution,
@@ -1456,6 +1500,7 @@ mod tests {
         assert_eq!(actual.joined, expected.joined);
         assert_eq!(actual.muted, expected.muted);
         assert_eq!(actual.video_activated, expected.video_activated);
+        assert_eq!(actual.auto_gain_control, expected.auto_gain_control);
         assert_eq!(actual.noise_suppression, expected.noise_suppression);
         assert_eq!(actual.transport_mode, expected.transport_mode);
         assert_eq!(actual.webcam_resolution, expected.webcam_resolution);
