@@ -78,8 +78,35 @@ impl Participants {
         }
     }
 
-    fn render_tick(&mut self) -> Result<()> {
-        Ok(())
+    fn render_tick(&mut self) -> Result<Option<Action>> {
+        Ok(self.reconcile_selection())
+    }
+
+    fn reconcile_selection(&mut self) -> Option<Action> {
+        let keys = self.participants.keys();
+
+        if keys.is_empty() {
+            self.selected = None;
+            self.table_state.select(None);
+
+            return self.focused.then_some(Action::Activate(ActivateAction::BrowserStart));
+        }
+
+        if self
+            .selected
+            .as_ref()
+            .is_none_or(|selected| !keys.iter().any(|key| key == selected))
+        {
+            self.selected = keys.first().cloned();
+        }
+
+        let selected_index = self
+            .selected
+            .as_ref()
+            .and_then(|selected| keys.iter().position(|key| key == selected));
+        self.table_state.select(selected_index);
+
+        None
     }
 
     fn move_up(&mut self) {
@@ -92,6 +119,8 @@ impl Participants {
                 } else {
                     self.selected = None;
                 }
+            } else {
+                self.selected = None;
             }
         } else {
             self.selected = None;
@@ -106,6 +135,8 @@ impl Participants {
                 if index < keys.len() - 1 {
                     self.selected = keys.get(index + 1).cloned();
                 }
+            } else {
+                self.selected = self.participants.keys().first().cloned();
             }
         } else {
             self.selected = self.participants.keys().first().cloned();
@@ -147,7 +178,7 @@ impl Component for Participants {
                 self.focused = false;
                 self.visible = false;
             }
-            Action::Render => self.render_tick()?,
+            Action::Render => return Ok(self.render_tick()?),
             Action::ParticipantsAction(inner) => match inner {
                 ParticipantsAction::MoveUp => {
                     self.move_up();
@@ -428,6 +459,87 @@ impl Component for Participants {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Participants;
+    use crate::tui::{
+        Action,
+        ActivateAction,
+        Component,
+    };
+    use client_simulator_browser::participant::ParticipantStore;
+    use client_simulator_config::Config;
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{
+            SystemTime,
+            UNIX_EPOCH,
+        },
+    };
+    use url::Url;
+
+    #[tokio::test]
+    async fn render_selects_first_remaining_participant_after_external_removal() {
+        let store = participant_store();
+        spawn_remote_participant(&store);
+        spawn_remote_participant(&store);
+
+        let keys = store.keys();
+        assert_eq!(keys.len(), 2);
+
+        let mut component = Participants::new(store.clone());
+        component.selected = Some(keys[1].clone());
+        component.focused = true;
+
+        store.remove(&keys[1]);
+
+        let action = component.update(Action::Render).expect("render update succeeds");
+
+        assert_eq!(action, None);
+        assert_eq!(component.selected, Some(keys[0].clone()));
+    }
+
+    #[tokio::test]
+    async fn render_returns_browser_start_when_focused_list_becomes_empty() {
+        let store = participant_store();
+        spawn_remote_participant(&store);
+
+        let key = store.keys().into_iter().next().expect("participant exists");
+
+        let mut component = Participants::new(store.clone());
+        component.selected = Some(key.clone());
+        component.focused = true;
+
+        store.remove(&key);
+
+        let action = component.update(Action::Render).expect("render update succeeds");
+
+        assert_eq!(action, Some(Action::Activate(ActivateAction::BrowserStart)));
+        assert_eq!(component.selected, None);
+    }
+
+    fn spawn_remote_participant(store: &ParticipantStore) {
+        let mut config = Config::default();
+        config.url = Some(Url::parse("https://example.com/room/demo").expect("valid url"));
+        store.spawn_remote_stub(&config).expect("spawn remote stub participant");
+    }
+
+    fn participant_store() -> ParticipantStore {
+        let data_dir = unique_test_data_dir();
+        fs::create_dir_all(&data_dir).expect("create temp data dir");
+        ParticipantStore::new(&data_dir)
+    }
+
+    fn unique_test_data_dir() -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("hyper-browser-simulator-participants-test-{timestamp}"))
     }
 }
 
