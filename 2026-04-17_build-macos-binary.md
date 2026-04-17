@@ -54,7 +54,7 @@ Notes:
 
 ### 2. Add `just` commands for local release workflows
 
-STATUS: unimplemented
+STATUS: completed
 
 Objective:
 
