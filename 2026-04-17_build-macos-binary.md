@@ -120,7 +120,7 @@ Notes:
 
 ### 4. Generate the GitHub release workflow with `dist`
 
-STATUS: unimplemented
+STATUS: completed
 
 Objective:
 
