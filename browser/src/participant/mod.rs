@@ -27,13 +27,19 @@ use eyre::{
     Result,
 };
 use std::sync::Arc;
-use tokio::sync::{
-    mpsc::{
-        unbounded_channel,
-        UnboundedReceiver,
-        UnboundedSender,
+use tokio::{
+    sync::{
+        mpsc::{
+            unbounded_channel,
+            UnboundedReceiver,
+            UnboundedSender,
+        },
+        watch,
     },
-    watch,
+    time::{
+        timeout,
+        Duration,
+    },
 };
 use tokio_util::sync::{
     CancellationToken,
@@ -204,21 +210,23 @@ where
     let task_sender_for_task = log_sender.clone();
 
     tokio::task::spawn(async move {
-        tokio::select! {
-            biased;
-            _ = task_cancellation_token.cancelled() => {},
+        let result = run_participant_runtime(
+            receiver,
+            log_sender.clone(),
+            state_sender,
+            session,
+            task_cancellation_token.clone(),
+        )
+        .await;
 
-            result = run_participant_runtime(receiver, log_sender.clone(), state_sender, session) => {
-                if let Err(err) = result {
-                    error!(participant = %name, "Failed to create participant: {err}");
-                    let _ = task_sender_for_task.send(ParticipantLogMessage::new(
-                        "error",
-                        &name,
-                        format!("Failed to create participant: {err}"),
-                    ));
-                }
-            }
-        };
+        if let Err(err) = result {
+            error!(participant = %name, "Failed to create participant: {err}");
+            let _ = task_sender_for_task.send(ParticipantLogMessage::new(
+                "error",
+                &name,
+                format!("Failed to create participant: {err}"),
+            ));
+        }
 
         debug!(participant = %name, "Participant task canceled");
         let _ = task_sender_for_task.send(ParticipantLogMessage::new(
@@ -233,16 +241,45 @@ where
 
 impl Participant {
     pub async fn close(mut self) {
-        if !self.state.borrow().running {
-            debug!(self.name, "Already closed the browser");
+        let initial_state = self.state.borrow().clone();
+        if !initial_state.running {
+            debug!(participant = %self.name, "Already closed the browser");
             return;
         }
+
+        if initial_state.joined {
+            if self.sender.send(ParticipantMessage::Leave).is_err() {
+                error!(participant = %self.name, "Was not able to send ParticipantMessage::Leave message");
+            } else {
+                match timeout(
+                    Duration::from_secs(5),
+                    self.state.wait_for(|state| !state.running || !state.joined),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(err)) => {
+                        error!(participant = %self.name, "Failed to wait for participant to leave: {err}");
+                    }
+                    Err(_) => {
+                        warn!(participant = %self.name, "Timed out waiting for participant to leave before closing");
+                    }
+                }
+            }
+        }
+
         if self.sender.send(ParticipantMessage::Close).is_ok() {
-            if let Err(err) = self.state.wait_for(|state| !state.running).await {
-                error!("Failed to wait for participant to close: {err}");
-            };
+            match timeout(Duration::from_secs(10), self.state.wait_for(|state| !state.running)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => {
+                    error!(participant = %self.name, "Failed to wait for participant to close: {err}");
+                }
+                Err(_) => {
+                    warn!(participant = %self.name, "Timed out waiting for participant to close");
+                }
+            }
         } else {
-            error!("Was not able to send ParticipantMessage::Close message")
+            error!(participant = %self.name, "Was not able to send ParticipantMessage::Close message");
         }
     }
 

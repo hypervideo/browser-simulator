@@ -86,6 +86,15 @@ async fn cloudflare_runtime_updates_public_participant_state_from_worker_command
             json!({
                 "ok": true,
                 "sessionId": "cf-runtime-commands",
+                "state": worker_state_json(false, true, true, "p720"),
+                "log": [],
+            }),
+        ),
+        MockResponse::json(
+            200,
+            json!({
+                "ok": true,
+                "sessionId": "cf-runtime-commands",
                 "log": [],
             }),
         ),
@@ -128,14 +137,16 @@ async fn cloudflare_runtime_updates_public_participant_state_from_worker_command
     server.abort();
 
     let requests = requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 6);
     assert_eq!(requests[0].method, "POST");
     assert_eq!(requests[0].path, "/sessions");
     assert_eq!(requests[1].path, "/sessions/cf-runtime-commands/commands");
     assert_eq!(request_json(&requests[1]), json!({ "type": "join" }));
     assert_eq!(request_json(&requests[2]), json!({ "type": "toggle-audio" }));
     assert_eq!(request_json(&requests[3]), json!({ "type": "toggle-video" }));
-    assert_eq!(requests[4].path, "/sessions/cf-runtime-commands/close");
+    assert_eq!(requests[4].path, "/sessions/cf-runtime-commands/commands");
+    assert_eq!(request_json(&requests[4]), json!({ "type": "leave" }));
+    assert_eq!(requests[5].path, "/sessions/cf-runtime-commands/close");
 }
 
 #[tokio::test]
@@ -277,6 +288,15 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
             json!({
                 "ok": true,
                 "sessionId": "cf-runtime-core",
+                "state": worker_state_json(false, false, false, "p720"),
+                "log": [],
+            }),
+        ),
+        MockResponse::json(
+            200,
+            json!({
+                "ok": true,
+                "sessionId": "cf-runtime-core",
                 "log": [],
             }),
         ),
@@ -310,7 +330,7 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
     server.abort();
 
     let requests = requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert_eq!(requests[0].method, "POST");
     assert_eq!(requests[0].path, "/api/v1/auth/guest?username=guest");
     assert_eq!(requests[1].method, "PUT");
@@ -328,7 +348,9 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
         json!("fetched-cookie")
     );
     assert_eq!(display_name, set_name_body["name"]);
-    assert_eq!(requests[3].path, "/sessions/cf-runtime-core/close");
+    assert_eq!(requests[3].path, "/sessions/cf-runtime-core/commands");
+    assert_eq!(request_json(&requests[3]), json!({ "type": "leave" }));
+    assert_eq!(requests[4].path, "/sessions/cf-runtime-core/close");
 }
 
 fn cloudflare_config(session_url: &str, base_url: &str, health_poll_interval_ms: u64) -> Config {

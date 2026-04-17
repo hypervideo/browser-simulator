@@ -10,6 +10,7 @@ use client_simulator_config::{
     ParticipantBackendKind,
 };
 use eyre::Result;
+use futures::future::join_all;
 use std::{
     collections::HashMap,
     path::Path,
@@ -66,10 +67,29 @@ impl ParticipantStore {
     }
 
     fn sorted(&self) -> IntoIter<Participant> {
-        let mut participants = self.inner.lock().unwrap().values().cloned().collect::<Vec<_>>();
-        participants.sort_by_key(|a| a.created);
+        let participants = self.inner.lock().unwrap().values().cloned().collect::<Vec<_>>();
+        Self::sort_participants(participants).into_iter()
+    }
 
-        participants.into_iter()
+    fn sort_participants(mut participants: Vec<Participant>) -> Vec<Participant> {
+        participants.sort_by_key(|a| a.created);
+        participants
+    }
+
+    pub fn drain(&self) -> Vec<Participant> {
+        let participants = self
+            .inner
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, participant)| participant)
+            .collect::<Vec<_>>();
+        Self::sort_participants(participants)
+    }
+
+    pub async fn shutdown_all(&self) {
+        let participants = self.drain();
+        join_all(participants.into_iter().map(Participant::close)).await;
     }
 
     pub fn keys(&self) -> Vec<String> {
@@ -137,6 +157,36 @@ mod tests {
         let spawned = take_spawned_participants_for_test();
         assert_eq!(spawned.len(), 1);
         assert_eq!(spawned, store.keys());
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_closes_running_participants_and_clears_store() {
+        let data_dir = unique_test_data_dir();
+        fs::create_dir_all(&data_dir).expect("create temp data dir");
+
+        let store = ParticipantStore::new(&data_dir);
+        let config = Config {
+            url: Some(Url::parse("https://example.com/lite/demo").expect("valid url")),
+            ..Default::default()
+        };
+
+        store.spawn_remote_stub(&config).expect("spawn remote stub");
+
+        let participant_name = store.keys().into_iter().next().expect("participant exists");
+        let participant = store.get(&participant_name).expect("participant handle");
+        let mut state = participant.state.clone();
+        state
+            .wait_for(|current| current.running && current.joined)
+            .await
+            .expect("participant should start");
+
+        store.shutdown_all().await;
+
+        state
+            .wait_for(|current| !current.running && !current.joined)
+            .await
+            .expect("participant should stop");
+        assert!(store.is_empty());
     }
 
     fn unique_test_data_dir() -> PathBuf {

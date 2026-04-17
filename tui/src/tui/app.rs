@@ -23,7 +23,11 @@ use client_simulator_config::{
     TuiArgs,
 };
 use color_eyre::Result;
-use crossterm::event::KeyEvent;
+use crossterm::event::{
+    KeyCode,
+    KeyEvent,
+    KeyModifiers,
+};
 use ratatui::prelude::Rect;
 use serde::{
     Deserialize,
@@ -35,8 +39,10 @@ pub struct App {
     config: Config,
     keybindings: KeyBindings,
     components: Vec<Box<dyn Component>>,
+    participants_store: ParticipantStore,
     should_quit: bool,
     should_suspend: bool,
+    shutdown_in_progress: bool,
     last_tick_key_events: Vec<KeyEvent>,
     global_keymap: Option<Keymap>,
 }
@@ -66,8 +72,10 @@ impl App {
                 Box::new(NavTabs::default()),
                 Box::new(FpsCounter::default()),
             ],
+            participants_store,
             should_quit: false,
             should_suspend: false,
+            shutdown_in_progress: false,
             last_tick_key_events: Vec::new(),
             global_keymap: keybindings.get(&FocusedTopLevelComponent::BrowserStart).cloned(),
             config,
@@ -140,6 +148,11 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent, action_tx: ActionSender) -> Result<()> {
+        if let Some(action) = quit_action_for_key_state(&key, self.shutdown_in_progress) {
+            action_tx.send(action)?;
+            return Ok(());
+        }
+
         let action_tx = action_tx.clone();
 
         let Some(keymap) = &self.global_keymap else {
@@ -171,7 +184,16 @@ impl App {
             }
             match &action {
                 Action::Tick => {}
-                Action::Quit => self.should_quit = true,
+                Action::Quit => self.begin_shutdown(action_tx.clone()),
+                Action::ForceQuit => {
+                    if self.shutdown_in_progress {
+                        warn!("Force quitting while participant shutdown is still in progress");
+                        self.should_quit = true;
+                    } else {
+                        self.begin_shutdown(action_tx.clone());
+                    }
+                }
+                Action::ShutdownComplete => self.should_quit = true,
                 Action::Suspend => self.should_suspend = true,
                 Action::Resume => self.should_suspend = false,
                 Action::ClearScreen => tui.terminal.clear()?,
@@ -190,6 +212,25 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    fn begin_shutdown(&mut self, action_tx: ActionSender) {
+        if self.shutdown_in_progress {
+            return;
+        }
+
+        if self.participants_store.is_empty() {
+            self.should_quit = true;
+            return;
+        }
+
+        self.shutdown_in_progress = true;
+
+        let participants_store = self.participants_store.clone();
+        tokio::spawn(async move {
+            participants_store.shutdown_all().await;
+            let _ = action_tx.send(Action::ShutdownComplete);
+        });
     }
 
     fn handle_resize(&mut self, tui: &mut Tui, w: u16, h: u16) -> Result<()> {
@@ -215,5 +256,43 @@ impl App {
             }
         })?;
         Ok(())
+    }
+}
+
+fn quit_action_for_key_state(key: &KeyEvent, shutdown_in_progress: bool) -> Option<Action> {
+    match key.code {
+        KeyCode::Char(c) if c.eq_ignore_ascii_case(&'c') && key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(if shutdown_in_progress {
+                Action::ForceQuit
+            } else {
+                Action::Quit
+            })
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quit_action_for_key_state;
+    use crate::tui::action::Action;
+    use crossterm::event::{
+        KeyCode,
+        KeyEvent,
+        KeyModifiers,
+    };
+
+    #[test]
+    fn first_ctrl_c_requests_graceful_shutdown() {
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+        assert_eq!(quit_action_for_key_state(&key, false), Some(Action::Quit));
+    }
+
+    #[test]
+    fn second_ctrl_c_forces_quit_while_shutdown_is_running() {
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+        assert_eq!(quit_action_for_key_state(&key, true), Some(Action::ForceQuit));
     }
 }

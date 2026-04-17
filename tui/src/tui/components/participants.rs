@@ -178,7 +178,7 @@ impl Component for Participants {
                 self.focused = false;
                 self.visible = false;
             }
-            Action::Render => return Ok(self.render_tick()?),
+            Action::Render => return self.render_tick(),
             Action::ParticipantsAction(inner) => match inner {
                 ParticipantsAction::MoveUp => {
                     self.move_up();

@@ -18,6 +18,8 @@ pub enum Action {
     Suspend,
     Resume,
     Quit,
+    ForceQuit,
+    ShutdownComplete,
     ClearScreen,
     Error(String),
     Help,

@@ -14,6 +14,7 @@ use tokio::sync::{
     },
     watch,
 };
+use tokio_util::sync::CancellationToken;
 
 /// A backend-reported termination event that the shared runtime can log and react to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +48,7 @@ pub(in crate::participant) async fn run_participant_runtime<D>(
     sender: UnboundedSender<ParticipantLogMessage>,
     state: watch::Sender<ParticipantState>,
     mut driver: D,
+    cancellation_token: CancellationToken,
 ) -> Result<()>
 where
     D: ParticipantDriverSession,
@@ -56,7 +58,25 @@ where
         current.running = true;
     });
 
-    if let Err(err) = driver.start().await {
+    let start_result = tokio::select! {
+        biased;
+
+        _ = cancellation_token.cancelled() => {
+            if let Err(err) = driver.close().await {
+                log_runtime_message(
+                    &sender,
+                    "error",
+                    driver.participant_name(),
+                    format!("Failed closing participant after task cancellation: {err}"),
+                );
+            }
+            mark_stopped(&state);
+            return Ok(());
+        }
+        result = driver.start() => result,
+    };
+
+    if let Err(err) = start_result {
         log_runtime_message(
             &sender,
             "error",
@@ -82,11 +102,13 @@ where
             Command(ParticipantMessage),
             ChannelClosed,
             Terminated(DriverTermination),
+            Cancelled,
         }
 
         let event = tokio::select! {
             biased;
 
+            _ = cancellation_token.cancelled() => RuntimeEvent::Cancelled,
             termination = driver.wait_for_termination() => RuntimeEvent::Terminated(termination),
             message = receiver.recv() => match message {
                 Some(message) => RuntimeEvent::Command(message),
@@ -102,6 +124,17 @@ where
                     driver.participant_name(),
                     termination.message,
                 );
+                break;
+            }
+            RuntimeEvent::Cancelled => {
+                if let Err(err) = driver.close().await {
+                    log_runtime_message(
+                        &sender,
+                        "error",
+                        driver.participant_name(),
+                        format!("Failed closing participant after task cancellation: {err}"),
+                    );
+                }
                 break;
             }
             RuntimeEvent::ChannelClosed => {
@@ -221,11 +254,21 @@ mod tests {
         future::BoxFuture,
         FutureExt as _,
     };
-    use std::future::pending;
+    use std::{
+        future::pending,
+        sync::{
+            atomic::{
+                AtomicUsize,
+                Ordering,
+            },
+            Arc,
+        },
+    };
     use tokio::sync::{
         mpsc::unbounded_channel,
         watch,
     };
+    use tokio_util::sync::CancellationToken;
 
     struct FakeDriver {
         name: String,
@@ -324,6 +367,7 @@ mod tests {
             log_tx,
             state_tx,
             FakeDriver::new("sim-user"),
+            CancellationToken::new(),
         ));
 
         message_tx.send(ParticipantMessage::ToggleAudio).unwrap();
@@ -407,10 +451,81 @@ mod tests {
                 name: "sim-user".to_string(),
                 terminated: false,
             },
+            CancellationToken::new(),
         )
         .await
         .unwrap();
 
+        assert!(!state_rx.borrow().running);
+        assert!(!state_rx.borrow().joined);
+    }
+
+    #[tokio::test]
+    async fn runtime_closes_participant_when_task_is_cancelled() {
+        struct CancelAwareDriver {
+            close_count: Arc<AtomicUsize>,
+        }
+
+        impl ParticipantDriverSession for CancelAwareDriver {
+            fn participant_name(&self) -> &str {
+                "sim-user"
+            }
+
+            fn start(&mut self) -> BoxFuture<'_, Result<()>> {
+                async move { Ok(()) }.boxed()
+            }
+
+            fn handle_command(&mut self, _message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
+                async move { Ok(()) }.boxed()
+            }
+
+            fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
+                async move {
+                    Ok(ParticipantState {
+                        username: "sim-user".to_string(),
+                        running: true,
+                        joined: true,
+                        ..Default::default()
+                    })
+                }
+                .boxed()
+            }
+
+            fn close(&mut self) -> BoxFuture<'_, Result<()>> {
+                async move {
+                    self.close_count.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+                .boxed()
+            }
+
+            fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
+                async move { pending::<DriverTermination>().await }.boxed()
+            }
+        }
+
+        let (_message_tx, message_rx) = unbounded_channel();
+        let (log_tx, _log_rx) = unbounded_channel();
+        let (state_tx, state_rx) = watch::channel(ParticipantState::default());
+        let cancellation_token = CancellationToken::new();
+        let close_count = Arc::new(AtomicUsize::new(0));
+
+        let runtime = tokio::spawn(run_participant_runtime(
+            message_rx,
+            log_tx,
+            state_tx,
+            CancelAwareDriver {
+                close_count: Arc::clone(&close_count),
+            },
+            cancellation_token.clone(),
+        ));
+
+        state_rx.clone().wait_for(|state| state.running).await.unwrap();
+
+        cancellation_token.cancel();
+        runtime.await.unwrap().unwrap();
+
+        assert_eq!(close_count.load(Ordering::SeqCst), 1);
         assert!(!state_rx.borrow().running);
         assert!(!state_rx.borrow().joined);
     }

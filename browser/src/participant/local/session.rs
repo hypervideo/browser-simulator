@@ -170,9 +170,28 @@ impl LocalChromiumSession {
             handle.abort();
         }
 
-        if let Some(automation) = self.automation.as_mut() {
-            if let Err(err) = automation.leave().await {
-                self.log_message("error", format!("Failed leaving space while closing browser: {err}"));
+        let should_leave = if let Some(automation) = self.automation.as_mut() {
+            match automation.refresh_state().await {
+                Ok(state) => state.joined,
+                Err(err) => {
+                    self.log_message(
+                        "debug",
+                        format!(
+                            "Failed refreshing participant state while closing browser, attempting leave anyway: {err}"
+                        ),
+                    );
+                    true
+                }
+            }
+        } else {
+            false
+        };
+
+        if should_leave {
+            if let Some(automation) = self.automation.as_mut() {
+                if let Err(err) = automation.leave().await {
+                    self.log_message("error", format!("Failed leaving space while closing browser: {err}"));
+                }
             }
         }
 
