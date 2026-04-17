@@ -162,7 +162,8 @@ where
         ApiError::InvalidResponsePayload(bytes, source) => {
             let body = String::from_utf8_lossy(&bytes);
             eyre!(
-                "Failed to {action} from {base_url}: response did not match the generated API schema: {source}\n{body}"
+                "Failed to {action} from {base_url}: response did not match the generated API schema: {source}\n{}\n{body}",
+                schema_mismatch_hint(base_url)
             )
         }
         ApiError::UnexpectedResponse(response) => {
@@ -190,6 +191,14 @@ fn not_found_message(method: &Method, base_url: &str, path: &str) -> String {
         message.push_str("\nUpdate the deployed worker or point the simulator at a newer local worker instance.");
     }
     message
+}
+
+fn schema_mismatch_hint(base_url: &str) -> &'static str {
+    if base_url == DEPLOYED_WORKER_URL {
+        "The deployed worker schema likely changed since this simulator build. Rebuild hyper-browser-simulator from the current source tree or point it at a matching local worker instance."
+    } else {
+        "The worker response schema likely differs from this simulator build. Rebuild hyper-browser-simulator or point it at a worker instance with a matching API schema."
+    }
 }
 
 #[cfg(test)]
@@ -242,6 +251,25 @@ mod tests {
         assert!(message.contains("HTTP 500 Internal Server Error"), "{message}");
         assert!(message.contains("worker exploded"), "{message}");
         assert!(message.contains(&base_url), "{message}");
+    }
+
+    #[tokio::test]
+    async fn translates_schema_mismatches_into_rebuild_hints() {
+        let response = concat!(
+            r#"{"ok":true,"sessionId":"cf-session-123","state":{"running":true,"joined":true,"muted":false,"videoActivated":true,"screenshareActivated":false,"noiseSuppression":"future-noise-model","transportMode":"webrtc","webcamResolution":"auto","backgroundBlur":false},"log":[]}"#
+        );
+        let (base_url, _request_task) = spawn_json_server(200, response).await;
+        let client = CloudflareWorkerClient::new(&base_url, Duration::from_secs(5)).unwrap();
+
+        let error = client.create_session(&create_session_request()).await.unwrap_err();
+        let message = error.to_string();
+
+        assert!(
+            message.contains("response did not match the generated API schema"),
+            "{message}"
+        );
+        assert!(message.contains("Rebuild hyper-browser-simulator"), "{message}");
+        assert!(message.contains("future-noise-model"), "{message}");
     }
 
     fn create_session_request() -> SessionCreateRequest {
