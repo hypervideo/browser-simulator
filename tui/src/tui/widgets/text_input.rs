@@ -32,8 +32,8 @@ impl TextInput {
         Self { editor }
     }
 
-    pub(crate) fn draw(&mut self, frame: &mut ratatui::Frame<'_>, _area: ratatui::prelude::Rect) -> Result<()> {
-        render_popup(&self.editor, frame);
+    pub(crate) fn draw(&mut self, frame: &mut ratatui::Frame<'_>, area: ratatui::prelude::Rect) -> Result<()> {
+        render_popup(&self.editor, frame, area);
         Ok(())
     }
 
@@ -46,9 +46,9 @@ impl TextInput {
     }
 }
 
-fn render_popup(popup: impl Widget, frame: &mut Frame) -> Rect {
+fn render_popup(popup: impl Widget, frame: &mut Frame, area: Rect) -> Rect {
     let area = layout::center(
-        frame.area(),
+        area,
         Constraint::Max(120),
         Constraint::Length(3), // top and bottom border + content
     );

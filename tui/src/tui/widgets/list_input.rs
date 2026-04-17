@@ -6,6 +6,7 @@ use ratatui::{
         self,
         Block,
         Borders,
+        Clear,
     },
 };
 
@@ -50,7 +51,7 @@ impl<T> ListInput<T> {
         }
     }
 
-    pub(crate) fn draw(&mut self, frame: &mut ratatui::Frame<'_>, _area: ratatui::prelude::Rect) -> Result<()> {
+    pub(crate) fn draw(&mut self, frame: &mut ratatui::Frame<'_>, area: ratatui::prelude::Rect) -> Result<()> {
         // Iterate through all elements in the `items` and stylize them.
         let items: Vec<widgets::ListItem> = self
             .items
@@ -69,7 +70,7 @@ impl<T> ListInput<T> {
             .highlight_symbol("> ")
             .highlight_spacing(widgets::HighlightSpacing::Always);
 
-        render_popup(list, frame, &mut self.list_state, line_count);
+        render_popup(list, frame, area, &mut self.list_state, line_count);
 
         Ok(())
     }
@@ -101,8 +102,15 @@ impl<T> ListInput<T> {
     }
 }
 
-fn render_popup<T: StatefulWidget>(popup: T, frame: &mut Frame, state: &mut T::State, line_count: u16) -> Rect {
-    let area = crate::tui::layout::center(frame.area(), Constraint::Max(120), Constraint::Length(line_count + 2));
+fn render_popup<T: StatefulWidget>(
+    popup: T,
+    frame: &mut Frame,
+    area: Rect,
+    state: &mut T::State,
+    line_count: u16,
+) -> Rect {
+    let area = crate::tui::layout::center(area, Constraint::Max(120), Constraint::Length(line_count + 2));
+    frame.render_widget(Clear, area);
     frame.render_stateful_widget(popup, area, state);
     area
 }
