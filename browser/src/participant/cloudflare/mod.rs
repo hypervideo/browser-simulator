@@ -324,6 +324,24 @@ impl CloudflareSession {
         store_cached_state(&self.cached_state, state);
     }
 
+    fn effective_health_poll_interval(&self) -> Duration {
+        let configured_ms = self.cloudflare_config.health_poll_interval_ms.max(1);
+        let keep_alive_budget_ms = self.cloudflare_config.session_timeout_ms.saturating_div(2).max(1);
+        let effective_ms = configured_ms.min(keep_alive_budget_ms);
+
+        if effective_ms != configured_ms {
+            self.log_message(
+                "warn",
+                format!(
+                    "Cloudflare health poll interval {}ms exceeds the safe keep-alive window for a {}ms Browser Rendering keep_alive timeout; clamping to {}ms",
+                    configured_ms, self.cloudflare_config.session_timeout_ms, effective_ms
+                ),
+            );
+        }
+
+        Duration::from_millis(effective_ms)
+    }
+
     async fn stop_termination_poller(&mut self) {
         if let Some(shutdown_tx) = self.poller_shutdown_tx.take() {
             let _ = shutdown_tx.send(());
@@ -336,7 +354,7 @@ impl CloudflareSession {
 
     fn start_termination_poller(&mut self, session_id: String) -> Result<()> {
         let client = self.worker_client()?;
-        let poll_interval = Duration::from_millis(self.cloudflare_config.health_poll_interval_ms);
+        let poll_interval = self.effective_health_poll_interval();
         let cached_state = Arc::clone(&self.cached_state);
         let participant_name = self.launch_spec.username.clone();
         let sender = self.sender.clone();
@@ -352,7 +370,7 @@ impl CloudflareSession {
                 tokio::select! {
                     _ = &mut shutdown_rx => break,
                     _ = interval.tick() => {
-                        match client.get_session_state(&session_id).await {
+                        match client.keep_alive_session(&session_id).await {
                             Ok(response) => {
                                 forward_worker_entries(&sender, &participant_name, &response.log);
 
@@ -1362,8 +1380,8 @@ mod tests {
 
         let requests = requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 2);
-        assert_eq!(requests[1].method, "GET");
-        assert_eq!(requests[1].path, "/sessions/cf-session-terminated/state");
+        assert_eq!(requests[1].method, "POST");
+        assert_eq!(requests[1].path, "/sessions/cf-session-terminated/keep-alive");
     }
 
     fn launch_options(headless: bool, fake_media: FakeMedia) -> CloudflareLaunchOptions {

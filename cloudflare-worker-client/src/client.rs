@@ -4,6 +4,7 @@ use crate::generated::{
         CloseSessionSessionId,
         CommandSessionSessionId,
         GetSessionStateSessionId,
+        KeepAliveSessionSessionId,
     },
     Client as ApiClient,
 };
@@ -118,6 +119,18 @@ impl CloudflareWorkerClient {
             .await
             .map(|response| response.into_inner())
             .map_err(|error| api_error(error, "fetch worker state", &self.base_url, &Method::GET, &path))
+    }
+
+    pub async fn keep_alive_session(&self, session_id: &str) -> Result<types::SessionKeepAliveResponse> {
+        let path = format!("sessions/{session_id}/keep-alive");
+        let session_id = KeepAliveSessionSessionId::try_from(session_id)
+            .map_err(|error| eyre!("Invalid worker session ID `{session_id}`: {error}"))?;
+
+        self.api
+            .keep_alive_session(&session_id)
+            .await
+            .map(|response| response.into_inner())
+            .map_err(|error| api_error(error, "send a worker keep-alive", &self.base_url, &Method::POST, &path))
     }
 
     pub async fn close_session(&self, session_id: &str) -> Result<types::SessionCloseResponse> {

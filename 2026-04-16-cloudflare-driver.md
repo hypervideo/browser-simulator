@@ -138,7 +138,7 @@ Explicit non-goals for v1:
 
 ## Progress Tracker
 
-Overall status: `phase 6 automated validation added; manual smoke validation pending`
+Overall status: `phase 6 automated validation added; explicit Cloudflare keep-alive polling implemented; manual smoke validation pending`
 
 Cross-repo dependency:
 
@@ -152,6 +152,11 @@ Milestones:
 - [x] Phase 4: Implement command handling, cached state, and termination polling
 - [x] Phase 5: Add TUI and UX handling for backend-specific limitations
 - [ ] Phase 6: Validate with unit, integration, and manual tests
+
+Latest implementation note:
+
+- the Cloudflare driver now sends explicit `POST /sessions/{sessionId}/keep-alive` requests on its background poll loop and clamps that loop to a safe interval within the configured Browser Rendering inactivity window
+- the worker-side `sessionTimeoutMs` is now treated as the Browser Rendering `keep_alive` inactivity timeout instead of a hard session lifetime, so active sessions can outlive 10 minutes when the simulator keeps sending commands
 
 ## Detailed Plan
 

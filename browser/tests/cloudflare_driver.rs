@@ -239,8 +239,8 @@ async fn cloudflare_runtime_marks_participant_stopped_when_worker_state_poll_fai
     let requests = requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].path, "/sessions");
-    assert_eq!(requests[1].method, "GET");
-    assert_eq!(requests[1].path, "/sessions/cf-runtime-terminated/state");
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(requests[1].path, "/sessions/cf-runtime-terminated/keep-alive");
 }
 
 #[tokio::test]

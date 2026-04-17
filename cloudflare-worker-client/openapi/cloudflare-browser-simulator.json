@@ -412,7 +412,7 @@
           },
           "sessionTimeoutMs": {
             "type": "number",
-            "description": "Desired room session duration in milliseconds."
+            "description": "Desired Browser Rendering inactivity timeout (`keep_alive`) in milliseconds."
           },
           "navigationTimeoutMs": {
             "type": "number",
@@ -502,6 +502,93 @@
           "transport",
           "resolution",
           "blur"
+        ]
+      },
+      "SessionBatchCloseResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionBatchCloseResult"
+            }
+          },
+          "summary": {
+            "$ref": "#/components/schemas/SessionBatchCloseSummary"
+          }
+        },
+        "required": [
+          "ok",
+          "results",
+          "summary"
+        ]
+      },
+      "SessionBatchCloseResult": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationLogEntry"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "sessionId",
+          "log"
+        ]
+      },
+      "SessionBatchCloseSummary": {
+        "type": "object",
+        "properties": {
+          "requestedSessions": {
+            "type": "number"
+          },
+          "closedSessions": {
+            "type": "number"
+          },
+          "failedSessions": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "requestedSessions",
+          "closedSessions",
+          "failedSessions"
+        ]
+      },
+      "SessionBatchCloseRequest": {
+        "type": "object",
+        "properties": {
+          "sessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Cloudflare Browser Rendering session ID."
+            },
+            "minItems": 1,
+            "description": "Browser Rendering session IDs to close in a single request."
+          }
+        },
+        "required": [
+          "sessionIds"
         ]
       },
       "SessionCommandResponse": {
@@ -625,11 +712,11 @@
                   "krisp-medium",
                   "krisp-low",
                   "krisp-high-with-bvc",
-              "krisp-medium-with-bvc",
-              "ai-coustics-sparrow-xxs",
-              "ai-coustics-sparrow-xs",
-              "ai-coustics-sparrow-s",
-              "ai-coustics-sparrow-l"
+                  "krisp-medium-with-bvc",
+                  "ai-coustics-sparrow-xxs",
+                  "ai-coustics-sparrow-xs",
+                  "ai-coustics-sparrow-s",
+                  "ai-coustics-sparrow-l"
                 ]
               }
             },
@@ -710,6 +797,35 @@
           "ok",
           "sessionId",
           "state"
+        ]
+      },
+      "SessionKeepAliveResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ParticipantState"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationLogEntry"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "sessionId",
+          "state",
+          "log"
         ]
       },
       "SessionCloseResponse": {
@@ -876,6 +992,56 @@
         }
       }
     },
+    "/sessions/close": {
+      "post": {
+        "operationId": "closeSessions",
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Close multiple participant browser sessions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionBatchCloseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Participant sessions closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionBatchCloseResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Input validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Participant session close handler failed before processing results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/sessions/{sessionId}/commands": {
       "post": {
         "operationId": "commandSession",
@@ -1002,6 +1168,60 @@
           },
           "501": {
             "description": "Participant state scraping is not implemented yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{sessionId}/keep-alive": {
+      "post": {
+        "operationId": "keepAliveSession",
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Send a keep-alive command to a participant browser session",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Cloudflare Browser Rendering session ID."
+            },
+            "required": true,
+            "description": "Cloudflare Browser Rendering session ID.",
+            "name": "sessionId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Keep-alive command sent and participant state refreshed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionKeepAliveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Input validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Keep-alive failed.",
             "content": {
               "application/json": {
                 "schema": {
