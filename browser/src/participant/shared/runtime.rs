@@ -276,6 +276,7 @@ mod tests {
                     ParticipantMessage::Close
                     | ParticipantMessage::ToggleVideo
                     | ParticipantMessage::ToggleScreenshare
+                    | ParticipantMessage::ToggleAutoGainControl
                     | ParticipantMessage::SetNoiseSuppression(_)
                     | ParticipantMessage::SetWebcamResolutions(_)
                     | ParticipantMessage::ToggleBackgroundBlur => {}

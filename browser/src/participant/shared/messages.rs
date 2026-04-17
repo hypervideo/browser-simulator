@@ -12,6 +12,7 @@ pub enum ParticipantMessage {
     ToggleAudio,
     ToggleVideo,
     ToggleScreenshare,
+    ToggleAutoGainControl,
     SetNoiseSuppression(NoiseSuppression),
     SetWebcamResolutions(WebcamResolution),
     ToggleBackgroundBlur,

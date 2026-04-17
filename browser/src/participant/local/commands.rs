@@ -90,6 +90,17 @@ create_eval_setter!(
 );
 
 create_eval_getter!(
+    get_auto_gain_control,
+    "function f() { return hyper.settings.media.autoGainControl; }",
+    bool
+);
+
+create_eval_setter!(
+    set_auto_gain_control,
+    "function f(value) { hyper.settings.media.actions.setAutoGainControl(value); }"
+);
+
+create_eval_getter!(
     get_background_blur,
     "function f() { return hyper.settings.media.backgroundBlur; }",
     bool

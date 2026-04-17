@@ -5,6 +5,7 @@ mod app_config;
 mod args;
 mod browser_config;
 mod client_config;
+mod cloudflare_config;
 pub mod media;
 mod participant_config;
 
@@ -28,6 +29,7 @@ pub use client_config::{
     WebcamResolution,
     WebcamResolutionIter,
 };
+pub use cloudflare_config::CloudflareConfig;
 use color_eyre::Result;
 use eyre::Context as _;
 pub use participant_config::{
@@ -57,12 +59,16 @@ pub struct Config {
     pub headless: bool,
     #[serde(default, skip_serializing_if = "ParticipantBackendKind::is_local")]
     pub backend: ParticipantBackendKind,
+    #[serde(default, skip_serializing_if = "CloudflareConfig::is_default")]
+    pub cloudflare: CloudflareConfig,
     #[serde(default)]
     pub audio_enabled: bool,
     #[serde(default)]
     pub video_enabled: bool,
     #[serde(default)]
     pub screenshare_enabled: bool,
+    #[serde(default = "default_auto_gain_control")]
+    pub auto_gain_control: bool,
     #[serde(default)]
     pub noise_suppression: NoiseSuppression,
     #[serde(default)]
@@ -74,6 +80,10 @@ pub struct Config {
 }
 
 const DEFAULT_CONFIG: &str = include_str!("default-config.yaml");
+
+const fn default_auto_gain_control() -> bool {
+    true
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -89,6 +99,36 @@ impl config::Source for Config {
     fn collect(&self) -> Result<config::Map<String, config::Value>, config::ConfigError> {
         let mut cache = HashMap::<String, config::Value>::new();
         cache.insert("backend".to_string(), self.backend.to_string().into());
+        if !self.cloudflare.is_default() {
+            cache.insert(
+                "cloudflare".to_string(),
+                config::ValueKind::Table(HashMap::from_iter([
+                    ("base_url".to_string(), self.cloudflare.base_url.to_string().into()),
+                    (
+                        "request_timeout_seconds".to_string(),
+                        self.cloudflare.request_timeout_seconds.into(),
+                    ),
+                    (
+                        "session_timeout_ms".to_string(),
+                        self.cloudflare.session_timeout_ms.into(),
+                    ),
+                    (
+                        "navigation_timeout_ms".to_string(),
+                        self.cloudflare.navigation_timeout_ms.into(),
+                    ),
+                    (
+                        "selector_timeout_ms".to_string(),
+                        self.cloudflare.selector_timeout_ms.into(),
+                    ),
+                    ("debug".to_string(), self.cloudflare.debug.into()),
+                    (
+                        "health_poll_interval_ms".to_string(),
+                        self.cloudflare.health_poll_interval_ms.into(),
+                    ),
+                ]))
+                .into(),
+            );
+        }
         if let Some(url) = &self.url {
             cache.insert("url".to_string(), url.to_string().into());
         }
@@ -96,6 +136,7 @@ impl config::Source for Config {
         cache.insert("audio_enabled".to_string(), self.audio_enabled.into());
         cache.insert("video_enabled".to_string(), self.video_enabled.into());
         cache.insert("screenshare_enabled".to_string(), self.screenshare_enabled.into());
+        cache.insert("auto_gain_control".to_string(), self.auto_gain_control.into());
         cache.insert(
             "noise_suppression".to_string(),
             self.noise_suppression.to_string().into(),
@@ -267,5 +308,41 @@ remote_url_options:
             Some(url::Url::parse("https://example.com/space/demo").expect("valid url"))
         );
         assert_eq!(config.backend, ParticipantBackendKind::Local);
+    }
+
+    #[test]
+    fn parses_cloudflare_backend_and_nested_cloudflare_config() {
+        let config: Config = config::Config::builder()
+            .add_source(Config::default())
+            .add_source(config::File::from_str(
+                r#"
+backend: cloudflare
+cloudflare:
+  base_url: https://worker.example.com
+  request_timeout_seconds: 15
+  session_timeout_ms: 120000
+  navigation_timeout_ms: 30000
+  selector_timeout_ms: 10000
+  debug: true
+  health_poll_interval_ms: 2000
+"#,
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .expect("failed to build config")
+            .try_deserialize()
+            .expect("failed to deserialize config");
+
+        assert_eq!(config.backend, ParticipantBackendKind::Cloudflare);
+        assert_eq!(
+            config.cloudflare.base_url,
+            url::Url::parse("https://worker.example.com").expect("valid url")
+        );
+        assert_eq!(config.cloudflare.request_timeout_seconds, 15);
+        assert_eq!(config.cloudflare.session_timeout_ms, 120_000);
+        assert_eq!(config.cloudflare.navigation_timeout_ms, 30_000);
+        assert_eq!(config.cloudflare.selector_timeout_ms, 10_000);
+        assert!(config.cloudflare.debug);
+        assert_eq!(config.cloudflare.health_poll_interval_ms, 2_000);
     }
 }

@@ -5,6 +5,10 @@ use super::{
         messages::ParticipantMessage,
         ParticipantState,
     },
+    commands::{
+        get_auto_gain_control,
+        set_auto_gain_control,
+    },
     frontend::{
         element_state,
         FrontendAutomation,
@@ -90,6 +94,10 @@ impl ParticipantInnerLite {
     async fn apply_all_settings(&self) -> Result<()> {
         let settings = &self.context.launch_spec.settings;
 
+        set_auto_gain_control(&self.context.page, settings.auto_gain_control)
+            .await
+            .context("failed to set auto gain control")?;
+
         if !settings.audio_enabled {
             self.toggle_audio_inner().await?;
         }
@@ -150,6 +158,14 @@ impl ParticipantInnerLite {
         Ok(())
     }
 
+    async fn toggle_auto_gain_control_inner(&self) -> Result<()> {
+        let auto_gain_control = get_auto_gain_control(&self.context.page).await?;
+        set_auto_gain_control(&self.context.page, !auto_gain_control)
+            .await
+            .context("Failed to set auto gain control")?;
+        Ok(())
+    }
+
     async fn set_webcam_resolutions_inner(&self, _value: WebcamResolution) -> Result<()> {
         debug!(
             participant = %self.participant_name(),
@@ -196,11 +212,16 @@ impl ParticipantInnerLite {
             username: self.context.launch_spec.username.clone(),
             running: true,
             joined,
+            auto_gain_control: self.context.launch_spec.settings.auto_gain_control,
             transport_mode: TransportMode::default(),
             webcam_resolution: WebcamResolution::default(),
             noise_suppression: NoiseSuppression::default(),
             ..Default::default()
         };
+
+        if let Ok(value) = get_auto_gain_control(&self.context.page).await {
+            state.auto_gain_control = value;
+        }
 
         if let Ok(mute_button) = self.mute_button().await {
             if let Some(value) = element_state(&mute_button).await {
@@ -241,6 +262,7 @@ impl FrontendAutomation for ParticipantInnerLite {
                 ParticipantMessage::ToggleAudio => self.toggle_audio_inner().await,
                 ParticipantMessage::ToggleVideo => self.toggle_video_inner().await,
                 ParticipantMessage::ToggleScreenshare => self.toggle_screen_share_inner().await,
+                ParticipantMessage::ToggleAutoGainControl => self.toggle_auto_gain_control_inner().await,
                 ParticipantMessage::SetWebcamResolutions(value) => self.set_webcam_resolutions_inner(value).await,
                 ParticipantMessage::SetNoiseSuppression(value) => self.set_noise_suppression_inner(value).await,
                 ParticipantMessage::ToggleBackgroundBlur => self.toggle_background_blur_inner().await,

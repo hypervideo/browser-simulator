@@ -132,6 +132,10 @@ impl BorrowedCookie {
     pub fn username(&self) -> &str {
         &self.cookie.username
     }
+
+    pub fn raw_value(&self) -> &str {
+        &self.cookie.cookie
+    }
 }
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-

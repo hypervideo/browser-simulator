@@ -59,6 +59,7 @@ impl ParticipantDriverSession for RemoteStubSession {
                 joined: true,
                 muted: !self.launch_spec.settings.audio_enabled,
                 video_activated: self.launch_spec.settings.video_enabled,
+                auto_gain_control: self.launch_spec.settings.auto_gain_control,
                 noise_suppression: self.launch_spec.settings.noise_suppression,
                 transport_mode: self.launch_spec.settings.transport,
                 webcam_resolution: self.launch_spec.settings.resolution,
@@ -96,6 +97,10 @@ impl ParticipantDriverSession for RemoteStubSession {
                 ParticipantMessage::ToggleScreenshare => {
                     self.state.screenshare_activated = !self.state.screenshare_activated;
                     self.log_message("debug", "remote stub toggled screenshare");
+                }
+                ParticipantMessage::ToggleAutoGainControl => {
+                    self.state.auto_gain_control = !self.state.auto_gain_control;
+                    self.log_message("debug", "remote stub toggled auto gain control");
                 }
                 ParticipantMessage::SetNoiseSuppression(value) => {
                     self.state.noise_suppression = value;

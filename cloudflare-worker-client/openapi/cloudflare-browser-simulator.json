@@ -1,0 +1,1314 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "cloudflare-browser-simulator",
+    "version": "0.3.0",
+    "description": "Cloudflare Worker that launches Browser Rendering sessions, joins Hyper rooms, and exposes its API contract from code."
+  },
+  "components": {
+    "schemas": {
+      "HealthzResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "SessionsResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "summary": {
+            "$ref": "#/components/schemas/SessionSummary"
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "summary",
+          "sessions"
+        ]
+      },
+      "SessionSummary": {
+        "type": "object",
+        "properties": {
+          "openSessions": {
+            "type": "number"
+          },
+          "connectedSessions": {
+            "type": "number"
+          },
+          "idleSessions": {
+            "type": "number"
+          },
+          "activeSessions": {
+            "type": "number"
+          },
+          "maxConcurrentSessions": {
+            "type": "number"
+          },
+          "allowedBrowserAcquisitions": {
+            "type": "number"
+          },
+          "timeUntilNextAllowedBrowserAcquisition": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "openSessions",
+          "connectedSessions",
+          "idleSessions",
+          "activeSessions",
+          "maxConcurrentSessions",
+          "allowedBrowserAcquisitions",
+          "timeUntilNextAllowedBrowserAcquisition"
+        ]
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "number"
+          },
+          "connectionId": {
+            "type": "string"
+          },
+          "connectionStartTime": {
+            "type": "number"
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sessionId",
+          "startTime",
+          "isActive"
+        ]
+      },
+      "LimitsResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "docs": {
+            "$ref": "#/components/schemas/LimitsDocs"
+          }
+        },
+        "required": [
+          "ok",
+          "limits",
+          "docs"
+        ]
+      },
+      "Limits": {
+        "type": "object",
+        "properties": {
+          "activeSessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActiveSessionRef"
+            }
+          },
+          "maxConcurrentSessions": {
+            "type": "number"
+          },
+          "allowedBrowserAcquisitions": {
+            "type": "number"
+          },
+          "timeUntilNextAllowedBrowserAcquisition": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "activeSessions",
+          "maxConcurrentSessions",
+          "allowedBrowserAcquisitions",
+          "timeUntilNextAllowedBrowserAcquisition"
+        ]
+      },
+      "ActiveSessionRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "LimitsDocs": {
+        "type": "object",
+        "properties": {
+          "activeSessions": {
+            "type": "string"
+          },
+          "maxConcurrentSessions": {
+            "type": "string"
+          },
+          "allowedBrowserAcquisitions": {
+            "type": "string"
+          },
+          "timeUntilNextAllowedBrowserAcquisition": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "activeSessions",
+          "maxConcurrentSessions",
+          "allowedBrowserAcquisitions",
+          "timeUntilNextAllowedBrowserAcquisition"
+        ]
+      },
+      "SessionCreateResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ParticipantState"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationLogEntry"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "sessionId",
+          "state",
+          "log"
+        ]
+      },
+      "ParticipantState": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "boolean"
+          },
+          "joined": {
+            "type": "boolean"
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "videoActivated": {
+            "type": "boolean"
+          },
+          "screenshareActivated": {
+            "type": "boolean"
+          },
+          "autoGainControl": {
+            "type": "boolean"
+          },
+          "noiseSuppression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "deepfilternet",
+              "rnnoise",
+              "iris-carthy",
+              "krisp-high",
+              "krisp-medium",
+              "krisp-low",
+              "krisp-high-with-bvc",
+              "krisp-medium-with-bvc",
+              "ai-coustics-sparrow-xxs",
+              "ai-coustics-sparrow-xs",
+              "ai-coustics-sparrow-s",
+              "ai-coustics-sparrow-l"
+            ]
+          },
+          "transportMode": {
+            "type": "string",
+            "enum": [
+              "webrtc",
+              "webtransport"
+            ]
+          },
+          "webcamResolution": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "p144",
+              "p240",
+              "p360",
+              "p480",
+              "p720",
+              "p1080",
+              "p1440",
+              "p2160",
+              "p4320"
+            ]
+          },
+          "backgroundBlur": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "running",
+          "joined",
+          "muted",
+          "videoActivated",
+          "screenshareActivated",
+          "autoGainControl",
+          "noiseSuppression",
+          "transportMode",
+          "webcamResolution",
+          "backgroundBlur"
+        ]
+      },
+      "AutomationLogEntry": {
+        "type": "object",
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "step": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "step"
+        ]
+      },
+      "ApiErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationErrorItem"
+            }
+          },
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationLogEntry"
+            }
+          },
+          "screenshot": {
+            "$ref": "#/components/schemas/Screenshot"
+          }
+        }
+      },
+      "ValidationErrorItem": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "path"
+        ]
+      },
+      "Screenshot": {
+        "type": "object",
+        "properties": {
+          "mimeType": {
+            "type": "string"
+          },
+          "base64": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mimeType",
+          "base64"
+        ]
+      },
+      "SessionCreateRequest": {
+        "type": "object",
+        "properties": {
+          "roomUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Hyper room URL to join."
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Display name shown in the room."
+          },
+          "frontendKind": {
+            "type": "string",
+            "enum": [
+              "hyper-core",
+              "hyper-lite"
+            ]
+          },
+          "hyperSessionCookie": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional Hyper Core `hyper_session` cookie value to inject before navigation."
+          },
+          "settings": {
+            "$ref": "#/components/schemas/ParticipantSettings"
+          },
+          "sessionTimeoutMs": {
+            "type": "number",
+            "description": "Desired Browser Rendering inactivity timeout (`keep_alive`) in milliseconds."
+          },
+          "navigationTimeoutMs": {
+            "type": "number",
+            "description": "Navigation timeout in milliseconds."
+          },
+          "selectorTimeoutMs": {
+            "type": "number",
+            "description": "Selector timeout in milliseconds."
+          },
+          "debug": {
+            "type": "boolean",
+            "description": "Include a debug screenshot in 500 responses."
+          }
+        },
+        "required": [
+          "roomUrl",
+          "displayName",
+          "frontendKind",
+          "settings"
+        ]
+      },
+      "ParticipantSettings": {
+        "type": "object",
+        "properties": {
+          "audioEnabled": {
+            "type": "boolean",
+            "description": "Whether the participant should join with audio enabled."
+          },
+          "videoEnabled": {
+            "type": "boolean",
+            "description": "Whether the participant should join with video enabled."
+          },
+          "screenshareEnabled": {
+            "type": "boolean",
+            "description": "Whether the participant should start screensharing after join."
+          },
+          "autoGainControl": {
+            "type": "boolean",
+            "description": "Whether Hyper should automatically adjust microphone volume."
+          },
+          "noiseSuppression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "deepfilternet",
+              "rnnoise",
+              "iris-carthy",
+              "krisp-high",
+              "krisp-medium",
+              "krisp-low",
+              "krisp-high-with-bvc",
+              "krisp-medium-with-bvc",
+              "ai-coustics-sparrow-xxs",
+              "ai-coustics-sparrow-xs",
+              "ai-coustics-sparrow-s",
+              "ai-coustics-sparrow-l"
+            ]
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "webrtc",
+              "webtransport"
+            ]
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "p144",
+              "p240",
+              "p360",
+              "p480",
+              "p720",
+              "p1080",
+              "p1440",
+              "p2160",
+              "p4320"
+            ]
+          },
+          "blur": {
+            "type": "boolean",
+            "description": "Whether background blur should be enabled."
+          }
+        },
+        "required": [
+          "audioEnabled",
+          "videoEnabled",
+          "screenshareEnabled",
+          "autoGainControl",
+          "noiseSuppression",
+          "transport",
+          "resolution",
+          "blur"
+        ]
+      },
+      "SessionBatchCloseResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionBatchCloseResult"
+            }
+          },
+          "summary": {
+            "$ref": "#/components/schemas/SessionBatchCloseSummary"
+          }
+        },
+        "required": [
+          "ok",
+          "results",
+          "summary"
+        ]
+      },
+      "SessionBatchCloseResult": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationLogEntry"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "sessionId",
+          "log"
+        ]
+      },
+      "SessionBatchCloseSummary": {
+        "type": "object",
+        "properties": {
+          "requestedSessions": {
+            "type": "number"
+          },
+          "closedSessions": {
+            "type": "number"
+          },
+          "failedSessions": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "requestedSessions",
+          "closedSessions",
+          "failedSessions"
+        ]
+      },
+      "SessionBatchCloseRequest": {
+        "type": "object",
+        "properties": {
+          "sessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Cloudflare Browser Rendering session ID."
+            },
+            "minItems": 1,
+            "description": "Browser Rendering session IDs to close in a single request."
+          }
+        },
+        "required": [
+          "sessionIds"
+        ]
+      },
+      "SessionCommandResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ParticipantState"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationLogEntry"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "sessionId",
+          "state",
+          "log"
+        ]
+      },
+      "SessionCommandRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "join"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "leave"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "toggle-audio"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "toggle-video"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "toggle-screenshare"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "toggle-auto-gain-control"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set-noise-suppression"
+                ]
+              },
+              "noiseSuppression": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "deepfilternet",
+                  "rnnoise",
+                  "iris-carthy",
+                  "krisp-high",
+                  "krisp-medium",
+                  "krisp-low",
+                  "krisp-high-with-bvc",
+                  "krisp-medium-with-bvc",
+                  "ai-coustics-sparrow-xxs",
+                  "ai-coustics-sparrow-xs",
+                  "ai-coustics-sparrow-s",
+                  "ai-coustics-sparrow-l"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "noiseSuppression"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set-webcam-resolution"
+                ]
+              },
+              "webcamResolution": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "p144",
+                  "p240",
+                  "p360",
+                  "p480",
+                  "p720",
+                  "p1080",
+                  "p1440",
+                  "p2160",
+                  "p4320"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "webcamResolution"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "toggle-background-blur"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        ]
+      },
+      "SessionStateResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ParticipantState"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationLogEntry"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "sessionId",
+          "state"
+        ]
+      },
+      "SessionKeepAliveResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ParticipantState"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationLogEntry"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "sessionId",
+          "state",
+          "log"
+        ]
+      },
+      "SessionCloseResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationLogEntry"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "sessionId",
+          "log"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "": {
+      "get": {
+        "operationId": "redirectToDocs",
+        "tags": [
+          "meta"
+        ],
+        "summary": "Redirect to the interactive API docs",
+        "responses": {
+          "302": {
+            "description": "Redirects to /docs."
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "getHealthz",
+        "tags": [
+          "meta"
+        ],
+        "summary": "Check worker health",
+        "responses": {
+          "200": {
+            "description": "Simple worker health response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthzResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions": {
+      "get": {
+        "operationId": "listSessions",
+        "tags": [
+          "sessions"
+        ],
+        "summary": "List active browser rendering sessions",
+        "responses": {
+          "200": {
+            "description": "Active Cloudflare Browser Rendering sessions and a summarized count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionsResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSession",
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Create a participant browser session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Participant session created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCreateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Input validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Session creation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Requested create-session behavior is not implemented yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/limits": {
+      "get": {
+        "operationId": "getLimits",
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Show browser rendering capacity and rate limits",
+        "responses": {
+          "200": {
+            "description": "Current browser rendering limits and field-level notes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LimitsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/close": {
+      "post": {
+        "operationId": "closeSessions",
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Close multiple participant browser sessions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionBatchCloseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Participant sessions closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionBatchCloseResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Input validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Participant session close handler failed before processing results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{sessionId}/commands": {
+      "post": {
+        "operationId": "commandSession",
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Apply a runtime participant command",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Cloudflare Browser Rendering session ID."
+            },
+            "required": true,
+            "description": "Cloudflare Browser Rendering session ID.",
+            "name": "sessionId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCommandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Participant command applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Input validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Participant command failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Participant commands are not implemented yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{sessionId}/state": {
+      "get": {
+        "operationId": "getSessionState",
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Fetch the latest participant state",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Cloudflare Browser Rendering session ID."
+            },
+            "required": true,
+            "description": "Cloudflare Browser Rendering session ID.",
+            "name": "sessionId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Participant state fetched.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Input validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Participant state lookup failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Participant state scraping is not implemented yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{sessionId}/keep-alive": {
+      "post": {
+        "operationId": "keepAliveSession",
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Send a keep-alive command to a participant browser session",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Cloudflare Browser Rendering session ID."
+            },
+            "required": true,
+            "description": "Cloudflare Browser Rendering session ID.",
+            "name": "sessionId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Keep-alive command sent and participant state refreshed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionKeepAliveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Input validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Keep-alive failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{sessionId}/close": {
+      "post": {
+        "operationId": "closeSession",
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Close a participant browser session",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Cloudflare Browser Rendering session ID."
+            },
+            "required": true,
+            "description": "Cloudflare Browser Rendering session ID.",
+            "name": "sessionId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Participant session closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCloseResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Input validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Participant session close failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

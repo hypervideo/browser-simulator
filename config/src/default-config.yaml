@@ -25,8 +25,17 @@ fake_media_sources:
     fake_media: 'https://audio-samples.hyper.video/steve-jobs-british-radio-bg-50.mp3'
 headless: false
 backend: local
+cloudflare:
+  base_url: https://cloudflare-browser-simulator.hyper-video.workers.dev
+  request_timeout_seconds: 30
+  session_timeout_ms: 600000
+  navigation_timeout_ms: 45000
+  selector_timeout_ms: 20000
+  debug: false
+  health_poll_interval_ms: 5000
 audio_enabled: true
 video_enabled: true
+auto_gain_control: true
 noise_suppression: none
 transport: webtransport
 resolution: auto
