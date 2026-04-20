@@ -4,13 +4,13 @@ default:
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 run *flags="":
-    cargo run --release --package client-simulator -- {{ flags }}
+    cargo run --release --package hyper-client-simulator -- {{ flags }}
 
 dev *flags="":
-    cargo run --package client-simulator -- {{ flags }}
+    cargo run --package hyper-client-simulator -- {{ flags }}
 
 run-nix *flags="":
-    nix run .#client-simulator -- {{ flags }}
+    nix run .#hyper-client-simulator -- {{ flags }}
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -49,5 +49,5 @@ fetch-cookie username="simulator-user" server-url="http://localhost:8081":
 
 cachix-push:
     nix build --no-link --print-out-paths \
-        .#client-simulator \
+        .#hyper-client-simulator \
       | cachix push hyper-video

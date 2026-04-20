@@ -11,7 +11,7 @@
 
 let
   # Common configuration
-  version = "0.1.0";
+  version = "0.2.0";
   src = ../.;
   cargoLock = {
     lockFile = ../Cargo.lock;
@@ -33,17 +33,18 @@ let
 
       meta = {
         inherit description;
-        homepage = "https://github.com/hypervideo/hyper.video";
+        homepage = "https://github.com/hypervideo/browser-simulator";
       };
     } // env);
 in
 rec {
-  client-simulator = mkSimulatorPackage {
-    pname = "client-simulator";
+  hyper-client-simulator = mkSimulatorPackage {
+    pname = "hyper-client-simulator";
     description = "Hyper browser client simulator";
     buildInputs = [ openssl clang ffmpeg-headless ];
     env.LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
   };
 
-  default = client-simulator;
+  client-simulator = hyper-client-simulator;
+  default = hyper-client-simulator;
 }

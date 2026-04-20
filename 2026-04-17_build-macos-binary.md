@@ -10,7 +10,7 @@ Keep the implementation simple:
 - make local macOS Chrome discovery work outside the Nix shell,
 - run the macOS release builds on Blacksmith macOS runners.
 
-This plan is intentionally limited to shipping the `client-simulator` CLI for macOS.
+This plan is intentionally limited to shipping the `hyper-client-simulator` CLI for macOS.
 It does not try to redesign the runtime, build a `.app` bundle, or add extra packaging formats unless `dist` gives them to us cheaply.
 
 ## Constraints And Assumptions
@@ -176,7 +176,7 @@ Objective:
 Work:
 
 - run the local `just dist-plan` / `just dist-build` commands
-- verify the generated artifacts include the `client-simulator` binary for both macOS targets
+- verify the generated artifacts include the `hyper-client-simulator` binary for both macOS targets
 - open or inspect the generated release workflow
 - if practical, test one dry-run or pre-release tag in GitHub Actions
 - verify the binary can find Chrome on a normal macOS install outside the Nix shell
@@ -191,7 +191,7 @@ STATUS: implemented in-repo, pending GitHub secret setup
 
 Objective:
 
-- let colleagues install `client-simulator` with Homebrew instead of manually downloading release archives
+- let colleagues install `hyper-client-simulator` with Homebrew instead of manually downloading release archives
 
 Work:
 
@@ -201,7 +201,7 @@ Work:
 - regenerate the `dist` release workflow so Homebrew publishing is managed by `dist` rather than a separate hand-written pipeline
 - document the expected install flow for users, including:
   - `brew tap ...`
-  - `brew install client-simulator`
+  - `brew install hyper-client-simulator`
 - verify the generated Homebrew formula installs the macOS binary and that the installed binary still relies on the local Chrome/Chromium runtime as expected
 
 Current state:
@@ -210,10 +210,10 @@ Current state:
 - `.github/workflows/release.yml` is generated from `dist` and includes the `publish-homebrew-formula` job that pushes `Formula/*.rb` into the tap repo using `HOMEBREW_TAP_TOKEN`
 - the public tap repository now exists at `https://github.com/hypervideo/homebrew-tap`
 - local verification on 2026-04-20 succeeded:
-  - `cargo dist manifest --artifacts=all --output-format=json --no-local-paths --allow-dirty --tag=v0.1.0` reported `client-simulator.rb` plus the macOS release archives
+  - `cargo dist manifest --artifacts=all --output-format=json --no-local-paths --allow-dirty --tag=v0.1.0` reported `hyper-client-simulator.rb` plus the macOS release archives
   - `cargo dist build --target aarch64-apple-darwin --artifacts=all --allow-dirty --tag=v0.1.0` generated a real arm64 archive and formula
   - installing that generated formula from a throwaway local tap succeeded
-  - `client-simulator --help` ran successfully after the Homebrew install
+  - `hyper-client-simulator --help` ran successfully after the Homebrew install
 - the installed Homebrew package contains the simulator binary and README only; it does not bundle Chrome/Chromium, so runtime browser discovery still depends on the local machine as intended
 
 Remaining GitHub setup:
@@ -225,8 +225,8 @@ Remaining GitHub setup:
 Expected user install flow:
 
 - `brew tap hypervideo/tap`
-- `brew install client-simulator`
-- `brew upgrade client-simulator`
+- `brew install hyper-client-simulator`
+- `brew upgrade hyper-client-simulator`
 
 Expected result:
 

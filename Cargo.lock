@@ -407,30 +407,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
-name = "client-simulator"
-version = "0.1.0"
-dependencies = [
- "better-panic",
- "clap",
- "client-simulator-browser",
- "client-simulator-config",
- "client-simulator-tui",
- "color-eyre",
- "eyre",
- "human-panic",
- "libc",
- "serde_json",
- "strip-ansi-escapes",
- "tokio",
- "tracing",
- "tracing-error",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
 name = "client-simulator-browser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chromiumoxide",
  "chrono",
@@ -453,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "client-simulator-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "color-eyre",
@@ -474,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "client-simulator-tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "clap",
@@ -505,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "cloudflare-worker-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "eyre",
@@ -1367,6 +1345,28 @@ dependencies = [
  "smallvec",
  "tokio",
  "want",
+]
+
+[[package]]
+name = "hyper-client-simulator"
+version = "0.2.0"
+dependencies = [
+ "better-panic",
+ "clap",
+ "client-simulator-browser",
+ "client-simulator-config",
+ "client-simulator-tui",
+ "color-eyre",
+ "eyre",
+ "human-panic",
+ "libc",
+ "serde_json",
+ "strip-ansi-escapes",
+ "tokio",
+ "tracing",
+ "tracing-error",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
