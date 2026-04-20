@@ -196,9 +196,8 @@ Objective:
 Work:
 
 - enable the `homebrew` installer in `dist`
-- decide whether to publish to:
-  - a dedicated tap such as `hypervideo/homebrew-tap`, or
-  - an existing organization tap if one already exists
+- publish to the dedicated tap `hypervideo/homebrew-tap`
+  - this tap does not exist yet, instruct the user how to create it
 - configure the required Homebrew metadata in `dist` so generated formulae point at the GitHub Release artifacts for this repo
 - regenerate the `dist` release workflow so Homebrew publishing is managed by `dist` rather than a separate hand-written pipeline
 - document the expected install flow for users, including:

@@ -8,11 +8,13 @@ cargo-dist-version = "0.30.2"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = []
+installers = ["npm"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 # Where to host releases
 hosting = "github"
+# A namespace to use when publishing this package to the npm registry
+npm-scope = "@hypervideo"
 
 [dist.github-custom-runners]
 aarch64-apple-darwin = "blacksmith-12vcpu-macos-latest"
