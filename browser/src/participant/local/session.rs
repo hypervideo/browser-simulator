@@ -301,8 +301,11 @@ impl LocalFrontendBuilder {
 }
 
 const CHROME_BINARY_NAMES: &[&str] = &["chromium", "google-chrome", "google-chrome-stable", "chrome"];
+#[cfg(any(test, target_os = "macos"))]
 const MACOS_GOOGLE_CHROME_APP_BINARY: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+#[cfg(any(test, target_os = "macos"))]
 const MACOS_CHROMIUM_APP_BINARY: &str = "/Applications/Chromium.app/Contents/MacOS/Chromium";
+#[cfg(any(test, target_os = "macos"))]
 const MACOS_USER_GOOGLE_CHROME_APP_BINARY: &str = "Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 fn get_binary() -> Result<PathBuf> {
@@ -355,6 +358,7 @@ fn macos_app_bundle_candidates() -> Vec<PathBuf> {
     Vec::new()
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn build_macos_app_bundle_candidates(home_dir: Option<PathBuf>) -> Vec<PathBuf> {
     let mut candidates = vec![
         PathBuf::from(MACOS_GOOGLE_CHROME_APP_BINARY),
