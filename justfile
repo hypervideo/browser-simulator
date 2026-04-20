@@ -30,6 +30,20 @@ fmt:
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+dist-init *args="":
+    dist init {{ args }}
+
+dist-generate *args="":
+    dist generate {{ args }}
+
+dist-plan *args="":
+    dist plan {{ args }}
+
+dist-build *args="":
+    dist build {{ args }}
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
 fetch-cookie username="simulator-user" server-url="http://localhost:8081":
     cargo run -q -- cookie --url {{ server-url }} --user {{ username }}
 

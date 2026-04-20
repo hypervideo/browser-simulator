@@ -33,6 +33,7 @@
             rust-analyzer
             (rustfmt.override { asNightly = true; })
             cargo-nextest
+            cargo-dist
           ]
           ++ lib.optionals pkgs.stdenv.isDarwin [ google-chrome ]
           ++ lib.optionals (!pkgs.stdenv.isDarwin) [ chromium ];
