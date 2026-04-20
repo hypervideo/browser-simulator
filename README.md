@@ -5,3 +5,21 @@ The active workspace is centered on:
 - **browser/**: participant automation and remote stub support
 - **config/**: CLI and YAML configuration
 - **tui/**: terminal UI components
+
+## Install
+
+Tagged macOS releases are published as Homebrew formulae.
+
+```sh
+brew tap hypervideo/tap
+brew install client-simulator
+```
+
+To upgrade later:
+
+```sh
+brew upgrade client-simulator
+```
+
+The Homebrew package installs the simulator binary only. Chrome or Chromium must
+still be installed locally on the Mac where you run it.

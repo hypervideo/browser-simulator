@@ -187,7 +187,7 @@ Expected result:
 
 ### 7. Add Homebrew installer support
 
-STATUS: unimplemented
+STATUS: implemented in-repo, pending GitHub secret setup
 
 Objective:
 
@@ -197,13 +197,36 @@ Work:
 
 - enable the `homebrew` installer in `dist`
 - publish to the dedicated tap `hypervideo/homebrew-tap`
-  - this tap does not exist yet, instruct the user how to create it
 - configure the required Homebrew metadata in `dist` so generated formulae point at the GitHub Release artifacts for this repo
 - regenerate the `dist` release workflow so Homebrew publishing is managed by `dist` rather than a separate hand-written pipeline
 - document the expected install flow for users, including:
   - `brew tap ...`
   - `brew install client-simulator`
 - verify the generated Homebrew formula installs the macOS binary and that the installed binary still relies on the local Chrome/Chromium runtime as expected
+
+Current state:
+
+- `dist-workspace.toml` enables the `homebrew` installer, sets `tap = "hypervideo/homebrew-tap"`, and asks `dist` to run the `homebrew` publish job
+- `.github/workflows/release.yml` is generated from `dist` and includes the `publish-homebrew-formula` job that pushes `Formula/*.rb` into the tap repo using `HOMEBREW_TAP_TOKEN`
+- the public tap repository now exists at `https://github.com/hypervideo/homebrew-tap`
+- local verification on 2026-04-20 succeeded:
+  - `cargo dist manifest --artifacts=all --output-format=json --no-local-paths --allow-dirty --tag=v0.1.0` reported `client-simulator.rb` plus the macOS release archives
+  - `cargo dist build --target aarch64-apple-darwin --artifacts=all --allow-dirty --tag=v0.1.0` generated a real arm64 archive and formula
+  - installing that generated formula from a throwaway local tap succeeded
+  - `client-simulator --help` ran successfully after the Homebrew install
+- the installed Homebrew package contains the simulator binary and README only; it does not bundle Chrome/Chromium, so runtime browser discovery still depends on the local machine as intended
+
+Remaining GitHub setup:
+
+1. create a GitHub token with write access to `hypervideo/homebrew-tap`
+2. add that token as the `HOMEBREW_TAP_TOKEN` secret on `hypervideo/browser-simulator`
+3. push a stable version tag so the `Release` workflow publishes the formula into the tap
+
+Expected user install flow:
+
+- `brew tap hypervideo/tap`
+- `brew install client-simulator`
+- `brew upgrade client-simulator`
 
 Expected result:
 
@@ -215,6 +238,7 @@ Notes:
 - Keep Homebrew support scoped to the existing macOS CLI distribution
 - Do not broaden this into notarization, `.app` bundling, or extra installer formats
 - Prefer `dist`'s native Homebrew support over maintaining a custom formula by hand
+- Homebrew only tracks the latest published formula version; prereleases do not publish unless `publish-prereleases` is explicitly enabled
 
 ## Suggested Order Of Execution
 
