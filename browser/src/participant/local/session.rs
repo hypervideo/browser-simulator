@@ -13,44 +13,44 @@ use crate::{
             lite::ParticipantInnerLite,
         },
         shared::{
-            DriverTermination,
-            ParticipantDriverSession,
-            ParticipantLaunchSpec,
-            ResolvedFrontendKind,
             messages::{
                 ParticipantLogMessage,
                 ParticipantMessage,
             },
+            DriverTermination,
+            ParticipantDriverSession,
+            ParticipantLaunchSpec,
+            ResolvedFrontendKind,
         },
     },
 };
 use chromiumoxide::{
-    Browser,
-    Handler,
-    Page,
     browser,
     cdp::browser_protocol::target::{
         CreateTargetParams,
         EventDetachedFromTarget,
     },
+    Browser,
+    Handler,
+    Page,
 };
 use client_simulator_config::{
-    BrowserConfig,
     media::{
         FakeMedia,
         FakeMediaFiles,
     },
+    BrowserConfig,
 };
 use eyre::{
+    bail,
     Context as _,
     ContextCompat as _,
     Result,
-    bail,
 };
 use futures::{
+    future::BoxFuture,
     FutureExt as _,
     StreamExt as _,
-    future::BoxFuture,
 };
 use std::{
     path::{
