@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Hyper Browser Simulator"
+  short_description: "Release and publish this simulator"
+  default_prompt: "Use $release-hyper-browser-simulator to prepare and verify a new simulator release."
