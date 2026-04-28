@@ -5,10 +5,6 @@ use super::{
         messages::ParticipantMessage,
         ParticipantState,
     },
-    commands::{
-        get_auto_gain_control,
-        set_auto_gain_control,
-    },
     frontend::{
         element_state,
         FrontendAutomation,
@@ -33,12 +29,21 @@ use futures::{
     future::BoxFuture,
     FutureExt as _,
 };
-use std::time::Duration;
+use std::time::{
+    Duration,
+    Instant,
+};
 
 /// Local frontend automation for the hyper-lite UI.
 #[derive(Debug)]
 pub(super) struct ParticipantInnerLite {
     context: FrontendContext,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiteEntryPoint {
+    InCall,
+    Lobby,
 }
 
 impl ParticipantInnerLite {
@@ -60,17 +65,26 @@ impl ParticipantInnerLite {
         debug!(participant = %self.participant_name(), "Navigated to page");
         self.context.send_log_message("debug", "Navigated to page");
 
-        wait_for_element(&self.context.page, lite::JOIN_BUTTON, Duration::from_secs(30)).await?;
+        match self.wait_for_entry_point(Duration::from_secs(30)).await? {
+            LiteEntryPoint::InCall => {
+                debug!(participant = %self.participant_name(), "Lite session is already in-call");
+                self.context
+                    .send_log_message("debug", "Lite session is already in-call");
+            }
+            LiteEntryPoint::Lobby => {
+                self.prepare_lobby().await?;
 
-        self.context
-            .find_element(lite::JOIN_BUTTON)
-            .await?
-            .click()
-            .await
-            .context("failed to click join button")?;
+                self.context
+                    .find_element(lite::JOIN_BUTTON)
+                    .await?
+                    .click()
+                    .await
+                    .context("failed to click join button")?;
 
-        debug!(participant = %self.participant_name(), "Clicked on the join button");
-        self.context.send_log_message("debug", "Clicked on the join button");
+                debug!(participant = %self.participant_name(), "Clicked on the join button");
+                self.context.send_log_message("debug", "Clicked on the join button");
+            }
+        }
 
         wait_for_element(&self.context.page, lite::LEAVE_BUTTON, Duration::from_secs(30))
             .await
@@ -91,25 +105,79 @@ impl ParticipantInnerLite {
         Ok(())
     }
 
-    async fn apply_all_settings(&self) -> Result<()> {
+    async fn wait_for_entry_point(&self, timeout: Duration) -> Result<LiteEntryPoint> {
+        let start = Instant::now();
+
+        loop {
+            if self.context.page.find_element(lite::LEAVE_BUTTON).await.is_ok() {
+                return Ok(LiteEntryPoint::InCall);
+            }
+
+            if self.context.page.find_element(lite::JOIN_BUTTON).await.is_ok() {
+                return Ok(LiteEntryPoint::Lobby);
+            }
+
+            if start.elapsed() > timeout {
+                return Err(eyre::eyre!(
+                    "timeout waiting for Lite lobby or in-call controls: {} or {}",
+                    lite::JOIN_BUTTON,
+                    lite::LEAVE_BUTTON
+                ));
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn prepare_lobby(&self) -> Result<()> {
+        if let Ok(input) = self.context.find_element(lite::NAME_INPUT).await {
+            input
+                .focus()
+                .await
+                .context("failed to focus on the Lite display name input")?
+                .call_js_fn("function() { this.value = ''; }", true)
+                .await
+                .context("failed to empty current Lite display name")?;
+            input
+                .type_str(&self.context.launch_spec.username)
+                .await
+                .context("failed to insert Lite display name")?;
+
+            debug!(participant = %self.participant_name(), "Set the Lite display name");
+            self.context.send_log_message(
+                "debug",
+                format!("Set the Lite display name to {}", self.context.launch_spec.username),
+            );
+        }
+
+        self.apply_lobby_settings().await
+    }
+
+    async fn apply_lobby_settings(&self) -> Result<()> {
         let settings = &self.context.launch_spec.settings;
 
-        set_auto_gain_control(&self.context.page, settings.auto_gain_control)
-            .await
-            .context("failed to set auto gain control")?;
-
         if !settings.audio_enabled {
-            self.toggle_audio_inner().await?;
+            self.click_if_present(lite::LOBBY_DISABLE_AUDIO_BUTTON, "disable lobby microphone")
+                .await?;
         }
 
         if !settings.video_enabled {
-            self.toggle_video_inner().await?;
+            self.click_if_present(lite::LOBBY_DISABLE_VIDEO_BUTTON, "disable lobby camera")
+                .await?;
         }
+
+        Ok(())
+    }
+
+    async fn apply_all_settings(&self) -> Result<()> {
+        let settings = &self.context.launch_spec.settings;
+
+        self.set_audio_enabled_inner(settings.audio_enabled).await?;
+        self.set_video_enabled_inner(settings.video_enabled).await?;
 
         if settings.screenshare_enabled {
-            self.toggle_screen_share_inner().await?;
+            self.set_screen_share_enabled_inner(true).await?;
         }
-
         Ok(())
     }
 
@@ -119,6 +187,25 @@ impl ParticipantInnerLite {
             .click()
             .await
             .context("Could not click on the leave space button")?;
+
+        match wait_for_element(&self.context.page, lite::LEAVE_CONFIRM_BUTTON, Duration::from_secs(5)).await {
+            Ok(button) => {
+                button
+                    .click()
+                    .await
+                    .context("Could not confirm leaving the Lite meeting")?;
+                debug!(participant = %self.participant_name(), "Confirmed the Lite leave dialog");
+                self.context
+                    .send_log_message("debug", "Confirmed the Lite leave dialog");
+            }
+            Err(err) => {
+                debug!(
+                    participant = %self.participant_name(),
+                    "No Lite leave confirmation appeared, assuming direct leave: {err}"
+                );
+            }
+        }
+
         info!(participant = %self.participant_name(), "Left the space");
         self.context.send_log_message("info", "Left the space");
         Ok(())
@@ -158,11 +245,32 @@ impl ParticipantInnerLite {
         Ok(())
     }
 
+    async fn set_audio_enabled_inner(&self, enabled: bool) -> Result<()> {
+        match self.audio_enabled().await? {
+            Some(current) if current == enabled => Ok(()),
+            None if enabled => Ok(()),
+            _ => self.toggle_audio_inner().await,
+        }
+    }
+
+    async fn set_video_enabled_inner(&self, enabled: bool) -> Result<()> {
+        match self.video_enabled().await? {
+            Some(current) if current == enabled => Ok(()),
+            None if enabled => Ok(()),
+            _ => self.toggle_video_inner().await,
+        }
+    }
+
+    async fn set_screen_share_enabled_inner(&self, enabled: bool) -> Result<()> {
+        match self.screen_share_enabled().await? {
+            Some(current) if current == enabled => Ok(()),
+            None if !enabled => Ok(()),
+            Some(_) | None => self.toggle_screen_share_inner().await,
+        }
+    }
+
     async fn toggle_auto_gain_control_inner(&self) -> Result<()> {
-        let auto_gain_control = get_auto_gain_control(&self.context.page).await?;
-        set_auto_gain_control(&self.context.page, !auto_gain_control)
-            .await
-            .context("Failed to set auto gain control")?;
+        self.log_unsupported("Auto gain control");
         Ok(())
     }
 
@@ -175,19 +283,39 @@ impl ParticipantInnerLite {
     }
 
     async fn set_noise_suppression_inner(&self, _value: NoiseSuppression) -> Result<()> {
-        debug!(
-            participant = %self.participant_name(),
-            "Noise suppression changes not supported in lite frontend"
-        );
+        self.log_unsupported("Noise suppression");
         Ok(())
     }
 
     async fn toggle_background_blur_inner(&self) -> Result<()> {
+        self.log_unsupported("Background blur");
+        Ok(())
+    }
+
+    async fn click_if_present(&self, selector: &str, action: &str) -> Result<bool> {
+        let Ok(element) = self.context.page.find_element(selector).await else {
+            debug!(
+                participant = %self.participant_name(),
+                "Could not find Lite control for {action}: {selector}"
+            );
+            return Ok(false);
+        };
+
+        element
+            .click()
+            .await
+            .with_context(|| format!("Could not click Lite control for {action}: {selector}"))?;
+        debug!(participant = %self.participant_name(), "Clicked Lite control for {action}");
+        Ok(true)
+    }
+
+    fn log_unsupported(&self, feature: &str) {
         debug!(
             participant = %self.participant_name(),
-            "Background blur changes not supported in lite frontend"
+            "{feature} changes not supported in lite frontend"
         );
-        Ok(())
+        self.context
+            .send_log_message("debug", format!("{feature} changes not supported in lite frontend"));
     }
 
     async fn leave_button(&self) -> Result<Element> {
@@ -206,6 +334,41 @@ impl ParticipantInnerLite {
         self.context.find_element(lite::SCREEN_SHARE_BUTTON).await
     }
 
+    async fn audio_enabled(&self) -> Result<Option<bool>> {
+        let button = match self.mute_button().await {
+            Ok(button) => button,
+            Err(_) => return Ok(None),
+        };
+
+        Ok(audio_enabled_from_button_state(
+            element_state(&button).await,
+            aria_pressed(&button).await,
+            aria_label(&button).await.as_deref(),
+        ))
+    }
+
+    async fn video_enabled(&self) -> Result<Option<bool>> {
+        let button = match self.camera_button().await {
+            Ok(button) => button,
+            Err(_) => return Ok(None),
+        };
+
+        Ok(video_enabled_from_button_state(
+            element_state(&button).await,
+            aria_pressed(&button).await,
+            aria_label(&button).await.as_deref(),
+        ))
+    }
+
+    async fn screen_share_enabled(&self) -> Result<Option<bool>> {
+        let button = match self.screen_share_button().await {
+            Ok(button) => button,
+            Err(_) => return Ok(None),
+        };
+
+        Ok(element_state(&button).await.or(aria_pressed(&button).await))
+    }
+
     async fn refresh_state_inner(&self) -> Result<ParticipantState> {
         let joined = self.leave_button().await.is_ok();
         let mut state = ParticipantState {
@@ -216,32 +379,78 @@ impl ParticipantInnerLite {
             transport_mode: TransportMode::default(),
             webcam_resolution: WebcamResolution::default(),
             noise_suppression: NoiseSuppression::default(),
+            muted: !self.context.launch_spec.settings.audio_enabled,
+            video_activated: self.context.launch_spec.settings.video_enabled,
             ..Default::default()
         };
 
-        if let Ok(value) = get_auto_gain_control(&self.context.page).await {
-            state.auto_gain_control = value;
+        if let Ok(Some(value)) = self.audio_enabled().await {
+            state.muted = !value;
         }
 
-        if let Ok(mute_button) = self.mute_button().await {
-            if let Some(value) = element_state(&mute_button).await {
-                state.muted = !value;
-            }
+        if let Ok(Some(value)) = self.video_enabled().await {
+            state.video_activated = value;
         }
-        if let Ok(camera_button) = self.camera_button().await {
-            if let Some(value) = element_state(&camera_button).await {
-                state.video_activated = value;
-            }
-        }
-        if let Ok(screen_share_button) = self.screen_share_button().await {
-            debug!(participant = %self.participant_name(), "Screen share button: {screen_share_button:?}");
-            if let Some(value) = element_state(&screen_share_button).await {
-                state.screenshare_activated = value;
-            }
+
+        if let Ok(Some(value)) = self.screen_share_enabled().await {
+            state.screenshare_activated = value;
         }
 
         Ok(state)
     }
+}
+
+async fn aria_pressed(element: &Element) -> Option<bool> {
+    element
+        .attribute("aria-pressed")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse().ok())
+}
+
+async fn aria_label(element: &Element) -> Option<String> {
+    element.attribute("aria-label").await.ok().flatten()
+}
+
+fn audio_enabled_from_button_state(
+    data_test_state: Option<bool>,
+    aria_pressed: Option<bool>,
+    aria_label: Option<&str>,
+) -> Option<bool> {
+    data_test_state
+        .or_else(|| aria_pressed.map(|pressed| !pressed))
+        .or_else(|| {
+            aria_label.and_then(|label| {
+                if label.contains("Unmute") {
+                    Some(false)
+                } else if label.contains("Mute") {
+                    Some(true)
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn video_enabled_from_button_state(
+    data_test_state: Option<bool>,
+    aria_pressed: Option<bool>,
+    aria_label: Option<&str>,
+) -> Option<bool> {
+    data_test_state
+        .or_else(|| aria_pressed.map(|pressed| !pressed))
+        .or_else(|| {
+            aria_label.and_then(|label| {
+                if label.contains("Turn on") || label.contains("Turn video on") {
+                    Some(false)
+                } else if label.contains("Turn off") || label.contains("Turn video off") {
+                    Some(true)
+                } else {
+                    None
+                }
+            })
+        })
 }
 
 impl FrontendAutomation for ParticipantInnerLite {
@@ -273,5 +482,93 @@ impl FrontendAutomation for ParticipantInnerLite {
 
     fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
         async move { self.refresh_state_inner().await }.boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        audio_enabled_from_button_state,
+        video_enabled_from_button_state,
+    };
+
+    #[test]
+    fn audio_state_prefers_legacy_data_test_state() {
+        assert_eq!(
+            audio_enabled_from_button_state(Some(true), Some(true), Some("Unmute microphone")),
+            Some(true)
+        );
+        assert_eq!(
+            audio_enabled_from_button_state(Some(false), Some(false), Some("Mute microphone")),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn audio_state_maps_current_aria_pressed_to_enabled() {
+        assert_eq!(
+            audio_enabled_from_button_state(None, Some(false), Some("Mute")),
+            Some(true)
+        );
+        assert_eq!(
+            audio_enabled_from_button_state(None, Some(true), Some("Unmute microphone")),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn audio_state_falls_back_to_current_mobile_labels() {
+        assert_eq!(
+            audio_enabled_from_button_state(None, None, Some("Mute microphone")),
+            Some(true)
+        );
+        assert_eq!(
+            audio_enabled_from_button_state(None, None, Some("Unmute microphone")),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn video_state_prefers_legacy_data_test_state() {
+        assert_eq!(
+            video_enabled_from_button_state(Some(true), Some(true), Some("Turn on camera")),
+            Some(true)
+        );
+        assert_eq!(
+            video_enabled_from_button_state(Some(false), Some(false), Some("Turn off camera")),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn video_state_maps_current_aria_pressed_to_enabled() {
+        assert_eq!(
+            video_enabled_from_button_state(None, Some(false), Some("Video")),
+            Some(true)
+        );
+        assert_eq!(
+            video_enabled_from_button_state(None, Some(true), Some("Video")),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn video_state_falls_back_to_current_labels() {
+        assert_eq!(
+            video_enabled_from_button_state(None, None, Some("Turn off camera")),
+            Some(true)
+        );
+        assert_eq!(
+            video_enabled_from_button_state(None, None, Some("Turn on camera")),
+            Some(false)
+        );
+        assert_eq!(
+            video_enabled_from_button_state(None, None, Some("Turn video off")),
+            Some(true)
+        );
+        assert_eq!(
+            video_enabled_from_button_state(None, None, Some("Turn video on")),
+            Some(false)
+        );
     }
 }
