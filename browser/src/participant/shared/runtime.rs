@@ -118,12 +118,16 @@ where
 
         match event {
             RuntimeEvent::Terminated(termination) => {
-                log_runtime_message(
-                    &sender,
-                    termination.level,
-                    driver.participant_name(),
-                    termination.message,
-                );
+                let participant_name = driver.participant_name().to_string();
+                log_runtime_message(&sender, termination.level, &participant_name, termination.message);
+                if let Err(err) = driver.close().await {
+                    log_runtime_message(
+                        &sender,
+                        "error",
+                        &participant_name,
+                        format!("Failed closing participant after backend termination: {err}"),
+                    );
+                }
                 break;
             }
             RuntimeEvent::Cancelled => {
@@ -393,6 +397,7 @@ mod tests {
     #[tokio::test]
     async fn runtime_marks_participant_stopped_when_driver_terminates() {
         struct TerminatingDriver {
+            close_count: Arc<AtomicUsize>,
             name: String,
             terminated: bool,
         }
@@ -423,7 +428,11 @@ mod tests {
             }
 
             fn close(&mut self) -> BoxFuture<'_, Result<()>> {
-                async move { Ok(()) }.boxed()
+                async move {
+                    self.close_count.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+                .boxed()
             }
 
             fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
@@ -442,12 +451,14 @@ mod tests {
         let (_message_tx, message_rx) = unbounded_channel();
         let (log_tx, _log_rx) = unbounded_channel();
         let (state_tx, state_rx) = watch::channel(ParticipantState::default());
+        let close_count = Arc::new(AtomicUsize::new(0));
 
         run_participant_runtime(
             message_rx,
             log_tx,
             state_tx,
             TerminatingDriver {
+                close_count: Arc::clone(&close_count),
                 name: "sim-user".to_string(),
                 terminated: false,
             },
@@ -456,6 +467,7 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(close_count.load(Ordering::SeqCst), 1);
         assert!(!state_rx.borrow().running);
         assert!(!state_rx.borrow().joined);
     }
