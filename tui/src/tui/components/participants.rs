@@ -357,12 +357,15 @@ impl Component for Participants {
         };
 
         let keys = self.participants.keys();
+        let participant_count = keys.len();
 
-        if keys.is_empty() {
-            let empty = ratatui::widgets::Block::default()
-                .borders(ratatui::widgets::Borders::ALL)
-                .border_style(theme.border(self.focused))
-                .title("No participants");
+        if participant_count == 0 {
+            let empty = ratatui::widgets::Paragraph::new("No participants").block(
+                ratatui::widgets::Block::default()
+                    .borders(ratatui::widgets::Borders::ALL)
+                    .border_style(theme.border(self.focused))
+                    .title(participants_panel_title(participant_count)),
+            );
 
             frame.render_widget(empty, area);
             return Ok(());
@@ -440,7 +443,7 @@ impl Component for Participants {
                 ratatui::widgets::Block::default()
                     .borders(ratatui::widgets::Borders::ALL)
                     .border_style(theme.border(self.focused))
-                    .title("Participants")
+                    .title(participants_panel_title(participant_count))
                     .title_bottom(Line::from(help).centered()),
             )
             .widths([
@@ -473,9 +476,20 @@ impl Component for Participants {
     }
 }
 
+fn participants_panel_title(participant_count: usize) -> String {
+    if participant_count == 0 {
+        "Participants".to_string()
+    } else {
+        format!("Participants ({participant_count})")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Participants;
+    use super::{
+        participants_panel_title,
+        Participants,
+    };
     use crate::tui::{
         Action,
         ActivateAction,
@@ -531,6 +545,16 @@ mod tests {
 
         assert_eq!(action, Some(Action::Activate(ActivateAction::BrowserStart)));
         assert_eq!(component.selected, None);
+    }
+
+    #[test]
+    fn participants_panel_title_omits_count_when_empty() {
+        assert_eq!(participants_panel_title(0), "Participants");
+    }
+
+    #[test]
+    fn participants_panel_title_includes_count_when_not_empty() {
+        assert_eq!(participants_panel_title(5), "Participants (5)");
     }
 
     fn spawn_remote_participant(store: &ParticipantStore) {
