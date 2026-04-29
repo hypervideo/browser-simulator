@@ -26,7 +26,7 @@ impl Default for CloudflareConfig {
     fn default() -> Self {
         Self {
             base_url: url::Url::parse(DEFAULT_BASE_URL).expect("valid Cloudflare worker base URL"),
-            request_timeout_seconds: 30,
+            request_timeout_seconds: 180,
             session_timeout_ms: 600_000,
             navigation_timeout_ms: 45_000,
             selector_timeout_ms: 20_000,

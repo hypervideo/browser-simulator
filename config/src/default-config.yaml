@@ -27,7 +27,7 @@ headless: false
 backend: local
 cloudflare:
   base_url: https://cloudflare-browser-simulator.hyper-video.workers.dev
-  request_timeout_seconds: 30
+  request_timeout_seconds: 180
   session_timeout_ms: 600000
   navigation_timeout_ms: 45000
   selector_timeout_ms: 20000
