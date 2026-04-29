@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 authors = ["hyper.video <info@hyper.video>"]
 edition = "2021"
 homepage = "https://github.com/hypervideo/browser-simulator"
