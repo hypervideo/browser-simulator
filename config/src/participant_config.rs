@@ -2,9 +2,9 @@ use eyre::{
     OptionExt as _,
     Result,
 };
-use rnglib::{
-    Language,
-    RNG,
+use names::{
+    Generator,
+    Name,
 };
 use url::Url;
 
@@ -38,6 +38,6 @@ impl ParticipantConfig {
 }
 
 pub fn generate_random_name() -> String {
-    let rng = RNG::from(&Language::Goblin);
-    rng.generate_name_by_count(3)
+    let mut generator = Generator::with_naming(Name::Numbered);
+    generator.next().unwrap()
 }
