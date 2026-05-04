@@ -561,6 +561,18 @@ fn map_settings(settings: &crate::participant::shared::ParticipantSettings) -> t
             client_simulator_config::NoiseSuppression::AiCousticsSparrowL => {
                 types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowL
             }
+            client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs48khz => {
+                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowXxs48khz
+            }
+            client_simulator_config::NoiseSuppression::AiCousticsSparrowXs48khz => {
+                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowXs48khz
+            }
+            client_simulator_config::NoiseSuppression::AiCousticsRookS48khz => {
+                types::ParticipantSettingsNoiseSuppression::AiCousticsRookS48khz
+            }
+            client_simulator_config::NoiseSuppression::AiCousticsRookL48khz => {
+                types::ParticipantSettingsNoiseSuppression::AiCousticsRookL48khz
+            }
         },
         resolution: match settings.resolution {
             client_simulator_config::WebcamResolution::Auto => types::ParticipantSettingsResolution::Auto,
@@ -623,6 +635,18 @@ fn map_state(state: &types::ParticipantState) -> ParticipantState {
             types::ParticipantStateNoiseSuppression::AiCousticsSparrowL => {
                 client_simulator_config::NoiseSuppression::AiCousticsSparrowL
             }
+            types::ParticipantStateNoiseSuppression::AiCousticsSparrowXxs48khz => {
+                client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs48khz
+            }
+            types::ParticipantStateNoiseSuppression::AiCousticsSparrowXs48khz => {
+                client_simulator_config::NoiseSuppression::AiCousticsSparrowXs48khz
+            }
+            types::ParticipantStateNoiseSuppression::AiCousticsRookS48khz => {
+                client_simulator_config::NoiseSuppression::AiCousticsRookS48khz
+            }
+            types::ParticipantStateNoiseSuppression::AiCousticsRookL48khz => {
+                client_simulator_config::NoiseSuppression::AiCousticsRookL48khz
+            }
         },
         transport_mode: match state.transport_mode {
             types::ParticipantStateTransportMode::Webrtc => client_simulator_config::TransportMode::WebRTC,
@@ -679,6 +703,18 @@ fn map_command_noise_suppression(
         }
         client_simulator_config::NoiseSuppression::AiCousticsSparrowL => {
             types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowL
+        }
+        client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs48khz => {
+            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowXxs48khz
+        }
+        client_simulator_config::NoiseSuppression::AiCousticsSparrowXs48khz => {
+            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowXs48khz
+        }
+        client_simulator_config::NoiseSuppression::AiCousticsRookS48khz => {
+            types::SessionCommandRequestNoiseSuppression::AiCousticsRookS48khz
+        }
+        client_simulator_config::NoiseSuppression::AiCousticsRookL48khz => {
+            types::SessionCommandRequestNoiseSuppression::AiCousticsRookL48khz
         }
     }
 }
@@ -916,7 +952,7 @@ mod tests {
                         "videoActivated": true,
                         "screenshareActivated": false,
                         "autoGainControl": true,
-                        "noiseSuppression": "ai-coustics-sparrow-s",
+                        "noiseSuppression": "ai-coustics-rook-s-48khz",
                         "transportMode": "webrtc",
                         "webcamResolution": "p720",
                         "backgroundBlur": true
@@ -957,7 +993,7 @@ mod tests {
 
         let state = session.refresh_state().await.unwrap();
         assert!(state.auto_gain_control);
-        assert_eq!(state.noise_suppression, NoiseSuppression::AiCousticsSparrowS);
+        assert_eq!(state.noise_suppression, NoiseSuppression::AiCousticsRookS48khz);
 
         session.close().await.unwrap();
         server.abort();

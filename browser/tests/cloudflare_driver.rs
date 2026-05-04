@@ -275,7 +275,7 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
                     "videoActivated": true,
                     "screenshareActivated": false,
                     "autoGainControl": true,
-                    "noiseSuppression": "ai-coustics-sparrow-s",
+                    "noiseSuppression": "ai-coustics-rook-s-48khz",
                     "transportMode": "webrtc",
                     "webcamResolution": "p1080",
                     "backgroundBlur": false,
@@ -321,7 +321,7 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
     assert!(started.joined);
     assert_eq!(
         started.noise_suppression,
-        client_simulator_config::NoiseSuppression::AiCousticsSparrowS
+        client_simulator_config::NoiseSuppression::AiCousticsRookS48khz
     );
 
     participant.close().await;

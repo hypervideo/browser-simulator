@@ -253,7 +253,11 @@
               "ai-coustics-sparrow-xxs",
               "ai-coustics-sparrow-xs",
               "ai-coustics-sparrow-s",
-              "ai-coustics-sparrow-l"
+              "ai-coustics-sparrow-l",
+              "ai-coustics-sparrow-xxs-48khz",
+              "ai-coustics-sparrow-xs-48khz",
+              "ai-coustics-rook-s-48khz",
+              "ai-coustics-rook-l-48khz"
             ]
           },
           "transportMode": {
@@ -472,7 +476,11 @@
               "ai-coustics-sparrow-xxs",
               "ai-coustics-sparrow-xs",
               "ai-coustics-sparrow-s",
-              "ai-coustics-sparrow-l"
+              "ai-coustics-sparrow-l",
+              "ai-coustics-sparrow-xxs-48khz",
+              "ai-coustics-sparrow-xs-48khz",
+              "ai-coustics-rook-s-48khz",
+              "ai-coustics-rook-l-48khz"
             ]
           },
           "transport": {
@@ -739,7 +747,11 @@
                   "ai-coustics-sparrow-xxs",
                   "ai-coustics-sparrow-xs",
                   "ai-coustics-sparrow-s",
-                  "ai-coustics-sparrow-l"
+                  "ai-coustics-sparrow-l",
+                  "ai-coustics-sparrow-xxs-48khz",
+                  "ai-coustics-sparrow-xs-48khz",
+                  "ai-coustics-rook-s-48khz",
+                  "ai-coustics-rook-l-48khz"
                 ]
               }
             },

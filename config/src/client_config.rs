@@ -76,6 +76,18 @@ pub enum NoiseSuppression {
     #[strum(to_string = "ai-coustics-sparrow-l")]
     #[serde(rename = "ai-coustics-sparrow-l")]
     AiCousticsSparrowL,
+    #[strum(to_string = "ai-coustics-sparrow-xxs-48khz")]
+    #[serde(rename = "ai-coustics-sparrow-xxs-48khz")]
+    AiCousticsSparrowXxs48khz,
+    #[strum(to_string = "ai-coustics-sparrow-xs-48khz")]
+    #[serde(rename = "ai-coustics-sparrow-xs-48khz")]
+    AiCousticsSparrowXs48khz,
+    #[strum(to_string = "ai-coustics-rook-s-48khz")]
+    #[serde(rename = "ai-coustics-rook-s-48khz")]
+    AiCousticsRookS48khz,
+    #[strum(to_string = "ai-coustics-rook-l-48khz")]
+    #[serde(rename = "ai-coustics-rook-l-48khz")]
+    AiCousticsRookL48khz,
 }
 
 #[derive(Debug, Default, Clone, Copy, Display, EnumIter, EnumString, Serialize, Deserialize, PartialEq, Eq)]
