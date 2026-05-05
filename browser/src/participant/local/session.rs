@@ -58,6 +58,7 @@ use std::{
         PathBuf,
     },
     sync::Arc,
+    time::Duration,
 };
 use tokio::{
     sync::{
@@ -397,22 +398,14 @@ fn is_executable_file(path: &Path) -> bool {
 async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Handler)> {
     let binary = get_binary()?;
 
-    let mut chrome_args = vec!["--no-startup-window".to_string()];
+    let mut chrome_args = vec!["no-startup-window".to_string()];
     match &browser_config.app_config.fake_media() {
         FakeMedia::None => {}
         FakeMedia::Builtin => {
-            chrome_args.extend([
-                "--no-sandbox".to_string(),
-                "--use-fake-ui-for-media-stream".to_string(),
-                "--use-fake-device-for-media-stream".to_string(),
-            ]);
+            add_builtin_fake_media_args(&mut chrome_args);
         }
         FakeMedia::FileOrUrl(file_or_url) => {
-            chrome_args.extend([
-                "--no-sandbox".to_string(),
-                "--use-fake-ui-for-media-stream".to_string(),
-                "--use-fake-device-for-media-stream".to_string(),
-            ]);
+            add_builtin_fake_media_args(&mut chrome_args);
 
             let fake_media = tokio::task::block_in_place(move || {
                 match file_or_url
@@ -429,10 +422,10 @@ async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Hand
 
             if let Some(media) = fake_media {
                 if let Some(audio) = media.audio {
-                    chrome_args.push(format!("--use-file-for-fake-audio-capture={}", audio.display()));
+                    chrome_args.push(chrome_arg_value("use-file-for-fake-audio-capture", audio.display()));
                 }
                 if let Some(video) = media.video {
-                    chrome_args.push(format!("--use-file-for-fake-video-capture={}", video.display()));
+                    chrome_args.push(chrome_arg_value("use-file-for-fake-video-capture", video.display()));
                 }
             }
         }
@@ -447,7 +440,7 @@ async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Hand
     let config = config
         .user_data_dir(&browser_config.user_data_dir)
         .chrome_executable(binary)
-        .args(&chrome_args)
+        .args(chrome_args)
         .build()
         .map_err(|e| eyre::eyre!(e))
         .context("failed to build browser config")?;
@@ -455,6 +448,18 @@ async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Hand
     browser::Browser::launch(config)
         .await
         .context("failed to launch browser")
+}
+
+fn add_builtin_fake_media_args(chrome_args: &mut Vec<String>) {
+    chrome_args.extend([
+        "no-sandbox".to_string(),
+        "use-fake-ui-for-media-stream".to_string(),
+        "use-fake-device-for-media-stream".to_string(),
+    ]);
+}
+
+fn chrome_arg_value(key: &str, value: impl std::fmt::Display) -> String {
+    format!("{key}={value}")
 }
 
 #[cfg(test)]
@@ -510,6 +515,35 @@ mod tests {
                 home_dir.join(MACOS_USER_GOOGLE_CHROME_APP_BINARY),
             ]
         );
+    }
+
+    #[test]
+    fn builtin_fake_media_args_use_chromiumoxide_arg_names() {
+        let mut args = vec!["no-startup-window".to_string()];
+
+        add_builtin_fake_media_args(&mut args);
+
+        assert_eq!(
+            args,
+            vec![
+                "no-startup-window",
+                "no-sandbox",
+                "use-fake-ui-for-media-stream",
+                "use-fake-device-for-media-stream",
+            ]
+        );
+        assert!(args.iter().all(|arg| !arg.starts_with("--")));
+    }
+
+    #[test]
+    fn fake_media_file_args_use_name_value_format_without_shell_prefix() {
+        let audio_arg = chrome_arg_value("use-file-for-fake-audio-capture", "/tmp/audio.wav");
+        let video_arg = chrome_arg_value("use-file-for-fake-video-capture", "/tmp/video.y4m");
+
+        assert_eq!(audio_arg, "use-file-for-fake-audio-capture=/tmp/audio.wav");
+        assert_eq!(video_arg, "use-file-for-fake-video-capture=/tmp/video.y4m");
+        assert!(!audio_arg.starts_with("--"));
+        assert!(!video_arg.starts_with("--"));
     }
 }
 
@@ -619,7 +653,7 @@ async fn create_page(launch_spec: &ParticipantLaunchSpec, browser: &mut Browser)
 }
 
 async fn create_page_retry(launch_spec: &ParticipantLaunchSpec, browser: &mut Browser) -> Result<Page> {
-    let mut backoff = maybe_backoff::MaybeBackoff::default();
+    let mut backoff = PageRetryBackoff::default();
     let mut attempt = 0;
     loop {
         backoff.sleep().await;
@@ -636,5 +670,27 @@ async fn create_page_retry(launch_spec: &ParticipantLaunchSpec, browser: &mut Br
             }
             Err(err) => return Err(err),
         }
+    }
+}
+
+#[derive(Default)]
+struct PageRetryBackoff {
+    delay: Option<Duration>,
+}
+
+impl PageRetryBackoff {
+    fn arm(&mut self) {
+        if self.delay.is_none() {
+            self.delay = Some(Duration::from_millis(50));
+        }
+    }
+
+    async fn sleep(&mut self) {
+        let Some(delay) = self.delay else {
+            return;
+        };
+
+        tokio::time::sleep(delay).await;
+        self.delay = Some((delay.mul_f64(1.5)).min(Duration::from_secs(3)));
     }
 }

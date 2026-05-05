@@ -15,12 +15,12 @@ lazy_static.workspace = true
 names.workspace = true
 reqwest.workspace = true
 serde.workspace = true
-serde_yml.workspace = true
 sha1.workspace = true
 strum.workspace = true
 temp-dir.workspace = true
 tracing.workspace = true
 url.workspace = true
+yaml_serde.workspace = true
 
 [lints]
 workspace = true

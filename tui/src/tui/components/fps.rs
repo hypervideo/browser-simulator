@@ -7,10 +7,7 @@ use ratatui::{
         Layout,
         Rect,
     },
-    style::{
-        Style,
-        Stylize,
-    },
+    style::Style,
     text::Span,
     widgets::Paragraph,
     Frame,

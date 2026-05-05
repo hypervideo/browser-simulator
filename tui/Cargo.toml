@@ -17,7 +17,6 @@ lazy_static.workspace = true
 pretty_assertions.workspace = true
 ratatui.workspace = true
 serde.workspace = true
-serde_yml.workspace = true
 signal-hook.workspace = true
 strum.workspace = true
 tokio.workspace = true
@@ -26,8 +25,8 @@ tracing.workspace = true
 tracing-error.workspace = true
 tracing-subscriber.workspace = true
 tui-logger.workspace = true
-tui-textarea.workspace = true
 url.workspace = true
+yaml_serde.workspace = true
 
 client-simulator-browser.workspace = true
 client-simulator-config.workspace = true

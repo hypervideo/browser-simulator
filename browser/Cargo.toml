@@ -23,7 +23,6 @@ which.workspace = true
 
 client-simulator-config.workspace = true
 cloudflare-worker-client.workspace = true
-maybe-backoff.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

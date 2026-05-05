@@ -7,8 +7,8 @@ use serde::{
     Deserialize,
     Serialize,
 };
-use serde_yml::with::singleton_map_recursive;
 use strum::Display;
+use yaml_serde::with::singleton_map_recursive;
 
 #[derive(Display, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Action {
@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn name() {
-        let result = serde_yml::to_string(&Action::Activate(ActivateAction::BrowserStart)).unwrap();
+        let result = yaml_serde::to_string(&Action::Activate(ActivateAction::BrowserStart)).unwrap();
         println!("{result}");
         // panic!();
     }

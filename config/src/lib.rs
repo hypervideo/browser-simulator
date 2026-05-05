@@ -87,7 +87,7 @@ const fn default_auto_gain_control() -> bool {
 
 impl Default for Config {
     fn default() -> Self {
-        serde_yml::from_str(DEFAULT_CONFIG).expect("Failed to parse default config")
+        yaml_serde::from_str(DEFAULT_CONFIG).expect("Failed to parse default config")
     }
 }
 
@@ -240,7 +240,7 @@ impl Config {
 
         std::fs::create_dir_all(&self.app_config.config_dir).context("Failed to create config directory")?;
         let path = self.app_config.config_dir.join("config.yaml");
-        let content = serde_yml::to_string(&clone).context("Failed to serialize config")?;
+        let content = yaml_serde::to_string(&clone).context("Failed to serialize config")?;
         std::fs::write(&path, content).wrap_err_with(|| format!("Failed to write config to {:?}", path))
     }
 

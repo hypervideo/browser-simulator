@@ -15,9 +15,6 @@ let
   src = ../.;
   cargoLock = {
     lockFile = ../Cargo.lock;
-    outputHashes = {
-      "chromiumoxide-0.7.0" = "sha256-FTv87IOcBATV+OFw3rMDrZTX1LN/ph5K+qwdqE4UYCc=";
-    };
   };
 
   # Helper function to build simulator packages

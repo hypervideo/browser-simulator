@@ -26,7 +26,7 @@ pub type Keymap = HashMap<Vec<KeyEvent>, Action>;
 impl Default for KeyBindings {
     fn default() -> Self {
         let keybindings = include_str!("./keybindings.yaml");
-        serde_yml::from_str(keybindings).unwrap()
+        yaml_serde::from_str(keybindings).unwrap()
     }
 }
 

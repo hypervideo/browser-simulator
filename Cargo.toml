@@ -17,42 +17,39 @@ repository = "https://github.com/hypervideo/browser-simulator"
 
 [workspace.dependencies]
 better-panic = "0.3.0"
-# TODO: fix for https://github.com/mattsse/chromiumoxide/issues/243
-chromiumoxide = { git = "https://github.com/caido/dependency-chromiumoxide", branch = "ef-json-parsing", features = ["tokio-runtime", "bytes"], default-features = false }
-chrono = { version = "0.4.41", features = ["serde"] }
-clap = { version = "4.5.37", features = ["derive", "env", "cargo", "string"] }
-color-eyre = "0.6.3"
-config = { version = "0.15.11", default-features = false, features = ["yaml", "convert-case", "async"] }
-crossterm = { version = "0.28.1", features = ["serde", "event-stream"] }
-derive_more = { version = "2.0.1", default-features = false, features = ["deref", "deref_mut", "debug", "display"] }
+chromiumoxide = { version = "0.9.1", features = ["bytes"], default-features = false }
+chrono = { version = "0.4.44", features = ["serde"] }
+clap = { version = "4.6.1", features = ["derive", "env", "cargo", "string"] }
+color-eyre = "0.6.5"
+config = { version = "0.15.22", default-features = false, features = ["yaml", "convert-case", "async"] }
+crossterm = { version = "0.29.0", features = ["serde", "event-stream"] }
+derive_more = { version = "2.1.1", default-features = false, features = ["deref", "deref_mut", "debug", "display"] }
 directories = "6.0.0"
 eyre = "0.6.12"
-futures = "0.3.31"
-human-panic = "2.0.2"
+futures = "0.3.32"
+human-panic = "2.0.8"
 lazy_static = "1.5.0"
-libc = "0.2.161"
-maybe-backoff = "0.5.0"
+libc = "0.2.186"
 pretty_assertions = "1.4.1"
 names = { version = "0.14.0", default-features = false }
-ratatui = { version = "0.29.0", features = ["serde", "macros"] }
-reqwest = { version = "0.12.15", features = ["cookies", "json", "blocking"] }
-serde = { version = "1.0.211", features = ["derive"] }
-serde_json = "1.0.132"
-serde_yml = "0.0.12"
-sha1 = "0.10.6"
-signal-hook = "0.3.17"
-strip-ansi-escapes = "0.2.0"
-strum = { version = "0.27.1", features = ["derive"] }
-temp-dir = "0.1.16"
-tokio = { version = "1.46.1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "signal"] }
-tokio-util = "0.7.12"
-tracing = "0.1.41"
-tracing-error = "0.2.0"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter", "serde"] }
-tui-logger = { version = "0.17.2", features = ["crossterm", "tracing", "tracing-subscriber", "tracing-support"] }
-tui-textarea = "0.7.0"
-url = { version = "2.5.4", features = ["serde"] }
-which = "8.0.0"
+ratatui = { version = "0.30.0", features = ["serde", "macros", "crossterm_0_29"] }
+reqwest = { version = "0.13.3", features = ["cookies", "json", "blocking"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha1 = "0.11.0"
+signal-hook = "0.4.4"
+strip-ansi-escapes = "0.2.1"
+strum = { version = "0.28.0", features = ["derive"] }
+temp-dir = "0.2.0"
+tokio = { version = "1.52.2", default-features = false, features = ["macros", "rt-multi-thread", "sync", "signal"] }
+tokio-util = "0.7.18"
+tracing = "0.1.44"
+tracing-error = "0.2.1"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "serde"] }
+tui-logger = { version = "0.18.2", features = ["crossterm", "tracing", "tracing-subscriber", "tracing-support"] }
+url = { version = "2.5.8", features = ["serde"] }
+which = "8.0.2"
+yaml_serde = "0.10.4"
 
 client-simulator-browser = { path = "./browser" }
 client-simulator-config = { path = "./config" }
