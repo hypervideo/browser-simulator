@@ -428,7 +428,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "client-simulator-browser"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "chromiumoxide",
  "chrono",
@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "client-simulator-config"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "clap",
  "color-eyre",
@@ -471,7 +471,7 @@ dependencies = [
 
 [[package]]
 name = "client-simulator-tui"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "chrono",
  "clap",
@@ -501,7 +501,7 @@ dependencies = [
 
 [[package]]
 name = "cloudflare-worker-client"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "chrono",
  "eyre",
@@ -1381,7 +1381,7 @@ dependencies = [
 
 [[package]]
 name = "hyper-client-simulator"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "better-panic",
  "clap",
