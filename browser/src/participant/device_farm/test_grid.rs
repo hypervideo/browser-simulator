@@ -15,10 +15,12 @@ pub(crate) trait TestGridApi: Send + Sync {
 }
 
 /// Real implementation backed by `aws-sdk-devicefarm`.
+#[allow(dead_code)]
 pub(crate) struct AwsTestGrid {
     client: aws_sdk_devicefarm::Client,
 }
 
+#[allow(dead_code)]
 impl AwsTestGrid {
     pub(crate) async fn new(region: &str) -> Self {
         let region = aws_sdk_devicefarm::config::Region::new(region.to_owned());
