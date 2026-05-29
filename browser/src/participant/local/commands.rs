@@ -133,3 +133,13 @@ create_eval_setter!(
     set_force_webrtc,
     "function f(value) { return hyper.settings.sessionDebug.actions.setForceWebrtc(value); }"
 );
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn module_exports_getters_and_setters() {
+        // Compile-time pin: these symbols must continue to exist after the refactor.
+        let _ = super::get_noise_suppression;
+        let _ = super::set_noise_suppression::<bool>;
+    }
+}
