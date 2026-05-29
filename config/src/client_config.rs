@@ -98,10 +98,25 @@ pub enum ParticipantBackendKind {
     Local,
     Cloudflare,
     RemoteStub,
+    AwsDeviceFarm,
 }
 
 impl ParticipantBackendKind {
     pub const fn is_local(&self) -> bool {
         matches!(self, Self::Local)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ParticipantBackendKind;
+    use std::str::FromStr as _;
+
+    #[test]
+    fn aws_device_farm_round_trips_kebab_case() {
+        let kind = ParticipantBackendKind::from_str("aws-device-farm").unwrap();
+        assert_eq!(kind, ParticipantBackendKind::AwsDeviceFarm);
+        assert_eq!(kind.to_string(), "aws-device-farm");
+        assert!(!kind.is_local());
     }
 }
