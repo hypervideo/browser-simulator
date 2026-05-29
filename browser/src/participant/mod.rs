@@ -47,7 +47,7 @@ use tokio_util::sync::{
 };
 
 mod cloudflare;
-mod device_farm;
+pub mod device_farm;
 mod frontend;
 mod local;
 mod remote_stub;
@@ -198,8 +198,18 @@ impl Participant {
     }
 
     pub fn spawn_device_farm(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+        let device_farm_config = config.device_farm.clone();
+        let api = Arc::new(crate::participant::device_farm::AwsTestGrid::new(&device_farm_config.region));
+        Self::spawn_device_farm_with_api(config, cookie_manager, api)
+    }
+
+    #[doc(hidden)]
+    pub fn spawn_device_farm_with_api(
+        config: &Config,
+        cookie_manager: HyperSessionCookieManger,
+        api: Arc<dyn crate::testing::TestGridApi>,
+    ) -> Result<Self> {
         use crate::participant::device_farm::{
-            AwsTestGrid,
             DeviceFarmLaunchOptions,
             DeviceFarmSession,
         };
@@ -220,7 +230,6 @@ impl Participant {
 
         let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
         let (log_sender, _log_receiver) = unbounded_channel::<ParticipantLogMessage>();
-        let api = Arc::new(AwsTestGrid::new(&device_farm_config.region));
 
         let (state_receiver, task_guard) = spawn_session(
             name.clone(),

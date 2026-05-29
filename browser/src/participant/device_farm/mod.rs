@@ -2,9 +2,9 @@ mod test_grid;
 mod webdriver_driver;
 
 #[allow(unused_imports)]
+pub use test_grid::TestGridApi;
 pub(crate) use test_grid::{
     AwsTestGrid,
-    TestGridApi,
 };
 #[allow(unused_imports)]
 pub(crate) use webdriver_driver::WebDriverDriver;
@@ -93,6 +93,7 @@ pub(super) struct DeviceFarmSession {
     api: Arc<dyn TestGridApi>,
     auth: Option<FrontendAuth>,
     automation: Option<Box<dyn FrontendAutomation>>,
+    webdriver: Option<WebDriver>,
     cached_state: ParticipantState,
     termination_tx: watch::Sender<Option<DriverTermination>>,
     termination_rx: watch::Receiver<Option<DriverTermination>>,
@@ -126,6 +127,7 @@ impl DeviceFarmSession {
             api,
             auth: Some(auth),
             automation: None,
+            webdriver: None,
             termination_tx,
             termination_rx,
             poller_shutdown_tx: None,
@@ -191,6 +193,7 @@ impl DeviceFarmSession {
             ),
         );
         let driver = Self::connect(Arc::clone(&self.api), self.config.clone()).await?;
+        self.webdriver = Some(driver.clone());
         let webdriver_driver = WebDriverDriver::new(driver);
 
         let auth = self.auth.take().context("device farm auth already consumed")?;
@@ -277,6 +280,12 @@ impl DeviceFarmSession {
                 if let Err(err) = automation.leave().await {
                     self.log_message("error", format!("Failed leaving space while closing: {err}"));
                 }
+            }
+        }
+
+        if let Some(driver) = self.webdriver.take() {
+            if let Err(err) = driver.quit().await {
+                self.log_message("error", format!("Failed closing WebDriver session: {err}"));
             }
         }
 

@@ -9,7 +9,7 @@ use futures::{
 
 /// Minimal seam over the Device Farm Test Grid control plane so the session
 /// logic can be tested without real AWS calls.
-pub(crate) trait TestGridApi: Send + Sync {
+pub trait TestGridApi: Send + Sync {
     /// Create a short-lived Selenium Remote WebDriver URL for `project_arn`.
     fn create_test_grid_url(&self, project_arn: &str, expires_seconds: u64) -> BoxFuture<'_, Result<String>>;
 }
