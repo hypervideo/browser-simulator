@@ -17,18 +17,14 @@ use super::{
         set_noise_suppression,
         set_outgoing_camera_resolution,
     },
-    frontend::{
-        element_state,
+    driver::{
+        decode_test_state,
         FrontendAutomation,
         FrontendContext,
     },
+    selectors::classic,
 };
-use crate::{
-    auth::BorrowedCookie,
-    participant::local::selectors::classic,
-    util::wait_for_element,
-};
-use chromiumoxide::Element;
+use crate::auth::BorrowedCookie;
 use client_simulator_config::{
     NoiseSuppression,
     TransportMode,
@@ -57,12 +53,17 @@ impl ParticipantInner {
     }
 
     async fn set_cookie(&self) -> Result<()> {
-        let domain = self.context.launch_spec.session_url.host_str().unwrap_or("localhost");
-        let cookie = self.auth.as_browser_cookie_for(domain)?;
-
+        let domain = self
+            .context
+            .launch_spec
+            .session_url
+            .host_str()
+            .unwrap_or("localhost")
+            .to_owned();
+        let value = self.auth.raw_value().to_owned();
         self.context
-            .page
-            .set_cookies(vec![cookie])
+            .driver
+            .set_cookie(&domain, "hyper_session", &value)
             .await
             .context("failed to set cookie")?;
 
@@ -81,26 +82,22 @@ impl ParticipantInner {
         self.set_cookie().await?;
 
         self.context
-            .page
-            .goto(self.context.launch_spec.session_url.to_string())
+            .driver
+            .goto(self.context.launch_spec.session_url.as_str())
             .await
             .context("failed to wait for navigation response")?;
 
         debug!(participant = %self.participant_name(), "Navigated to page");
         self.context.send_log_message("debug", "Navigated to page");
 
-        let input = wait_for_element(&self.context.page, classic::NAME_INPUT, Duration::from_secs(30))
+        self.context
+            .driver
+            .wait_for(classic::NAME_INPUT, Duration::from_secs(30))
             .await
             .context("failed to find input name field")?;
-        input
-            .focus()
-            .await
-            .context("failed to focus on the name input")?
-            .call_js_fn("function() { this.value = ''; }", true)
-            .await
-            .context("failed to empty current name")?;
-        input
-            .type_str(&self.context.launch_spec.username)
+        self.context
+            .driver
+            .fill(classic::NAME_INPUT, &self.context.launch_spec.username)
             .await
             .context("failed to insert name")?;
 
@@ -113,7 +110,10 @@ impl ParticipantInner {
             ),
         );
 
-        wait_for_element(&self.context.page, classic::JOIN_BUTTON, Duration::from_secs(30)).await?;
+        self.context
+            .driver
+            .wait_for(classic::JOIN_BUTTON, Duration::from_secs(30))
+            .await?;
 
         if let Err(err) = self.apply_all_settings(true).await {
             error!(
@@ -123,16 +123,17 @@ impl ParticipantInner {
         }
 
         self.context
-            .find_element(classic::JOIN_BUTTON)
-            .await?
-            .click()
+            .driver
+            .click(classic::JOIN_BUTTON)
             .await
             .context("failed to click join button")?;
 
         debug!(participant = %self.participant_name(), "Clicked on the join button");
         self.context.send_log_message("debug", "Clicked on the join button");
 
-        wait_for_element(&self.context.page, classic::LEAVE_BUTTON, Duration::from_secs(30))
+        self.context
+            .driver
+            .wait_for(classic::LEAVE_BUTTON, Duration::from_secs(30))
             .await
             .context("We haven't joined the space, cannot find the leave button")?;
 
@@ -144,20 +145,21 @@ impl ParticipantInner {
 
     async fn apply_all_settings(&self, in_lobby: bool) -> Result<()> {
         let settings = &self.context.launch_spec.settings;
+        let driver = self.context.driver.as_ref();
 
-        set_auto_gain_control(&self.context.page, settings.auto_gain_control)
+        set_auto_gain_control(driver, settings.auto_gain_control)
             .await
             .context("failed to set auto gain control")?;
-        set_noise_suppression(&self.context.page, settings.noise_suppression)
+        set_noise_suppression(driver, settings.noise_suppression)
             .await
             .context("failed to set noise suppression")?;
-        set_background_blur(&self.context.page, settings.blur)
+        set_background_blur(driver, settings.blur)
             .await
             .context("failed to set background blur")?;
-        set_outgoing_camera_resolution(&self.context.page, &settings.resolution)
+        set_outgoing_camera_resolution(driver, &settings.resolution)
             .await
             .context("failed to set outgoing camera resolution")?;
-        set_force_webrtc(&self.context.page, settings.transport == TransportMode::WebRTC)
+        set_force_webrtc(driver, settings.transport == TransportMode::WebRTC)
             .await
             .context("failed to set transport mode")?;
 
@@ -177,9 +179,9 @@ impl ParticipantInner {
     }
 
     async fn leave_session(&mut self) -> Result<()> {
-        self.leave_button()
-            .await?
-            .click()
+        self.context
+            .driver
+            .click(classic::LEAVE_BUTTON)
             .await
             .context("Could not click on the leave space button")?;
 
@@ -190,9 +192,9 @@ impl ParticipantInner {
     }
 
     async fn toggle_audio_inner(&self) -> Result<()> {
-        self.mute_button()
-            .await?
-            .click()
+        self.context
+            .driver
+            .click(classic::MUTE_BUTTON)
             .await
             .context("Could not click on the toggle audio button")?;
 
@@ -203,9 +205,9 @@ impl ParticipantInner {
     }
 
     async fn toggle_video_inner(&self) -> Result<()> {
-        self.camera_button()
-            .await?
-            .click()
+        self.context
+            .driver
+            .click(classic::VIDEO_BUTTON)
             .await
             .context("Could not click on the toggle camera button")?;
 
@@ -216,9 +218,9 @@ impl ParticipantInner {
     }
 
     async fn toggle_screen_share_inner(&self) -> Result<()> {
-        self.screen_share_button()
-            .await?
-            .click()
+        self.context
+            .driver
+            .click(classic::SCREEN_SHARE_BUTTON)
             .await
             .context("Could not click on the toggle screen share button")
             .map(|_| ())
@@ -227,7 +229,7 @@ impl ParticipantInner {
     async fn set_webcam_resolutions_inner(&self, value: WebcamResolution) -> Result<()> {
         debug!(participant = %self.participant_name(), "Changing to {value} resolution");
 
-        set_outgoing_camera_resolution(&self.context.page, &value)
+        set_outgoing_camera_resolution(self.context.driver.as_ref(), &value)
             .await
             .context("Failed to set outgoing camera resolution")?;
 
@@ -242,7 +244,7 @@ impl ParticipantInner {
         self.context
             .send_log_message("info", format!("Changing noise suppression to {value}"));
 
-        set_noise_suppression(&self.context.page, value)
+        set_noise_suppression(self.context.driver.as_ref(), value)
             .await
             .context("Failed to set noise suppression level")?;
 
@@ -250,39 +252,26 @@ impl ParticipantInner {
     }
 
     async fn toggle_auto_gain_control_inner(&self) -> Result<()> {
-        let auto_gain_control = get_auto_gain_control(&self.context.page).await?;
-        set_auto_gain_control(&self.context.page, !auto_gain_control)
+        let driver = self.context.driver.as_ref();
+        let auto_gain_control = get_auto_gain_control(driver).await?;
+        set_auto_gain_control(driver, !auto_gain_control)
             .await
             .context("Failed to set auto gain control")?;
         Ok(())
     }
 
     async fn toggle_background_blur_inner(&self) -> Result<()> {
-        let background_blur = get_background_blur(&self.context.page).await?;
-        set_background_blur(&self.context.page, !background_blur)
+        let driver = self.context.driver.as_ref();
+        let background_blur = get_background_blur(driver).await?;
+        set_background_blur(driver, !background_blur)
             .await
             .context("Failed to set background blur")?;
         Ok(())
     }
 
-    async fn leave_button(&self) -> Result<Element> {
-        self.context.find_element(classic::LEAVE_BUTTON).await
-    }
-
-    async fn mute_button(&self) -> Result<Element> {
-        self.context.find_element(classic::MUTE_BUTTON).await
-    }
-
-    async fn camera_button(&self) -> Result<Element> {
-        self.context.find_element(classic::VIDEO_BUTTON).await
-    }
-
-    async fn screen_share_button(&self) -> Result<Element> {
-        self.context.find_element(classic::SCREEN_SHARE_BUTTON).await
-    }
-
     async fn refresh_state_inner(&self) -> Result<ParticipantState> {
-        let joined = self.leave_button().await.is_ok();
+        let driver = self.context.driver.as_ref();
+        let joined = driver.exists(classic::LEAVE_BUTTON).await.unwrap_or(false);
         let mut state = ParticipantState {
             username: self.context.launch_spec.username.clone(),
             running: true,
@@ -290,43 +279,43 @@ impl ParticipantInner {
             ..Default::default()
         };
 
-        if let Ok(value) = get_noise_suppression(&self.context.page).await {
+        if let Ok(value) = get_noise_suppression(driver).await {
             state.noise_suppression = value;
         }
 
-        if let Ok(value) = get_auto_gain_control(&self.context.page).await {
+        if let Ok(value) = get_auto_gain_control(driver).await {
             state.auto_gain_control = value;
         }
 
-        if let Ok(mute_button) = self.mute_button().await {
-            if let Some(value) = element_state(&mute_button).await {
-                state.muted = !value;
+        if let Ok(value) = driver.attribute(classic::MUTE_BUTTON, "data-test-state").await {
+            if let Some(active) = decode_test_state(value) {
+                state.muted = !active;
             }
         }
 
-        if let Ok(camera_button) = self.camera_button().await {
-            if let Some(element_state) = element_state(&camera_button).await {
-                state.video_activated = element_state;
+        if let Ok(value) = driver.attribute(classic::VIDEO_BUTTON, "data-test-state").await {
+            if let Some(active) = decode_test_state(value) {
+                state.video_activated = active;
             }
         }
 
-        if let Ok(screen_share_button) = self.screen_share_button().await {
-            if let Some(element_state) = element_state(&screen_share_button).await {
-                state.screenshare_activated = element_state;
+        if let Ok(value) = driver.attribute(classic::SCREEN_SHARE_BUTTON, "data-test-state").await {
+            if let Some(active) = decode_test_state(value) {
+                state.screenshare_activated = active;
             }
         }
 
-        if let Ok(value) = get_force_webrtc(&self.context.page).await {
+        if let Ok(value) = get_force_webrtc(driver).await {
             if value {
                 state.transport_mode = TransportMode::WebRTC;
             }
         }
 
-        if let Ok(value) = get_outgoing_camera_resolution(&self.context.page).await {
+        if let Ok(value) = get_outgoing_camera_resolution(driver).await {
             state.webcam_resolution = value;
         }
 
-        if let Ok(blur) = get_background_blur(&self.context.page).await {
+        if let Ok(blur) = get_background_blur(driver).await {
             state.background_blur = blur;
         }
 

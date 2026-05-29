@@ -5,17 +5,14 @@ use super::{
         messages::ParticipantMessage,
         ParticipantState,
     },
-    frontend::{
-        element_state,
+    driver::{
+        decode_test_state,
+        BrowserDriver,
         FrontendAutomation,
         FrontendContext,
     },
+    selectors::lite,
 };
-use crate::{
-    participant::local::selectors::lite,
-    util::wait_for_element,
-};
-use chromiumoxide::Element;
 use client_simulator_config::{
     NoiseSuppression,
     TransportMode,
@@ -57,8 +54,8 @@ impl ParticipantInnerLite {
 
     async fn join_session(&mut self) -> Result<()> {
         self.context
-            .page
-            .goto(self.context.launch_spec.session_url.to_string())
+            .driver
+            .goto(self.context.launch_spec.session_url.as_str())
             .await
             .context("failed to wait for navigation response")?;
 
@@ -75,9 +72,8 @@ impl ParticipantInnerLite {
                 self.prepare_lobby().await?;
 
                 self.context
-                    .find_element(lite::JOIN_BUTTON)
-                    .await?
-                    .click()
+                    .driver
+                    .click(lite::JOIN_BUTTON)
                     .await
                     .context("failed to click join button")?;
 
@@ -86,7 +82,9 @@ impl ParticipantInnerLite {
             }
         }
 
-        wait_for_element(&self.context.page, lite::LEAVE_BUTTON, Duration::from_secs(30))
+        self.context
+            .driver
+            .wait_for(lite::LEAVE_BUTTON, Duration::from_secs(30))
             .await
             .context("We haven't joined the space, cannot find the leave button")?;
 
@@ -109,11 +107,11 @@ impl ParticipantInnerLite {
         let start = Instant::now();
 
         loop {
-            if self.context.page.find_element(lite::LEAVE_BUTTON).await.is_ok() {
+            if self.context.driver.exists(lite::LEAVE_BUTTON).await.unwrap_or(false) {
                 return Ok(LiteEntryPoint::InCall);
             }
 
-            if self.context.page.find_element(lite::JOIN_BUTTON).await.is_ok() {
+            if self.context.driver.exists(lite::JOIN_BUTTON).await.unwrap_or(false) {
                 return Ok(LiteEntryPoint::Lobby);
             }
 
@@ -130,16 +128,10 @@ impl ParticipantInnerLite {
     }
 
     async fn prepare_lobby(&self) -> Result<()> {
-        if let Ok(input) = self.context.find_element(lite::NAME_INPUT).await {
-            input
-                .focus()
-                .await
-                .context("failed to focus on the Lite display name input")?
-                .call_js_fn("function() { this.value = ''; }", true)
-                .await
-                .context("failed to empty current Lite display name")?;
-            input
-                .type_str(&self.context.launch_spec.username)
+        if self.context.driver.exists(lite::NAME_INPUT).await.unwrap_or(false) {
+            self.context
+                .driver
+                .fill(lite::NAME_INPUT, &self.context.launch_spec.username)
                 .await
                 .context("failed to insert Lite display name")?;
 
@@ -182,16 +174,22 @@ impl ParticipantInnerLite {
     }
 
     async fn leave_session(&mut self) -> Result<()> {
-        self.leave_button()
-            .await?
-            .click()
+        self.context
+            .driver
+            .click(lite::LEAVE_BUTTON)
             .await
             .context("Could not click on the leave space button")?;
 
-        match wait_for_element(&self.context.page, lite::LEAVE_CONFIRM_BUTTON, Duration::from_secs(5)).await {
-            Ok(button) => {
-                button
-                    .click()
+        match self
+            .context
+            .driver
+            .wait_for(lite::LEAVE_CONFIRM_BUTTON, Duration::from_secs(5))
+            .await
+        {
+            Ok(()) => {
+                self.context
+                    .driver
+                    .click(lite::LEAVE_CONFIRM_BUTTON)
                     .await
                     .context("Could not confirm leaving the Lite meeting")?;
                 debug!(participant = %self.participant_name(), "Confirmed the Lite leave dialog");
@@ -212,9 +210,9 @@ impl ParticipantInnerLite {
     }
 
     async fn toggle_audio_inner(&self) -> Result<()> {
-        self.mute_button()
-            .await?
-            .click()
+        self.context
+            .driver
+            .click(lite::MUTE_BUTTON)
             .await
             .context("Could not click on the toggle audio button")?;
         info!(participant = %self.participant_name(), "Toggled audio");
@@ -223,9 +221,9 @@ impl ParticipantInnerLite {
     }
 
     async fn toggle_video_inner(&self) -> Result<()> {
-        self.camera_button()
-            .await?
-            .click()
+        self.context
+            .driver
+            .click(lite::VIDEO_BUTTON)
             .await
             .context("Could not click on the toggle camera button")?;
         info!(participant = %self.participant_name(), "Toggled camera");
@@ -234,9 +232,9 @@ impl ParticipantInnerLite {
     }
 
     async fn toggle_screen_share_inner(&self) -> Result<()> {
-        self.screen_share_button()
-            .await?
-            .click()
+        self.context
+            .driver
+            .click(lite::SCREEN_SHARE_BUTTON)
             .await
             .context("Could not click on the toggle screen share button")?;
         info!(participant = %self.participant_name(), "Toggled screen share");
@@ -293,16 +291,17 @@ impl ParticipantInnerLite {
     }
 
     async fn click_if_present(&self, selector: &str, action: &str) -> Result<bool> {
-        let Ok(element) = self.context.page.find_element(selector).await else {
+        if !self.context.driver.exists(selector).await.unwrap_or(false) {
             debug!(
                 participant = %self.participant_name(),
                 "Could not find Lite control for {action}: {selector}"
             );
             return Ok(false);
-        };
+        }
 
-        element
-            .click()
+        self.context
+            .driver
+            .click(selector)
             .await
             .with_context(|| format!("Could not click Lite control for {action}: {selector}"))?;
         debug!(participant = %self.participant_name(), "Clicked Lite control for {action}");
@@ -318,59 +317,39 @@ impl ParticipantInnerLite {
             .send_log_message("debug", format!("{feature} changes not supported in lite frontend"));
     }
 
-    async fn leave_button(&self) -> Result<Element> {
-        self.context.find_element(lite::LEAVE_BUTTON).await
-    }
-
-    async fn mute_button(&self) -> Result<Element> {
-        self.context.find_element(lite::MUTE_BUTTON).await
-    }
-
-    async fn camera_button(&self) -> Result<Element> {
-        self.context.find_element(lite::VIDEO_BUTTON).await
-    }
-
-    async fn screen_share_button(&self) -> Result<Element> {
-        self.context.find_element(lite::SCREEN_SHARE_BUTTON).await
-    }
-
     async fn audio_enabled(&self) -> Result<Option<bool>> {
-        let button = match self.mute_button().await {
-            Ok(button) => button,
-            Err(_) => return Ok(None),
-        };
+        let driver = self.context.driver.as_ref();
 
         Ok(audio_enabled_from_button_state(
-            element_state(&button).await,
-            aria_pressed(&button).await,
-            aria_label(&button).await.as_deref(),
+            decode_test_state(driver.attribute(lite::MUTE_BUTTON, "data-test-state").await?),
+            aria_pressed(driver, lite::MUTE_BUTTON).await,
+            aria_label(driver, lite::MUTE_BUTTON).await.as_deref(),
         ))
     }
 
     async fn video_enabled(&self) -> Result<Option<bool>> {
-        let button = match self.camera_button().await {
-            Ok(button) => button,
-            Err(_) => return Ok(None),
-        };
+        let driver = self.context.driver.as_ref();
 
         Ok(video_enabled_from_button_state(
-            element_state(&button).await,
-            aria_pressed(&button).await,
-            aria_label(&button).await.as_deref(),
+            decode_test_state(driver.attribute(lite::VIDEO_BUTTON, "data-test-state").await?),
+            aria_pressed(driver, lite::VIDEO_BUTTON).await,
+            aria_label(driver, lite::VIDEO_BUTTON).await.as_deref(),
         ))
     }
 
     async fn screen_share_enabled(&self) -> Result<Option<bool>> {
-        let button = match self.screen_share_button().await {
-            Ok(button) => button,
-            Err(_) => return Ok(None),
-        };
+        let driver = self.context.driver.as_ref();
 
-        Ok(element_state(&button).await.or(aria_pressed(&button).await))
+        Ok(decode_test_state(
+            driver
+                .attribute(lite::SCREEN_SHARE_BUTTON, "data-test-state")
+                .await?,
+        )
+        .or(aria_pressed(driver, lite::SCREEN_SHARE_BUTTON).await))
     }
 
     async fn refresh_state_inner(&self) -> Result<ParticipantState> {
-        let joined = self.leave_button().await.is_ok();
+        let joined = self.context.driver.exists(lite::LEAVE_BUTTON).await.unwrap_or(false);
         let mut state = ParticipantState {
             username: self.context.launch_spec.username.clone(),
             running: true,
@@ -400,17 +379,17 @@ impl ParticipantInnerLite {
     }
 }
 
-async fn aria_pressed(element: &Element) -> Option<bool> {
-    element
-        .attribute("aria-pressed")
+async fn aria_pressed(driver: &dyn BrowserDriver, selector: &str) -> Option<bool> {
+    driver
+        .attribute(selector, "aria-pressed")
         .await
         .ok()
         .flatten()
         .and_then(|value| value.parse().ok())
 }
 
-async fn aria_label(element: &Element) -> Option<String> {
-    element.attribute("aria-label").await.ok().flatten()
+async fn aria_label(driver: &dyn BrowserDriver, selector: &str) -> Option<String> {
+    driver.attribute(selector, "aria-label").await.ok().flatten()
 }
 
 fn audio_enabled_from_button_state(
