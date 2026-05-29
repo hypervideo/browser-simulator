@@ -339,13 +339,9 @@ impl ParticipantInnerLite {
 
     async fn screen_share_enabled(&self) -> Result<Option<bool>> {
         let driver = self.context.driver.as_ref();
+        let data_test_state = driver.attribute(lite::SCREEN_SHARE_BUTTON, "data-test-state").await?;
 
-        Ok(decode_test_state(
-            driver
-                .attribute(lite::SCREEN_SHARE_BUTTON, "data-test-state")
-                .await?,
-        )
-        .or(aria_pressed(driver, lite::SCREEN_SHARE_BUTTON).await))
+        Ok(decode_test_state(data_test_state).or(aria_pressed(driver, lite::SCREEN_SHARE_BUTTON).await))
     }
 
     async fn refresh_state_inner(&self) -> Result<ParticipantState> {

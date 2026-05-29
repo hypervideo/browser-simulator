@@ -1,6 +1,2 @@
-pub(super) mod commands;
-pub(super) mod core;
-pub(super) mod frontend;
-pub(super) mod lite;
-pub(super) mod selectors;
+mod chromium_driver;
 pub(super) mod session;

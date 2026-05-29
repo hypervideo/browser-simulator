@@ -13,7 +13,6 @@ pub(in crate::participant) use builder::{
     FrontendKindBuilder,
 };
 pub(in crate::participant) use driver::{
-    decode_test_state,
     BrowserDriver,
     FrontendAutomation,
     FrontendContext,

@@ -1,16 +1,15 @@
+use super::chromium_driver::ChromiumDriver;
 use crate::{
     auth::{
         BorrowedCookie,
         HyperSessionCookieManger,
     },
     participant::{
-        local::{
-            core::ParticipantInner,
-            frontend::{
-                FrontendAutomation,
-                FrontendContext,
-            },
-            lite::ParticipantInnerLite,
+        frontend::{
+            FrontendAuth,
+            FrontendAutomation,
+            FrontendContext,
+            FrontendKindBuilder,
         },
         shared::{
             messages::{
@@ -20,7 +19,6 @@ use crate::{
             DriverTermination,
             ParticipantDriverSession,
             ParticipantLaunchSpec,
-            ResolvedFrontendKind,
         },
     },
 };
@@ -72,7 +70,7 @@ pub(crate) struct LocalChromiumSession {
     launch_spec: ParticipantLaunchSpec,
     browser_config: BrowserConfig,
     sender: UnboundedSender<ParticipantLogMessage>,
-    frontend_builder: Option<LocalFrontendBuilder>,
+    frontend_builder: Option<FrontendAuth>,
     automation: Option<Box<dyn FrontendAutomation>>,
     browser: Option<Browser>,
     page: Option<Page>,
@@ -80,14 +78,6 @@ pub(crate) struct LocalChromiumSession {
     detached_target_task: Option<JoinHandle<()>>,
     termination_tx: watch::Sender<Option<DriverTermination>>,
     termination_rx: watch::Receiver<Option<DriverTermination>>,
-}
-
-enum LocalFrontendBuilder {
-    HyperCore {
-        auth: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
-    },
-    HyperLite,
 }
 
 impl LocalChromiumSession {
@@ -98,10 +88,7 @@ impl LocalChromiumSession {
         auth: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
     ) -> Self {
-        let frontend_builder = match launch_spec.frontend_kind {
-            ResolvedFrontendKind::HyperCore => LocalFrontendBuilder::HyperCore { auth, cookie_manager },
-            ResolvedFrontendKind::HyperLite => LocalFrontendBuilder::HyperLite,
-        };
+        let frontend_builder = FrontendAuth::for_kind(launch_spec.frontend_kind, auth, cookie_manager);
         let (termination_tx, termination_rx) = watch::channel(None);
 
         Self {
@@ -137,17 +124,19 @@ impl LocalChromiumSession {
         let detached_target_task =
             drive_detached_target_events(&self.launch_spec.username, &mut browser, self.termination_tx.clone()).await?;
 
-        let frontend_builder = self
+        let auth = self
             .frontend_builder
             .take()
-            .context("local frontend builder already consumed")?;
-        let automation = frontend_builder
-            .build(FrontendContext {
+            .context("local frontend auth already consumed")?;
+        let automation = FrontendKindBuilder::build(
+            FrontendContext {
                 launch_spec: self.launch_spec.clone(),
-                page: page.clone(),
+                driver: Box::new(ChromiumDriver::new(page.clone())),
                 sender: self.sender.clone(),
-            })
-            .await?;
+            },
+            auth,
+        )
+        .await?;
 
         self.browser = Some(browser);
         self.page = Some(page);
@@ -280,24 +269,6 @@ impl ParticipantDriverSession for LocalChromiumSession {
 
     fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
         async move { self.wait_for_termination_inner().await }.boxed()
-    }
-}
-
-impl LocalFrontendBuilder {
-    async fn build(self, context: FrontendContext) -> Result<Box<dyn FrontendAutomation>> {
-        match self {
-            Self::HyperCore { auth, cookie_manager } => {
-                let auth = if let Some(cookie) = auth {
-                    cookie
-                } else {
-                    cookie_manager
-                        .fetch_new_cookie(context.launch_spec.base_url(), context.participant_name())
-                        .await?
-                };
-                Ok(Box::new(ParticipantInner::new(context, auth)))
-            }
-            Self::HyperLite => Ok(Box::new(ParticipantInnerLite::new(context))),
-        }
     }
 }
 
