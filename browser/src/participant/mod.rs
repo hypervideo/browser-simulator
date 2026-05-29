@@ -85,6 +85,7 @@ impl Participant {
             ParticipantBackendKind::Local => Self::spawn_with_app_config(config, cookie_manager),
             ParticipantBackendKind::Cloudflare => Self::spawn_cloudflare(config, cookie_manager),
             ParticipantBackendKind::RemoteStub => Self::spawn_remote_stub(config, cookie_manager),
+            ParticipantBackendKind::AwsDeviceFarm => eyre::bail!("AWS Device Farm backend is not implemented yet"),
         }
     }
 

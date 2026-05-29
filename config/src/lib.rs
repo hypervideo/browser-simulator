@@ -31,8 +31,8 @@ pub use client_config::{
     WebcamResolutionIter,
 };
 pub use cloudflare_config::CloudflareConfig;
-pub use device_farm_config::DeviceFarmConfig;
 use color_eyre::Result;
+pub use device_farm_config::DeviceFarmConfig;
 use eyre::Context as _;
 pub use participant_config::{
     generate_random_name,
@@ -63,6 +63,8 @@ pub struct Config {
     pub backend: ParticipantBackendKind,
     #[serde(default, skip_serializing_if = "CloudflareConfig::is_default")]
     pub cloudflare: CloudflareConfig,
+    #[serde(default, skip_serializing_if = "DeviceFarmConfig::is_default")]
+    pub device_farm: DeviceFarmConfig,
     #[serde(default)]
     pub audio_enabled: bool,
     #[serde(default)]
@@ -127,6 +129,38 @@ impl config::Source for Config {
                         "health_poll_interval_ms".to_string(),
                         self.cloudflare.health_poll_interval_ms.into(),
                     ),
+                ]))
+                .into(),
+            );
+        }
+        if !self.device_farm.is_default() {
+            cache.insert(
+                "device_farm".to_string(),
+                config::ValueKind::Table(HashMap::from_iter([
+                    ("project_arn".to_string(), self.device_farm.project_arn.clone().into()),
+                    ("region".to_string(), self.device_farm.region.clone().into()),
+                    (
+                        "url_expires_seconds".to_string(),
+                        self.device_farm.url_expires_seconds.into(),
+                    ),
+                    (
+                        "session_max_duration_ms".to_string(),
+                        self.device_farm.session_max_duration_ms.into(),
+                    ),
+                    ("idle_timeout_ms".to_string(), self.device_farm.idle_timeout_ms.into()),
+                    (
+                        "navigation_timeout_ms".to_string(),
+                        self.device_farm.navigation_timeout_ms.into(),
+                    ),
+                    (
+                        "selector_timeout_ms".to_string(),
+                        self.device_farm.selector_timeout_ms.into(),
+                    ),
+                    (
+                        "health_poll_interval_ms".to_string(),
+                        self.device_farm.health_poll_interval_ms.into(),
+                    ),
+                    ("debug".to_string(), self.device_farm.debug.into()),
                 ]))
                 .into(),
             );
@@ -346,5 +380,39 @@ cloudflare:
         assert_eq!(config.cloudflare.selector_timeout_ms, 10_000);
         assert!(config.cloudflare.debug);
         assert_eq!(config.cloudflare.health_poll_interval_ms, 2_000);
+    }
+
+    #[test]
+    fn parses_aws_device_farm_backend_and_nested_device_farm_config() {
+        let config: Config = config::Config::builder()
+            .add_source(Config::default())
+            .add_source(config::File::from_str(
+                r#"
+backend: aws-device-farm
+device_farm:
+  project_arn: arn:aws:devicefarm:us-west-2:123456789012:testgrid-project:abc
+  region: us-west-2
+  url_expires_seconds: 300
+  session_max_duration_ms: 1800000
+  idle_timeout_ms: 180000
+  navigation_timeout_ms: 45000
+  selector_timeout_ms: 20000
+  health_poll_interval_ms: 30000
+  debug: true
+"#,
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .expect("failed to build config")
+            .try_deserialize()
+            .expect("failed to deserialize config");
+
+        assert_eq!(config.backend, ParticipantBackendKind::AwsDeviceFarm);
+        assert_eq!(
+            config.device_farm.project_arn,
+            "arn:aws:devicefarm:us-west-2:123456789012:testgrid-project:abc"
+        );
+        assert_eq!(config.device_farm.region, "us-west-2");
+        assert!(config.device_farm.debug);
     }
 }
