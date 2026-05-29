@@ -1,14 +1,6 @@
 mod test_grid;
 mod webdriver_driver;
 
-#[allow(unused_imports)]
-pub use test_grid::TestGridApi;
-pub(crate) use test_grid::{
-    AwsTestGrid,
-};
-#[allow(unused_imports)]
-pub(crate) use webdriver_driver::WebDriverDriver;
-
 use crate::{
     auth::{
         BorrowedCookie,
@@ -51,6 +43,9 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+pub(crate) use test_grid::AwsTestGrid;
+#[allow(unused_imports)]
+pub use test_grid::TestGridApi;
 use thirtyfour::{
     CapabilitiesHelper,
     ChromeCapabilities,
@@ -67,6 +62,8 @@ use tokio::{
     task::JoinHandle,
     time::MissedTickBehavior,
 };
+#[allow(unused_imports)]
+pub(crate) use webdriver_driver::WebDriverDriver;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
@@ -275,7 +272,11 @@ impl DeviceFarmSession {
         self.stop_keep_alive_poller().await;
 
         if let Some(mut automation) = self.automation.take() {
-            let joined = automation.refresh_state().await.map(|state| state.joined).unwrap_or(false);
+            let joined = automation
+                .refresh_state()
+                .await
+                .map(|state| state.joined)
+                .unwrap_or(false);
             if joined {
                 if let Err(err) = automation.leave().await {
                     self.log_message("error", format!("Failed leaving space while closing: {err}"));

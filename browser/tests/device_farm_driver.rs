@@ -170,9 +170,7 @@ fn webdriver_response(request: &CapturedRequest, state: &Arc<Mutex<WebDriverStat
             }),
         ),
         ("POST", "/session/df-1/url") => MockResponse::json(200, json!({ "value": null })),
-        ("GET", "/session/df-1/url") => {
-            MockResponse::json(200, json!({ "value": "https://example.com/m/demo" }))
-        }
+        ("GET", "/session/df-1/url") => MockResponse::json(200, json!({ "value": "https://example.com/m/demo" })),
         ("DELETE", "/session/df-1") => MockResponse::json(200, json!({ "value": null })),
         ("POST", "/session/df-1/element") => element_response(request, state),
         _ if request.path.starts_with("/session/df-1/element/") => element_command_response(request, state),
@@ -224,7 +222,12 @@ fn element_command_response(request: &CapturedRequest, state: &Arc<Mutex<WebDriv
         return MockResponse::json(200, json!({ "value": null }));
     }
 
-    if let Some(attribute) = request.path.rsplit('/').next().filter(|_| request.path.contains("/attribute/")) {
+    if let Some(attribute) = request
+        .path
+        .rsplit('/')
+        .next()
+        .filter(|_| request.path.contains("/attribute/"))
+    {
         let value = match attribute {
             "data-test-state" if request.path.contains("/element/audio/") => json!("true"),
             "data-test-state" if request.path.contains("/element/video/") => json!("true"),

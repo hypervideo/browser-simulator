@@ -199,7 +199,9 @@ impl Participant {
 
     pub fn spawn_device_farm(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
         let device_farm_config = config.device_farm.clone();
-        let api = Arc::new(crate::participant::device_farm::AwsTestGrid::new(&device_farm_config.region));
+        let api = Arc::new(crate::participant::device_farm::AwsTestGrid::new(
+            &device_farm_config.region,
+        ));
         Self::spawn_device_farm_with_api(config, cookie_manager, api)
     }
 
