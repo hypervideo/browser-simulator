@@ -16,6 +16,8 @@ homepage = "https://github.com/hypervideo/browser-simulator"
 repository = "https://github.com/hypervideo/browser-simulator"
 
 [workspace.dependencies]
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls"] }
+aws-sdk-devicefarm = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls"] }
 better-panic = "0.3.0"
 chromiumoxide = { version = "0.9.1", features = ["bytes"], default-features = false }
 chrono = { version = "0.4.44", features = ["serde"] }
@@ -41,6 +43,7 @@ signal-hook = "0.4.4"
 strip-ansi-escapes = "0.2.1"
 strum = { version = "0.28.0", features = ["derive"] }
 temp-dir = "0.2.0"
+thirtyfour = "0.36"
 tokio = { version = "1.52.2", default-features = false, features = ["macros", "rt-multi-thread", "sync", "signal"] }
 tokio-util = "0.7.18"
 tracing = "0.1.44"
