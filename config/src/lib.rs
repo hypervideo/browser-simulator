@@ -6,6 +6,7 @@ mod args;
 mod browser_config;
 mod client_config;
 mod cloudflare_config;
+mod device_farm_config;
 pub mod media;
 mod participant_config;
 
@@ -30,6 +31,7 @@ pub use client_config::{
     WebcamResolutionIter,
 };
 pub use cloudflare_config::CloudflareConfig;
+pub use device_farm_config::DeviceFarmConfig;
 use color_eyre::Result;
 use eyre::Context as _;
 pub use participant_config::{
