@@ -85,7 +85,7 @@ impl Participant {
             ParticipantBackendKind::Local => Self::spawn_with_app_config(config, cookie_manager),
             ParticipantBackendKind::Cloudflare => Self::spawn_cloudflare(config, cookie_manager),
             ParticipantBackendKind::RemoteStub => Self::spawn_remote_stub(config, cookie_manager),
-            ParticipantBackendKind::AwsDeviceFarm => eyre::bail!("AWS Device Farm backend is not implemented yet"),
+            ParticipantBackendKind::AwsDeviceFarm => Self::spawn_device_farm(config, cookie_manager),
         }
     }
 
@@ -185,6 +185,55 @@ impl Participant {
                 log_sender,
                 cookie,
                 cookie_manager,
+            ),
+        );
+
+        Ok(Self {
+            name,
+            created: Utc::now(),
+            state: state_receiver,
+            _participant_task_guard: task_guard,
+            sender,
+        })
+    }
+
+    pub fn spawn_device_farm(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+        use crate::participant::device_farm::{
+            AwsTestGrid,
+            DeviceFarmLaunchOptions,
+            DeviceFarmSession,
+        };
+
+        let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
+        let frontend_kind = ResolvedFrontendKind::from_session_url(&session_url);
+        let base_url = session_url.origin().unicode_serialization();
+        let cookie = matches!(frontend_kind, ResolvedFrontendKind::HyperCore)
+            .then(|| cookie_manager.give_cookie(&base_url))
+            .flatten();
+        let name = cookie.as_ref().map(BorrowedCookie::username);
+        let participant_config = ParticipantConfig::new(config, name)?;
+        let launch_spec = ParticipantLaunchSpec::from(participant_config);
+        let name = launch_spec.username.clone();
+
+        let device_farm_config = config.device_farm.clone();
+        let launch_options = DeviceFarmLaunchOptions::from(config);
+
+        let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
+        let (log_sender, _log_receiver) = unbounded_channel::<ParticipantLogMessage>();
+        let api = Arc::new(AwsTestGrid::new(&device_farm_config.region));
+
+        let (state_receiver, task_guard) = spawn_session(
+            name.clone(),
+            receiver,
+            log_sender.clone(),
+            DeviceFarmSession::new(
+                launch_spec,
+                launch_options,
+                device_farm_config,
+                log_sender,
+                cookie,
+                cookie_manager,
+                api,
             ),
         );
 

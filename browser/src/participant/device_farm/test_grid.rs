@@ -15,22 +15,31 @@ pub(crate) trait TestGridApi: Send + Sync {
 }
 
 /// Real implementation backed by `aws-sdk-devicefarm`.
-#[allow(dead_code)]
 pub(crate) struct AwsTestGrid {
-    client: aws_sdk_devicefarm::Client,
+    region: String,
+    client: tokio::sync::OnceCell<aws_sdk_devicefarm::Client>,
 }
 
-#[allow(dead_code)]
 impl AwsTestGrid {
-    pub(crate) async fn new(region: &str) -> Self {
-        let region = aws_sdk_devicefarm::config::Region::new(region.to_owned());
-        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .region(region)
-            .load()
-            .await;
+    pub(crate) fn new(region: &str) -> Self {
         Self {
-            client: aws_sdk_devicefarm::Client::new(&config),
+            region: region.to_owned(),
+            client: tokio::sync::OnceCell::new(),
         }
+    }
+
+    async fn client(&self) -> &aws_sdk_devicefarm::Client {
+        let region = self.region.clone();
+        self.client
+            .get_or_init(|| async move {
+                let region = aws_sdk_devicefarm::config::Region::new(region);
+                let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                    .region(region)
+                    .load()
+                    .await;
+                aws_sdk_devicefarm::Client::new(&config)
+            })
+            .await
     }
 }
 
@@ -39,7 +48,8 @@ impl TestGridApi for AwsTestGrid {
         let project_arn = project_arn.to_owned();
         async move {
             let output = self
-                .client
+                .client()
+                .await
                 .create_test_grid_url()
                 .project_arn(project_arn)
                 .expires_in_seconds(expires_seconds as i32)
