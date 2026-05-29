@@ -47,6 +47,7 @@ use tokio_util::sync::{
 };
 
 mod cloudflare;
+mod device_farm;
 mod frontend;
 mod local;
 mod remote_stub;
