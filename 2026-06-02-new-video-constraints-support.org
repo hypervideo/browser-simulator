@@ -1,0 +1,1338 @@
+#+TITLE: New Video Constraints Support Implementation Plan
+#+DATE: [2026-06-02 Tue]
+#+FILETAGS: :implementation_plan:video_constraints:
+
+#+BEGIN_QUOTE
+For agentic workers: REQUIRED SUB-SKILL: Use =superpowers:subagent-driven-development= (recommended) or =superpowers:executing-plans= to implement this plan task-by-task. Steps use checkbox syntax for tracking.
+#+END_QUOTE
+
+* Goal
+
+Replace simulator support for the removed Hyper Core webcam encoder resolution setting with the current media settings:
+
+- =videoConstraintPublishWebcam=: outgoing webcam max-resolution option.
+- =videoConstraintSubscribe=: incoming max-resolution option.
+- =videoMaxConcurrentTracks=: max number of outgoing video tracks per local video stream, or =null= for unlimited.
+
+* Architecture
+
+Treat the new controls as media settings, not video codec settings. The active local-browser JavaScript API should read and write =window.hyper.settings.media= through =setVideoConstraintPublishWebcam=, =setVideoConstraintSubscribe=, and =setVideoMaxConcurrentTracks=.
+
+Replace the simulator's old single =resolution= setting throughout the active config, participant launch settings, participant state, headless CLI, remote-stub backend, and TUI surfaces. Keep the Cloudflare backend in sync by updating the bundled worker OpenAPI schema and browser-side mapping tests so remote participants receive the same three setting values.
+
+* Tech Stack
+
+Rust 2021, =serde=, =strum=, =clap=, =tokio=, =chromiumoxide=, =thirtyfour=, generated =cloudflare-worker-client= types from =progenitor=, and the existing =just= recipes.
+
+* Source Context
+
+The linked Hyper design note is [[file:/Users/robert/projects/shuttle/hyper.video-3/2026-06-02_manual-simulcast-video-stream-control.org][2026-06-02_manual-simulcast-video-stream-control.org]].
+
+The current Hyper SDK settings are defined in [[file:/Users/robert/projects/shuttle/hyper.video-3/frontend/web/sdk/src/remote-config/media-settings.ts][media-settings.ts]]:
+
+#+BEGIN_SRC typescript
+export type VideoConstraint = keyof typeof VIDEO_CONSTRAINT_NONE | keyof typeof VIDEO_CONSTRAINT_OPTIONS;
+
+export const VIDEO_CONSTRAINT_NONE = {
+    none: { label: "None" },
+};
+export const VIDEO_CONSTRAINT_OPTIONS = {
+    "90p": { label: "90p", width: 160, height: 90 },
+    "144p": { label: "144p", width: 256, height: 144 },
+    "240p": { label: "240p", width: 426, height: 240 },
+    "360p": { label: "360p", width: 640, height: 360 },
+    "480p": { label: "480p", width: 854, height: 480 },
+    "720p": { label: "720p", width: 1280, height: 720 },
+    "1080p": { label: "1080p", width: 1920, height: 1080 },
+    "1440p": { label: "1440p", width: 2560, height: 1440 },
+    "2160p": { label: "2160p", width: 3840, height: 2160 },
+} as const;
+#+END_SRC
+
+The active runtime actions are in [[file:/Users/robert/projects/shuttle/hyper.video-3/frontend/web/sdk/src/media/state/media-settings.tsx][media-settings.tsx]]:
+
+#+BEGIN_SRC typescript
+setVideoConstraintPublishWebcam: (constraint) => {
+    updateBase({ videoConstraintPublishWebcam: constraint });
+},
+setVideoConstraintSubscribe: (constraint) => {
+    updateBase({ videoConstraintSubscribe: constraint });
+},
+setVideoMaxConcurrentTracks: (maxConcurrentTracks) => {
+    updateBase({ videoMaxConcurrentTracks: maxConcurrentTracks });
+},
+#+END_SRC
+
+The simulator currently calls the removed API in [[file:browser/src/participant/frontend/commands.rs][browser/src/participant/frontend/commands.rs]]:
+
+#+BEGIN_SRC rust
+const CAMERA_RES_GET: &str = "return hyper.settings.videoCodec.videoResolutionForWebcamEncoder.name;";
+const CAMERA_RES_SET: &str = "hyper.settings.videoCodec.actions.setVideoResolutionForWebcamEncoder(arguments[0]);";
+#+END_SRC
+
+* File Map
+
+- Modify [[file:config/src/client_config.rs][config/src/client_config.rs]]: add =VideoConstraint= and a CLI/TUI-friendly =VideoMaxConcurrentTracksPreset= helper; stop using =WebcamResolution= for active Hyper Core media settings.
+- Modify [[file:config/src/lib.rs][config/src/lib.rs]]: replace =Config.resolution= with =video_constraint_publish_webcam=, =video_constraint_subscribe=, and =video_max_concurrent_tracks=.
+- Modify [[file:config/src/default-config.yaml][config/src/default-config.yaml]]: default both constraints to =none= and =video_max_concurrent_tracks= to =null= or omitted.
+- Modify [[file:browser/src/participant/frontend/commands.rs][browser/src/participant/frontend/commands.rs]]: replace camera resolution commands with media setting commands and unit tests over a fake =BrowserDriver=.
+- Modify [[file:browser/src/participant/frontend/core.rs][browser/src/participant/frontend/core.rs]]: apply and refresh the three new settings.
+- Modify [[file:browser/src/participant/shared/spec.rs][browser/src/participant/shared/spec.rs]], [[file:browser/src/participant/shared/state.rs][state.rs]], [[file:browser/src/participant/shared/messages.rs][messages.rs]], [[file:browser/src/participant/remote_stub.rs][remote_stub.rs]], and [[file:browser/src/participant/mod.rs][mod.rs]]: thread the new setting names through participant state and commands.
+- Modify [[file:src/headless.rs][src/headless.rs]]: replace =--resolution= and participant JSON =resolution= with the three new fields.
+- Modify [[file:tui/src/tui/components/browser_start.rs][tui/src/tui/components/browser_start.rs]] and [[file:tui/src/tui/components/participants.rs][participants.rs]]: replace the camera resolution selector/table cell with outgoing constraint, incoming constraint, and track-limit controls.
+- Modify [[file:cloudflare-worker-client/openapi/cloudflare-browser-simulator.json][cloudflare-worker-client/openapi/cloudflare-browser-simulator.json]], [[file:cloudflare-worker-client/src/client.rs][client.rs]], and [[file:browser/src/participant/cloudflare/mod.rs][browser/src/participant/cloudflare/mod.rs]]: replace worker schema and mappings for legacy resolution.
+
+* Task 1: Add Config Types and Replace Active Config Fields
+
+** Files
+
+- Modify: [[file:config/src/client_config.rs][config/src/client_config.rs]]
+- Modify: [[file:config/src/lib.rs][config/src/lib.rs]]
+- Modify: [[file:config/src/default-config.yaml][config/src/default-config.yaml]]
+
+** Steps
+
+- [ ] Step 1: Write failing config type tests.
+
+Add these tests in =config/src/client_config.rs=.
+
+#+BEGIN_SRC rust
+#[cfg(test)]
+mod tests {
+    use super::{
+        ParticipantBackendKind,
+        VideoConstraint,
+        VideoMaxConcurrentTracksPreset,
+    };
+    use std::str::FromStr as _;
+
+    #[test]
+    fn video_constraint_round_trips_hyper_media_setting_names() {
+        let values = [
+            ("none", VideoConstraint::None),
+            ("90p", VideoConstraint::P90),
+            ("144p", VideoConstraint::P144),
+            ("240p", VideoConstraint::P240),
+            ("360p", VideoConstraint::P360),
+            ("480p", VideoConstraint::P480),
+            ("720p", VideoConstraint::P720),
+            ("1080p", VideoConstraint::P1080),
+            ("1440p", VideoConstraint::P1440),
+            ("2160p", VideoConstraint::P2160),
+        ];
+
+        for (raw, expected) in values {
+            assert_eq!(VideoConstraint::from_str(raw).unwrap(), expected);
+            assert_eq!(expected.to_string(), raw);
+            assert_eq!(serde_json::to_value(expected).unwrap(), raw);
+            assert_eq!(serde_json::from_value::<VideoConstraint>(raw.into()).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn video_track_limit_presets_convert_to_nullable_track_counts() {
+        assert_eq!(VideoMaxConcurrentTracksPreset::Unlimited.to_option(), None);
+        assert_eq!(VideoMaxConcurrentTracksPreset::One.to_option(), Some(1));
+        assert_eq!(VideoMaxConcurrentTracksPreset::Two.to_option(), Some(2));
+        assert_eq!(VideoMaxConcurrentTracksPreset::from_option(None), VideoMaxConcurrentTracksPreset::Unlimited);
+        assert_eq!(VideoMaxConcurrentTracksPreset::from_option(Some(1)), VideoMaxConcurrentTracksPreset::One);
+        assert_eq!(VideoMaxConcurrentTracksPreset::from_option(Some(2)), VideoMaxConcurrentTracksPreset::Two);
+        assert_eq!(VideoMaxConcurrentTracksPreset::from_option(Some(8)), VideoMaxConcurrentTracksPreset::Custom);
+    }
+
+    #[test]
+    fn aws_device_farm_round_trips_kebab_case() {
+        let kind = ParticipantBackendKind::from_str("aws-device-farm").unwrap();
+        assert_eq!(kind, ParticipantBackendKind::AwsDeviceFarm);
+        assert_eq!(kind.to_string(), "aws-device-farm");
+        assert!(!kind.is_local());
+    }
+}
+#+END_SRC
+
+Replace the existing =tests= module instead of creating a duplicate module.
+
+- [ ] Step 2: Run the failing config type tests.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo test -p client-simulator-config video_constraint_round_trips_hyper_media_setting_names video_track_limit_presets_convert_to_nullable_track_counts
+#+END_SRC
+
+Expected: the command fails because =VideoConstraint= and =VideoMaxConcurrentTracksPreset= do not exist.
+
+- [ ] Step 3: Add the new config enums.
+
+Add this near =WebcamResolution= in =config/src/client_config.rs=. Keep =WebcamResolution= only if Cloudflare compatibility tests still need it during the transition; do not use it for active Hyper Core media settings after Task 3.
+
+#+BEGIN_SRC rust
+#[derive(Debug, Default, Clone, Copy, Display, EnumIter, EnumString, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum VideoConstraint {
+    #[default]
+    #[strum(to_string = "none")]
+    #[serde(rename = "none")]
+    None,
+    #[strum(to_string = "90p")]
+    #[serde(rename = "90p")]
+    P90,
+    #[strum(to_string = "144p")]
+    #[serde(rename = "144p")]
+    P144,
+    #[strum(to_string = "240p")]
+    #[serde(rename = "240p")]
+    P240,
+    #[strum(to_string = "360p")]
+    #[serde(rename = "360p")]
+    P360,
+    #[strum(to_string = "480p")]
+    #[serde(rename = "480p")]
+    P480,
+    #[strum(to_string = "720p")]
+    #[serde(rename = "720p")]
+    P720,
+    #[strum(to_string = "1080p")]
+    #[serde(rename = "1080p")]
+    P1080,
+    #[strum(to_string = "1440p")]
+    #[serde(rename = "1440p")]
+    P1440,
+    #[strum(to_string = "2160p")]
+    #[serde(rename = "2160p")]
+    P2160,
+}
+
+#[derive(Debug, Default, Clone, Copy, Display, EnumIter, EnumString, PartialEq, Eq)]
+pub enum VideoMaxConcurrentTracksPreset {
+    #[default]
+    #[strum(to_string = "unlimited")]
+    Unlimited,
+    #[strum(to_string = "1")]
+    One,
+    #[strum(to_string = "2")]
+    Two,
+    #[strum(to_string = "custom")]
+    Custom,
+}
+
+impl VideoMaxConcurrentTracksPreset {
+    pub const fn to_option(self) -> Option<usize> {
+        match self {
+            Self::Unlimited => None,
+            Self::One => Some(1),
+            Self::Two => Some(2),
+            Self::Custom => None,
+        }
+    }
+
+    pub const fn from_option(value: Option<usize>) -> Self {
+        match value {
+            None => Self::Unlimited,
+            Some(1) => Self::One,
+            Some(2) => Self::Two,
+            Some(_) => Self::Custom,
+        }
+    }
+}
+#+END_SRC
+
+- [ ] Step 4: Export the new types.
+
+Modify the =pub use client_config= block in =config/src/lib.rs=.
+
+#+BEGIN_SRC rust
+pub use client_config::{
+    NoiseSuppression,
+    NoiseSuppressionIter,
+    ParticipantBackendKind,
+    TransportMode,
+    TransportModeIter,
+    VideoConstraint,
+    VideoConstraintIter,
+    VideoMaxConcurrentTracksPreset,
+    VideoMaxConcurrentTracksPresetIter,
+};
+#+END_SRC
+
+- [ ] Step 5: Replace the active config fields.
+
+In =config/src/lib.rs=, replace:
+
+#+BEGIN_SRC rust
+#[serde(default)]
+pub resolution: WebcamResolution,
+#+END_SRC
+
+with:
+
+#+BEGIN_SRC rust
+#[serde(default)]
+pub video_constraint_publish_webcam: VideoConstraint,
+#[serde(default)]
+pub video_constraint_subscribe: VideoConstraint,
+#[serde(default, skip_serializing_if = "Option::is_none")]
+pub video_max_concurrent_tracks: Option<usize>,
+#+END_SRC
+
+Update =impl config::Source for Config= so the collected source emits only the new fields:
+
+#+BEGIN_SRC rust
+cache.insert(
+    "video_constraint_publish_webcam".to_string(),
+    self.video_constraint_publish_webcam.to_string().into(),
+);
+cache.insert(
+    "video_constraint_subscribe".to_string(),
+    self.video_constraint_subscribe.to_string().into(),
+);
+if let Some(value) = self.video_max_concurrent_tracks {
+    cache.insert("video_max_concurrent_tracks".to_string(), (value as i64).into());
+}
+#+END_SRC
+
+Remove the old =resolution= insert from this method.
+
+- [ ] Step 6: Update default YAML.
+
+In =config/src/default-config.yaml=, replace:
+
+#+BEGIN_SRC yaml
+resolution: auto
+#+END_SRC
+
+with:
+
+#+BEGIN_SRC yaml
+video_constraint_publish_webcam: none
+video_constraint_subscribe: none
+video_max_concurrent_tracks:
+#+END_SRC
+
+- [ ] Step 7: Add config deserialization tests.
+
+Add these tests in =config/src/lib.rs=.
+
+#+BEGIN_SRC rust
+#[test]
+fn parses_new_video_constraint_settings() {
+    let config: Config = config::Config::builder()
+        .add_source(Config::default())
+        .add_source(config::File::from_str(
+            r#"
+video_constraint_publish_webcam: 480p
+video_constraint_subscribe: 720p
+video_max_concurrent_tracks: 2
+"#,
+            config::FileFormat::Yaml,
+        ))
+        .build()
+        .expect("failed to build config")
+        .try_deserialize()
+        .expect("failed to deserialize config");
+
+    assert_eq!(config.video_constraint_publish_webcam, VideoConstraint::P480);
+    assert_eq!(config.video_constraint_subscribe, VideoConstraint::P720);
+    assert_eq!(config.video_max_concurrent_tracks, Some(2));
+}
+
+#[test]
+fn default_video_max_concurrent_tracks_is_unlimited() {
+    let config = Config::default();
+
+    assert_eq!(config.video_constraint_publish_webcam, VideoConstraint::None);
+    assert_eq!(config.video_constraint_subscribe, VideoConstraint::None);
+    assert_eq!(config.video_max_concurrent_tracks, None);
+}
+#+END_SRC
+
+- [ ] Step 8: Run config tests.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo test -p client-simulator-config
+#+END_SRC
+
+Expected: all =client-simulator-config= tests pass.
+
+* Task 2: Replace Local Browser JavaScript Commands
+
+** Files
+
+- Modify: [[file:browser/src/participant/frontend/commands.rs][browser/src/participant/frontend/commands.rs]]
+
+** Steps
+
+- [ ] Step 1: Write failing command tests with a fake driver.
+
+Add a =#[cfg(test)]= module in =browser/src/participant/frontend/commands.rs=. Use a recording driver so the tests prove exact JavaScript bodies and serialized arguments.
+
+#+BEGIN_SRC rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eyre::Result;
+    use futures::{
+        future::BoxFuture,
+        FutureExt as _,
+    };
+    use serde_json::json;
+    use std::{
+        sync::Mutex,
+        time::Duration,
+    };
+
+    #[derive(Default)]
+    struct RecordingDriver {
+        calls: Mutex<Vec<(String, Option<serde_json::Value>)>>,
+        next_result: Mutex<serde_json::Value>,
+    }
+
+    impl RecordingDriver {
+        fn with_result(value: serde_json::Value) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                next_result: Mutex::new(value),
+            }
+        }
+
+        fn calls(&self) -> Vec<(String, Option<serde_json::Value>)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl BrowserDriver for RecordingDriver {
+        fn goto(&self, _url: &str) -> BoxFuture<'_, Result<()>> {
+            async { Ok(()) }.boxed()
+        }
+
+        fn exists(&self, _selector: &str) -> BoxFuture<'_, Result<bool>> {
+            async { Ok(false) }.boxed()
+        }
+
+        fn wait_for(&self, _selector: &str, _timeout: Duration) -> BoxFuture<'_, Result<()>> {
+            async { Ok(()) }.boxed()
+        }
+
+        fn click(&self, _selector: &str) -> BoxFuture<'_, Result<()>> {
+            async { Ok(()) }.boxed()
+        }
+
+        fn fill(&self, _selector: &str, _text: &str) -> BoxFuture<'_, Result<()>> {
+            async { Ok(()) }.boxed()
+        }
+
+        fn attribute(&self, _selector: &str, _name: &str) -> BoxFuture<'_, Result<Option<String>>> {
+            async { Ok(None) }.boxed()
+        }
+
+        fn eval(&self, js_body: &str, arg: Option<serde_json::Value>) -> BoxFuture<'_, Result<serde_json::Value>> {
+            self.calls.lock().unwrap().push((js_body.to_string(), arg));
+            let value = self.next_result.lock().unwrap().clone();
+            async move { Ok(value) }.boxed()
+        }
+
+        fn set_cookie(&self, _domain: &str, _name: &str, _value: &str) -> BoxFuture<'_, Result<()>> {
+            async { Ok(()) }.boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn sets_video_constraints_through_media_settings_api() {
+        let driver = RecordingDriver::default();
+
+        set_video_constraint_publish_webcam(&driver, VideoConstraint::P480).await.unwrap();
+        set_video_constraint_subscribe(&driver, VideoConstraint::P720).await.unwrap();
+        set_video_max_concurrent_tracks(&driver, Some(2)).await.unwrap();
+        set_video_max_concurrent_tracks(&driver, None).await.unwrap();
+
+        assert_eq!(
+            driver.calls(),
+            vec![
+                (
+                    "hyper.settings.media.actions.setVideoConstraintPublishWebcam(arguments[0]);".to_string(),
+                    Some(json!("480p")),
+                ),
+                (
+                    "hyper.settings.media.actions.setVideoConstraintSubscribe(arguments[0]);".to_string(),
+                    Some(json!("720p")),
+                ),
+                (
+                    "hyper.settings.media.actions.setVideoMaxConcurrentTracks(arguments[0]);".to_string(),
+                    Some(json!(2)),
+                ),
+                (
+                    "hyper.settings.media.actions.setVideoMaxConcurrentTracks(arguments[0]);".to_string(),
+                    Some(serde_json::Value::Null),
+                ),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn gets_video_constraints_from_media_settings_api() {
+        let driver = RecordingDriver::with_result(json!("360p"));
+
+        let value = get_video_constraint_publish_webcam(&driver).await.unwrap();
+
+        assert_eq!(value, VideoConstraint::P360);
+        assert_eq!(
+            driver.calls(),
+            vec![(
+                "return hyper.settings.media.videoConstraintPublishWebcam;".to_string(),
+                None,
+            )],
+        );
+    }
+
+    #[tokio::test]
+    async fn gets_nullable_video_max_concurrent_tracks() {
+        let driver = RecordingDriver::with_result(serde_json::Value::Null);
+
+        let value = get_video_max_concurrent_tracks(&driver).await.unwrap();
+
+        assert_eq!(value, None);
+        assert_eq!(
+            driver.calls(),
+            vec![(
+                "return hyper.settings.media.videoMaxConcurrentTracks;".to_string(),
+                None,
+            )],
+        );
+    }
+}
+#+END_SRC
+
+- [ ] Step 2: Run the failing browser command tests.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo test -p client-simulator-browser video_constraints_through_media_settings_api gets_video_constraints_from_media_settings_api gets_nullable_video_max_concurrent_tracks
+#+END_SRC
+
+Expected: the command fails because the new functions and imported types do not exist.
+
+- [ ] Step 3: Replace the command constants and functions.
+
+In =browser/src/participant/frontend/commands.rs=, import =VideoConstraint= instead of =WebcamResolution= for video constraints:
+
+#+BEGIN_SRC rust
+use client_simulator_config::{
+    NoiseSuppression,
+    VideoConstraint,
+};
+#+END_SRC
+
+Remove =CAMERA_RES_GET= and =CAMERA_RES_SET=. Add:
+
+#+BEGIN_SRC rust
+const VIDEO_CONSTRAINT_PUBLISH_GET: &str = "return hyper.settings.media.videoConstraintPublishWebcam;";
+const VIDEO_CONSTRAINT_PUBLISH_SET: &str =
+    "hyper.settings.media.actions.setVideoConstraintPublishWebcam(arguments[0]);";
+const VIDEO_CONSTRAINT_SUBSCRIBE_GET: &str = "return hyper.settings.media.videoConstraintSubscribe;";
+const VIDEO_CONSTRAINT_SUBSCRIBE_SET: &str =
+    "hyper.settings.media.actions.setVideoConstraintSubscribe(arguments[0]);";
+const VIDEO_MAX_CONCURRENT_TRACKS_GET: &str = "return hyper.settings.media.videoMaxConcurrentTracks;";
+const VIDEO_MAX_CONCURRENT_TRACKS_SET: &str =
+    "hyper.settings.media.actions.setVideoMaxConcurrentTracks(arguments[0]);";
+#+END_SRC
+
+Replace =get_outgoing_camera_resolution= and =set_outgoing_camera_resolution= with:
+
+#+BEGIN_SRC rust
+pub(super) async fn get_video_constraint_publish_webcam(driver: &dyn BrowserDriver) -> Result<VideoConstraint> {
+    get_string(driver, VIDEO_CONSTRAINT_PUBLISH_GET)
+        .await?
+        .parse::<VideoConstraint>()
+        .context("failed to parse videoConstraintPublishWebcam from string")
+}
+
+pub(super) async fn set_video_constraint_publish_webcam(
+    driver: &dyn BrowserDriver,
+    value: VideoConstraint,
+) -> Result<()> {
+    set_value(driver, VIDEO_CONSTRAINT_PUBLISH_SET, value.to_string()).await
+}
+
+pub(super) async fn get_video_constraint_subscribe(driver: &dyn BrowserDriver) -> Result<VideoConstraint> {
+    get_string(driver, VIDEO_CONSTRAINT_SUBSCRIBE_GET)
+        .await?
+        .parse::<VideoConstraint>()
+        .context("failed to parse videoConstraintSubscribe from string")
+}
+
+pub(super) async fn set_video_constraint_subscribe(driver: &dyn BrowserDriver, value: VideoConstraint) -> Result<()> {
+    set_value(driver, VIDEO_CONSTRAINT_SUBSCRIBE_SET, value.to_string()).await
+}
+
+pub(super) async fn get_video_max_concurrent_tracks(driver: &dyn BrowserDriver) -> Result<Option<usize>> {
+    let value = driver.eval(VIDEO_MAX_CONCURRENT_TRACKS_GET, None).await?;
+    serde_json::from_value(value).context("failed to read videoMaxConcurrentTracks from eval result")
+}
+
+pub(super) async fn set_video_max_concurrent_tracks(
+    driver: &dyn BrowserDriver,
+    value: Option<usize>,
+) -> Result<()> {
+    set_value(driver, VIDEO_MAX_CONCURRENT_TRACKS_SET, value).await
+}
+#+END_SRC
+
+- [ ] Step 4: Run browser command tests.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo test -p client-simulator-browser video_constraints
+#+END_SRC
+
+Expected: command tests pass and no remaining test references call =videoResolutionForWebcamEncoder=.
+
+* Task 3: Thread New Settings Through Participant Runtime
+
+** Files
+
+- Modify: [[file:browser/src/participant/shared/spec.rs][browser/src/participant/shared/spec.rs]]
+- Modify: [[file:browser/src/participant/shared/state.rs][browser/src/participant/shared/state.rs]]
+- Modify: [[file:browser/src/participant/shared/messages.rs][browser/src/participant/shared/messages.rs]]
+- Modify: [[file:browser/src/participant/frontend/core.rs][browser/src/participant/frontend/core.rs]]
+- Modify: [[file:browser/src/participant/remote_stub.rs][browser/src/participant/remote_stub.rs]]
+- Modify: [[file:browser/src/participant/mod.rs][browser/src/participant/mod.rs]]
+- Modify: [[file:browser/src/participant/frontend/lite.rs][browser/src/participant/frontend/lite.rs]]
+
+** Steps
+
+- [ ] Step 1: Write failing launch-spec and state tests.
+
+Update =browser/src/participant/shared/spec.rs= test =converts_participant_config_to_launch_spec= so its config and assertions use all three new fields:
+
+#+BEGIN_SRC rust
+let participant_config = ParticipantConfig {
+    username: "robert".to_string(),
+    session_url: Url::parse("https://example.com/m/demo").unwrap(),
+    app_config: Config {
+        audio_enabled: true,
+        video_enabled: false,
+        screenshare_enabled: true,
+        auto_gain_control: true,
+        noise_suppression: NoiseSuppression::RNNoise,
+        transport: TransportMode::WebRTC,
+        video_constraint_publish_webcam: VideoConstraint::P480,
+        video_constraint_subscribe: VideoConstraint::P720,
+        video_max_concurrent_tracks: Some(2),
+        blur: true,
+        ..Default::default()
+    },
+};
+
+let spec = ParticipantLaunchSpec::from(participant_config);
+
+assert_eq!(spec.settings.video_constraint_publish_webcam, VideoConstraint::P480);
+assert_eq!(spec.settings.video_constraint_subscribe, VideoConstraint::P720);
+assert_eq!(spec.settings.video_max_concurrent_tracks, Some(2));
+#+END_SRC
+
+- [ ] Step 2: Run the failing launch-spec test.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo test -p client-simulator-browser converts_participant_config_to_launch_spec
+#+END_SRC
+
+Expected: the test fails because =ParticipantSettings= still has =resolution=.
+
+- [ ] Step 3: Replace participant setting and state fields.
+
+In =browser/src/participant/shared/spec.rs=, replace:
+
+#+BEGIN_SRC rust
+pub(in crate::participant) resolution: WebcamResolution,
+#+END_SRC
+
+with:
+
+#+BEGIN_SRC rust
+pub(in crate::participant) video_constraint_publish_webcam: VideoConstraint,
+pub(in crate::participant) video_constraint_subscribe: VideoConstraint,
+pub(in crate::participant) video_max_concurrent_tracks: Option<usize>,
+#+END_SRC
+
+In =ParticipantSettings::from=, assign the new fields from =app_config=.
+
+In =browser/src/participant/shared/state.rs=, replace:
+
+#+BEGIN_SRC rust
+pub webcam_resolution: WebcamResolution,
+#+END_SRC
+
+with:
+
+#+BEGIN_SRC rust
+pub video_constraint_publish_webcam: VideoConstraint,
+pub video_constraint_subscribe: VideoConstraint,
+pub video_max_concurrent_tracks: Option<usize>,
+#+END_SRC
+
+- [ ] Step 4: Replace participant commands.
+
+In =browser/src/participant/shared/messages.rs=, replace:
+
+#+BEGIN_SRC rust
+SetWebcamResolutions(WebcamResolution),
+#+END_SRC
+
+with:
+
+#+BEGIN_SRC rust
+SetVideoConstraintPublishWebcam(VideoConstraint),
+SetVideoConstraintSubscribe(VideoConstraint),
+SetVideoMaxConcurrentTracks(Option<usize>),
+#+END_SRC
+
+In =browser/src/participant/mod.rs=, replace =set_webcam_resolutions= and =set_webcam_resolution= with:
+
+#+BEGIN_SRC rust
+pub fn set_video_constraint_publish_webcam(&self, value: client_simulator_config::VideoConstraint) {
+    self.send_message(ParticipantMessage::SetVideoConstraintPublishWebcam(value));
+}
+
+pub fn set_video_constraint_subscribe(&self, value: client_simulator_config::VideoConstraint) {
+    self.send_message(ParticipantMessage::SetVideoConstraintSubscribe(value));
+}
+
+pub fn set_video_max_concurrent_tracks(&self, value: Option<usize>) {
+    self.send_message(ParticipantMessage::SetVideoMaxConcurrentTracks(value));
+}
+#+END_SRC
+
+- [ ] Step 5: Apply new settings in Hyper Core frontend automation.
+
+Update imports in =browser/src/participant/frontend/core.rs= to use the new command functions from Task 2. In =apply_all_settings=, replace the old outgoing resolution setter with:
+
+#+BEGIN_SRC rust
+set_video_constraint_publish_webcam(driver, settings.video_constraint_publish_webcam)
+    .await
+    .context("failed to set outgoing webcam video constraint")?;
+set_video_constraint_subscribe(driver, settings.video_constraint_subscribe)
+    .await
+    .context("failed to set incoming video constraint")?;
+set_video_max_concurrent_tracks(driver, settings.video_max_concurrent_tracks)
+    .await
+    .context("failed to set max concurrent video tracks")?;
+#+END_SRC
+
+Replace =set_webcam_resolutions_inner= with three focused setters:
+
+#+BEGIN_SRC rust
+async fn set_video_constraint_publish_webcam_inner(&self, value: VideoConstraint) -> Result<()> {
+    info!(participant = %self.participant_name(), "Changing outgoing webcam video constraint to {value}");
+    set_video_constraint_publish_webcam(self.context.driver.as_ref(), value)
+        .await
+        .context("Failed to set outgoing webcam video constraint")
+}
+
+async fn set_video_constraint_subscribe_inner(&self, value: VideoConstraint) -> Result<()> {
+    info!(participant = %self.participant_name(), "Changing incoming video constraint to {value}");
+    set_video_constraint_subscribe(self.context.driver.as_ref(), value)
+        .await
+        .context("Failed to set incoming video constraint")
+}
+
+async fn set_video_max_concurrent_tracks_inner(&self, value: Option<usize>) -> Result<()> {
+    info!(participant = %self.participant_name(), ?value, "Changing max concurrent video tracks");
+    set_video_max_concurrent_tracks(self.context.driver.as_ref(), value)
+        .await
+        .context("Failed to set max concurrent video tracks")
+}
+#+END_SRC
+
+In =refresh_state_inner=, populate the new state fields:
+
+#+BEGIN_SRC rust
+if let Ok(value) = get_video_constraint_publish_webcam(driver).await {
+    state.video_constraint_publish_webcam = value;
+}
+
+if let Ok(value) = get_video_constraint_subscribe(driver).await {
+    state.video_constraint_subscribe = value;
+}
+
+if let Ok(value) = get_video_max_concurrent_tracks(driver).await {
+    state.video_max_concurrent_tracks = value;
+}
+#+END_SRC
+
+Update =handle_command= to dispatch the three new =ParticipantMessage= variants.
+
+- [ ] Step 6: Update Hyper Lite and remote stub behavior.
+
+In =browser/src/participant/frontend/lite.rs=, make the three new commands return a clear unsupported message matching the old lite behavior:
+
+#+BEGIN_SRC rust
+warn!(
+    participant = %self.participant_name(),
+    "Video constraint changes not supported in lite frontend"
+);
+#+END_SRC
+
+In =browser/src/participant/remote_stub.rs=, initialize and mutate the three new fields:
+
+#+BEGIN_SRC rust
+video_constraint_publish_webcam: self.launch_spec.settings.video_constraint_publish_webcam,
+video_constraint_subscribe: self.launch_spec.settings.video_constraint_subscribe,
+video_max_concurrent_tracks: self.launch_spec.settings.video_max_concurrent_tracks,
+#+END_SRC
+
+and in command handling:
+
+#+BEGIN_SRC rust
+ParticipantMessage::SetVideoConstraintPublishWebcam(value) => {
+    self.state.video_constraint_publish_webcam = value;
+    self.log_message("debug", format!("remote stub set outgoing webcam video constraint to {value}"));
+}
+ParticipantMessage::SetVideoConstraintSubscribe(value) => {
+    self.state.video_constraint_subscribe = value;
+    self.log_message("debug", format!("remote stub set incoming video constraint to {value}"));
+}
+ParticipantMessage::SetVideoMaxConcurrentTracks(value) => {
+    self.state.video_max_concurrent_tracks = value;
+    self.log_message("debug", format!("remote stub set max concurrent video tracks to {value:?}"));
+}
+#+END_SRC
+
+- [ ] Step 7: Run browser runtime tests.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo test -p client-simulator-browser converts_participant_config_to_launch_spec remote_stub
+#+END_SRC
+
+Expected: tests pass or expose remaining direct references to =WebcamResolution= that need replacement.
+
+* Task 4: Replace Headless CLI and Participant JSON Fields
+
+** Files
+
+- Modify: [[file:src/headless.rs][src/headless.rs]]
+
+** Steps
+
+- [ ] Step 1: Write failing headless parsing and override tests.
+
+Update =src/headless.rs= tests so command-line and participant JSON use the new names:
+
+#+BEGIN_SRC rust
+#[test]
+fn cli_parsing_accepts_video_constraint_options() {
+    let cli = TestHeadlessCli::parse_from([
+        "headless",
+        "--video-constraint-publish-webcam",
+        "480p",
+        "--video-constraint-subscribe",
+        "720p",
+        "--video-max-concurrent-tracks",
+        "2",
+        "--participant",
+        r#"{"video_constraint_publish_webcam":"360p","video_constraint_subscribe":"none","video_max_concurrent_tracks":null}"#,
+    ]);
+    let args = cli.args;
+
+    assert_eq!(args.video_constraint_publish_webcam, Some(VideoConstraint::P480));
+    assert_eq!(args.video_constraint_subscribe, Some(VideoConstraint::P720));
+    assert_eq!(args.video_max_concurrent_tracks, Some(Some(2)));
+    assert_eq!(args.participants.len(), 1);
+}
+
+#[test]
+fn participant_json_can_override_video_constraints_to_unlimited() {
+    let global_config = Config {
+        video_constraint_publish_webcam: VideoConstraint::P720,
+        video_constraint_subscribe: VideoConstraint::P720,
+        video_max_concurrent_tracks: Some(2),
+        ..Default::default()
+    };
+
+    let configs = build_participant_configs(
+        global_config,
+        &[r#"{"video_constraint_publish_webcam":"360p","video_constraint_subscribe":"480p","video_max_concurrent_tracks":null}"#.to_string()],
+    )
+    .expect("participant configs");
+
+    assert_eq!(configs[0].video_constraint_publish_webcam, VideoConstraint::P360);
+    assert_eq!(configs[0].video_constraint_subscribe, VideoConstraint::P480);
+    assert_eq!(configs[0].video_max_concurrent_tracks, None);
+}
+#+END_SRC
+
+- [ ] Step 2: Run the failing headless tests.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo test -p hyper-client-simulator headless::tests::cli_parsing_accepts_video_constraint_options headless::tests::participant_json_can_override_video_constraints_to_unlimited
+#+END_SRC
+
+Expected: the command fails because =HeadlessArgs= and =ParticipantOverride= still use =resolution=.
+
+- [ ] Step 3: Replace =HeadlessArgs= fields.
+
+In =src/headless.rs=, replace:
+
+#+BEGIN_SRC rust
+#[clap(long, value_name = "RESOLUTION")]
+pub resolution: Option<WebcamResolution>,
+#+END_SRC
+
+with:
+
+#+BEGIN_SRC rust
+#[clap(long = "video-constraint-publish-webcam", value_name = "CONSTRAINT")]
+pub video_constraint_publish_webcam: Option<VideoConstraint>,
+
+#[clap(long = "video-constraint-subscribe", value_name = "CONSTRAINT")]
+pub video_constraint_subscribe: Option<VideoConstraint>,
+
+#[clap(long = "video-max-concurrent-tracks", value_name = "TRACKS", value_parser = parse_video_max_concurrent_tracks)]
+pub video_max_concurrent_tracks: Option<Option<usize>>,
+#+END_SRC
+
+Add this parser in =src/headless.rs=:
+
+#+BEGIN_SRC rust
+fn parse_video_max_concurrent_tracks(raw: &str) -> Result<Option<usize>, String> {
+    match raw {
+        "none" | "null" | "unlimited" => Ok(None),
+        _ => raw
+            .parse::<usize>()
+            .map(Some)
+            .map_err(|err| format!("expected unlimited/null/none or a non-negative integer: {err}")),
+    }
+}
+#+END_SRC
+
+- [ ] Step 4: Replace participant JSON override fields.
+
+In =ParticipantOverride=, replace =resolution= with:
+
+#+BEGIN_SRC rust
+video_constraint_publish_webcam: Option<VideoConstraint>,
+video_constraint_subscribe: Option<VideoConstraint>,
+video_max_concurrent_tracks: Option<Option<usize>>,
+#+END_SRC
+
+In =apply_cli_overrides= and =apply_participant_override=, set the three =Config= fields. Because =video_max_concurrent_tracks= is nullable, assign when the outer option is present:
+
+#+BEGIN_SRC rust
+if let Some(value) = args.video_max_concurrent_tracks {
+    config.video_max_concurrent_tracks = value;
+}
+
+if let Some(value) = override_.video_max_concurrent_tracks {
+    config.video_max_concurrent_tracks = value;
+}
+#+END_SRC
+
+- [ ] Step 5: Remove old =resolution= headless support.
+
+Delete =resolution= from:
+
+- =HeadlessArgs=
+- =ParticipantOverride=
+- =apply_cli_overrides=
+- =apply_participant_override=
+- headless tests
+
+Then run:
+
+#+BEGIN_SRC bash
+rg -n "\bresolution\b|WebcamResolution" src/headless.rs
+#+END_SRC
+
+Expected: no matches in =src/headless.rs=.
+
+- [ ] Step 6: Run headless tests.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo test -p hyper-client-simulator headless
+#+END_SRC
+
+Expected: all headless tests pass.
+
+* Task 5: Replace TUI Surfaces
+
+** Files
+
+- Modify: [[file:tui/src/tui/components/browser_start.rs][tui/src/tui/components/browser_start.rs]]
+- Modify: [[file:tui/src/tui/components/participants.rs][tui/src/tui/components/participants.rs]]
+
+** Steps
+
+- [ ] Step 1: Replace imports and component fields.
+
+In both files, replace =WebcamResolution= imports and =resolution_list= fields with:
+
+#+BEGIN_SRC rust
+use client_simulator_config::{
+    Config,
+    NoiseSuppression,
+    VideoConstraint,
+    VideoConstraintIter,
+    VideoMaxConcurrentTracksPreset,
+    VideoMaxConcurrentTracksPresetIter,
+};
+#+END_SRC
+
+Use these component fields:
+
+#+BEGIN_SRC rust
+video_constraint_publish_webcam_list: Option<EnumListInput<VideoConstraint>>,
+video_constraint_subscribe_list: Option<EnumListInput<VideoConstraint>>,
+video_max_concurrent_tracks_list: Option<EnumListInput<VideoMaxConcurrentTracksPreset>>,
+#+END_SRC
+
+- [ ] Step 2: Update start-screen labels and selection handlers.
+
+In =browser_start.rs=, replace camera resolution text with:
+
+#+BEGIN_SRC rust
+SelectedField::VideoConstraintPublishWebcam => " Select outgoing webcam max resolution. <enter> to select. ",
+SelectedField::VideoConstraintSubscribe => " Select incoming max resolution. <enter> to select. ",
+SelectedField::VideoMaxConcurrentTracks => " Select max concurrent webcam tracks. <enter> to select. ",
+#+END_SRC
+
+When a preset is selected, assign:
+
+#+BEGIN_SRC rust
+self.config.video_max_concurrent_tracks = value.to_option();
+#+END_SRC
+
+For the current value, derive the preset with:
+
+#+BEGIN_SRC rust
+VideoMaxConcurrentTracksPreset::from_option(self.config.video_max_concurrent_tracks)
+#+END_SRC
+
+- [ ] Step 3: Update participant table columns and live commands.
+
+In =participants.rs=, replace the single camera resolution list with three selection paths:
+
+#+BEGIN_SRC rust
+participant.set_video_constraint_publish_webcam(value);
+participant.set_video_constraint_subscribe(value);
+participant.set_video_max_concurrent_tracks(value.to_option());
+#+END_SRC
+
+Display the state values with:
+
+#+BEGIN_SRC rust
+let publish_constraint = state.video_constraint_publish_webcam.to_string();
+let subscribe_constraint = state.video_constraint_subscribe.to_string();
+let max_tracks = state
+    .video_max_concurrent_tracks
+    .map(|value| value.to_string())
+    .unwrap_or_else(|| "unlimited".to_string());
+#+END_SRC
+
+- [ ] Step 4: Run TUI tests.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo test -p client-simulator-tui
+#+END_SRC
+
+Expected: TUI tests pass and compile errors identify any remaining old field names.
+
+* Task 6: Update Cloudflare Worker Client Contract and Mappings
+
+** Files
+
+- Modify: [[file:cloudflare-worker-client/openapi/cloudflare-browser-simulator.json][cloudflare-worker-client/openapi/cloudflare-browser-simulator.json]]
+- Modify: [[file:cloudflare-worker-client/src/client.rs][cloudflare-worker-client/src/client.rs]]
+- Modify: [[file:browser/src/participant/cloudflare/mod.rs][browser/src/participant/cloudflare/mod.rs]]
+- Modify: [[file:browser/tests/cloudflare_driver.rs][browser/tests/cloudflare_driver.rs]]
+
+** Steps
+
+- [ ] Step 1: Update the OpenAPI schema.
+
+In =ParticipantSettings=, replace the =resolution= property with:
+
+#+BEGIN_SRC json
+"videoConstraintPublishWebcam": {
+  "type": "string",
+  "enum": ["none", "90p", "144p", "240p", "360p", "480p", "720p", "1080p", "1440p", "2160p"]
+},
+"videoConstraintSubscribe": {
+  "type": "string",
+  "enum": ["none", "90p", "144p", "240p", "360p", "480p", "720p", "1080p", "1440p", "2160p"]
+},
+"videoMaxConcurrentTracks": {
+  "type": ["number", "null"],
+  "minimum": 0
+}
+#+END_SRC
+
+Replace =resolution= in =required= with the three new property names.
+
+In =SessionCommandRequest=, replace the =set-webcam-resolution= variant with these three variants:
+
+#+BEGIN_SRC json
+{
+  "type": "object",
+  "properties": {
+    "type": { "type": "string", "enum": ["set-video-constraint-publish-webcam"] },
+    "videoConstraintPublishWebcam": {
+      "type": "string",
+      "enum": ["none", "90p", "144p", "240p", "360p", "480p", "720p", "1080p", "1440p", "2160p"]
+    }
+  },
+  "required": ["type", "videoConstraintPublishWebcam"]
+},
+{
+  "type": "object",
+  "properties": {
+    "type": { "type": "string", "enum": ["set-video-constraint-subscribe"] },
+    "videoConstraintSubscribe": {
+      "type": "string",
+      "enum": ["none", "90p", "144p", "240p", "360p", "480p", "720p", "1080p", "1440p", "2160p"]
+    }
+  },
+  "required": ["type", "videoConstraintSubscribe"]
+},
+{
+  "type": "object",
+  "properties": {
+    "type": { "type": "string", "enum": ["set-video-max-concurrent-tracks"] },
+    "videoMaxConcurrentTracks": {
+      "type": ["number", "null"],
+      "minimum": 0
+    }
+  },
+  "required": ["type", "videoMaxConcurrentTracks"]
+}
+#+END_SRC
+
+If the deployed worker uses different command names, update these strings to match the worker source before running tests. Do not keep =set-webcam-resolution= in the new simulator contract.
+
+- [ ] Step 2: Regenerate and compile the worker client.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo check -p cloudflare-worker-client
+#+END_SRC
+
+Expected: generated types include =ParticipantSettingsVideoConstraintPublishWebcam=, =ParticipantSettingsVideoConstraintSubscribe=, and command variants for all three settings. Compile errors in tests still reference =ParticipantSettingsResolution=.
+
+- [ ] Step 3: Update cloudflare-worker-client tests.
+
+In =cloudflare-worker-client/src/client.rs=, replace imports:
+
+#+BEGIN_SRC rust
+ParticipantSettingsResolution,
+#+END_SRC
+
+with the generated video constraint enum names from the compile output, then update =create_session_request=:
+
+#+BEGIN_SRC rust
+settings: ParticipantSettings {
+    audio_enabled: true,
+    auto_gain_control: true,
+    blur: false,
+    noise_suppression: ParticipantSettingsNoiseSuppression::None,
+    screenshare_enabled: false,
+    transport: ParticipantSettingsTransport::Webrtc,
+    video_constraint_publish_webcam: ParticipantSettingsVideoConstraintPublishWebcam::None,
+    video_constraint_subscribe: ParticipantSettingsVideoConstraintSubscribe::None,
+    video_max_concurrent_tracks: None,
+    video_enabled: true,
+},
+#+END_SRC
+
+Update schema-mismatch fixture JSON to contain the three new state fields if =ParticipantState= is changed in the worker schema.
+
+- [ ] Step 4: Update browser Cloudflare mappings.
+
+In =browser/src/participant/cloudflare/mod.rs=, replace =map_command_webcam_resolution= with:
+
+#+BEGIN_SRC rust
+fn map_video_constraint(value: client_simulator_config::VideoConstraint) -> types::ParticipantSettingsVideoConstraintPublishWebcam {
+    match value {
+        client_simulator_config::VideoConstraint::None => types::ParticipantSettingsVideoConstraintPublishWebcam::None,
+        client_simulator_config::VideoConstraint::P90 => types::ParticipantSettingsVideoConstraintPublishWebcam::P90,
+        client_simulator_config::VideoConstraint::P144 => types::ParticipantSettingsVideoConstraintPublishWebcam::P144,
+        client_simulator_config::VideoConstraint::P240 => types::ParticipantSettingsVideoConstraintPublishWebcam::P240,
+        client_simulator_config::VideoConstraint::P360 => types::ParticipantSettingsVideoConstraintPublishWebcam::P360,
+        client_simulator_config::VideoConstraint::P480 => types::ParticipantSettingsVideoConstraintPublishWebcam::P480,
+        client_simulator_config::VideoConstraint::P720 => types::ParticipantSettingsVideoConstraintPublishWebcam::P720,
+        client_simulator_config::VideoConstraint::P1080 => types::ParticipantSettingsVideoConstraintPublishWebcam::P1080,
+        client_simulator_config::VideoConstraint::P1440 => types::ParticipantSettingsVideoConstraintPublishWebcam::P1440,
+        client_simulator_config::VideoConstraint::P2160 => types::ParticipantSettingsVideoConstraintPublishWebcam::P2160,
+    }
+}
+#+END_SRC
+
+If =progenitor= generates separate enum types for publish and subscribe settings, use two mapping functions with identical match arms:
+
+- =map_video_constraint_publish_webcam= returns =types::ParticipantSettingsVideoConstraintPublishWebcam=.
+- =map_video_constraint_subscribe= returns =types::ParticipantSettingsVideoConstraintSubscribe=.
+
+Update =map_settings=:
+
+#+BEGIN_SRC rust
+video_constraint_publish_webcam: map_video_constraint_publish_webcam(settings.video_constraint_publish_webcam),
+video_constraint_subscribe: map_video_constraint_subscribe(settings.video_constraint_subscribe),
+video_max_concurrent_tracks: settings.video_max_concurrent_tracks.map(|value| value as f64),
+#+END_SRC
+
+Update =command_request= for the three new message variants. Use the generated variant names from =cargo check=, for example:
+
+#+BEGIN_SRC rust
+ParticipantMessage::SetVideoConstraintPublishWebcam(value) => {
+    types::SessionCommandRequest::SetVideoConstraintPublishWebcam {
+        video_constraint_publish_webcam: map_command_video_constraint_publish_webcam(value),
+    }
+}
+ParticipantMessage::SetVideoConstraintSubscribe(value) => {
+    types::SessionCommandRequest::SetVideoConstraintSubscribe {
+        video_constraint_subscribe: map_command_video_constraint_subscribe(value),
+    }
+}
+ParticipantMessage::SetVideoMaxConcurrentTracks(value) => {
+    types::SessionCommandRequest::SetVideoMaxConcurrentTracks {
+        video_max_concurrent_tracks: value.map(|value| value as f64),
+    }
+}
+#+END_SRC
+
+- [ ] Step 5: Update Cloudflare tests and fixtures.
+
+Replace expected JSON:
+
+#+BEGIN_SRC json
+{ "type": "set-webcam-resolution", "webcamResolution": "p1080" }
+#+END_SRC
+
+with three separate command expectations:
+
+#+BEGIN_SRC rust
+json!({ "type": "set-video-constraint-publish-webcam", "videoConstraintPublishWebcam": "1080p" })
+json!({ "type": "set-video-constraint-subscribe", "videoConstraintSubscribe": "720p" })
+json!({ "type": "set-video-max-concurrent-tracks", "videoMaxConcurrentTracks": 2 })
+#+END_SRC
+
+Update worker state fixtures that currently use =webcamResolution= so they use:
+
+#+BEGIN_SRC json
+"videoConstraintPublishWebcam": "720p",
+"videoConstraintSubscribe": "none",
+"videoMaxConcurrentTracks": null
+#+END_SRC
+
+- [ ] Step 6: Run Cloudflare tests.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo test -p cloudflare-worker-client
+cargo test -p client-simulator-browser cloudflare
+#+END_SRC
+
+Expected: both commands pass.
+
+* Task 7: Remove Legacy Resolution References and Run Full Verification
+
+** Files
+
+- Modify any file reported by the search commands in this task.
+
+** Steps
+
+- [ ] Step 1: Search for legacy runtime API references.
+
+Run:
+
+#+BEGIN_SRC bash
+rg -n "videoResolutionForWebcamEncoder|setVideoResolutionForWebcamEncoder|videoResolutionWebcamMedia|setVideoResolutionWebcamMedia" .
+#+END_SRC
+
+Expected: no matches in simulator source. Matches in documentation are acceptable only if they explicitly describe removed legacy behavior.
+
+- [ ] Step 2: Search for old simulator setting names.
+
+Run:
+
+#+BEGIN_SRC bash
+rg -n "\bresolution\b|WebcamResolution|webcam_resolution|SetWebcamResolutions|set_webcam_resolution|webcamResolution|set-webcam-resolution" config/src browser/src tui/src src cloudflare-worker-client browser/tests
+#+END_SRC
+
+Expected: no active simulator code uses old webcam resolution names. Remaining matches must be deliberate comments in this plan or compatibility notes outside active code.
+
+- [ ] Step 3: Run formatting and linting.
+
+Run:
+
+#+BEGIN_SRC bash
+just fmt
+just clippy
+#+END_SRC
+
+Expected: both commands exit 0.
+
+- [ ] Step 4: Run the full test suite.
+
+Run:
+
+#+BEGIN_SRC bash
+just test
+#+END_SRC
+
+Expected: all tests pass.
+
+- [ ] Step 5: Run a live local-backend smoke test against latest.dev.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo run -- headless \
+  --url https://latest.dev.hyper.video/0Y6-6FZ-20J \
+  --participant '{"backend":"local","video_constraint_publish_webcam":"480p","video_constraint_subscribe":"720p","video_max_concurrent_tracks":1}'
+#+END_SRC
+
+Expected:
+
+- Logs do not contain =Failed to apply settings before joining=.
+- Logs do not contain =videoResolutionForWebcamEncoder=.
+- Participant reaches =Joined the space=.
+- The process stays running until Ctrl-C.
+
+- [ ] Step 6: Run a nullable track-limit smoke test.
+
+Run:
+
+#+BEGIN_SRC bash
+cargo run -- headless \
+  --url https://latest.dev.hyper.video/0Y6-6FZ-20J \
+  --participant '{"backend":"local","video_constraint_publish_webcam":"360p","video_constraint_subscribe":"none","video_max_concurrent_tracks":null}'
+#+END_SRC
+
+Expected:
+
+- Logs do not contain =Failed to apply settings before joining=.
+- Live page has =window.hyper.settings.media.videoMaxConcurrentTracks === null=.
+- Ctrl-C performs graceful shutdown.
+
+* Self-Review Checklist
+
+- [ ] Every active simulator path that used =resolution= now has publish constraint, subscribe constraint, and max-track setting coverage.
+- [ ] Local Hyper Core browser automation uses =hyper.settings.media=, not =hyper.settings.videoCodec=, for these settings.
+- [ ] Headless CLI and participant JSON can set =video_max_concurrent_tracks= to both a number and =null=.
+- [ ] TUI can inspect and change the three new values for running participants.
+- [ ] Cloudflare worker schema and mappings no longer serialize =webcamResolution= or =set-webcam-resolution=.
+- [ ] Full verification ran with =just fmt=, =just clippy=, =just test=, and at least one live latest.dev smoke test.
