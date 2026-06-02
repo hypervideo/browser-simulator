@@ -1,4 +1,5 @@
 mod errors;
+mod headless;
 
 use clap::{
     Parser,
@@ -27,12 +28,46 @@ pub struct CliArgs {
     command: Option<Command>,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Command {
     /// Start the TUI application
     Tui(TuiArgs),
+    /// Start simulator participants without the TUI
+    Headless(headless::HeadlessArgs),
     /// Connect to the hyper server to get a hyper session cookie
     Cookie(CookieArgs),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_headless_command_with_repeated_participants() {
+        let args = CliArgs::parse_from([
+            "hyper-client-simulator",
+            "--debug",
+            "headless",
+            "--url",
+            "https://latest.dev.hyper.video/F27-T5F-DXY",
+            "--participant",
+            r#"{"audio_enabled": false, "backend": "local"}"#,
+            "--participant",
+            r#"{"audio_enabled": true, "backend": "cloudflare"}"#,
+        ]);
+
+        match args.command {
+            Some(Command::Headless(headless)) => {
+                assert_eq!(args.debug, 1);
+                assert_eq!(
+                    headless.url.as_ref().map(url::Url::as_str),
+                    Some("https://latest.dev.hyper.video/F27-T5F-DXY")
+                );
+                assert_eq!(headless.participants.len(), 2);
+            }
+            other => panic!("expected headless command, got {other:?}"),
+        }
+    }
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -63,6 +98,10 @@ async fn main() -> eyre::Result<()> {
         Some(Command::Tui(mut args)) => {
             args.debug = debug;
             start_tui(args).await
+        }
+        Some(Command::Headless(args)) => {
+            let code = headless::run(args, debug).await?;
+            std::process::exit(code);
         }
         Some(Command::Cookie(args)) => run_cookie(args, debug).await,
     }

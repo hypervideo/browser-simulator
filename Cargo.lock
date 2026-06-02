@@ -1939,6 +1939,7 @@ dependencies = [
  "eyre",
  "human-panic",
  "libc",
+ "serde",
  "serde_json",
  "strip-ansi-escapes",
  "tokio",

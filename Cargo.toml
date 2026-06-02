@@ -90,6 +90,7 @@ eyre.workspace = true
 human-panic.workspace = true
 libc.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 strip-ansi-escapes.workspace = true
 tokio.workspace = true
 tracing.workspace = true
