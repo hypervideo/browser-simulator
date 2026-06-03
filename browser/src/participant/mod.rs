@@ -66,12 +66,19 @@ pub struct Participant {
     pub state: watch::Receiver<ParticipantState>,
     _participant_task_guard: Arc<DropGuard>,
     sender: UnboundedSender<ParticipantMessage>,
+    close_strategy: CloseStrategy,
 }
 
 impl PartialEq for Participant {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseStrategy {
+    DriverCloseOnly,
+    LeaveBeforeClose,
 }
 
 impl Participant {
@@ -128,6 +135,7 @@ impl Participant {
                 state: state_receiver,
                 _participant_task_guard: task_guard,
                 sender: sender_tx,
+                close_strategy: CloseStrategy::DriverCloseOnly,
             },
             receiver_rx,
         ))
@@ -157,6 +165,7 @@ impl Participant {
             state: state_receiver,
             _participant_task_guard: task_guard,
             sender,
+            close_strategy: CloseStrategy::DriverCloseOnly,
         })
     }
 
@@ -194,6 +203,7 @@ impl Participant {
             state: state_receiver,
             _participant_task_guard: task_guard,
             sender,
+            close_strategy: CloseStrategy::LeaveBeforeClose,
         })
     }
 
@@ -254,6 +264,7 @@ impl Participant {
             state: state_receiver,
             _participant_task_guard: task_guard,
             sender,
+            close_strategy: CloseStrategy::DriverCloseOnly,
         })
     }
 }
@@ -310,7 +321,7 @@ impl Participant {
             return;
         }
 
-        if initial_state.joined {
+        if self.close_strategy == CloseStrategy::LeaveBeforeClose && initial_state.joined {
             if self.sender.send(ParticipantMessage::Leave).is_err() {
                 error!(participant = %self.name, "Was not able to send ParticipantMessage::Leave message");
             } else {
@@ -424,5 +435,115 @@ impl Participant {
 
     pub fn toggle_background_blur(&self) {
         self.send_message(ParticipantMessage::ToggleBackgroundBlur);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::participant::shared::{
+        DriverTermination,
+        ParticipantState,
+    };
+    use futures::{
+        future::BoxFuture,
+        FutureExt as _,
+    };
+    use std::{
+        future::pending,
+        sync::{
+            atomic::{
+                AtomicUsize,
+                Ordering,
+            },
+            Arc,
+            Mutex,
+        },
+    };
+    use tokio::sync::mpsc::unbounded_channel;
+
+    struct RecordingCloseDriver {
+        commands: Arc<Mutex<Vec<ParticipantMessage>>>,
+        close_count: Arc<AtomicUsize>,
+    }
+
+    impl ParticipantDriverSession for RecordingCloseDriver {
+        fn participant_name(&self) -> &str {
+            "sim-user"
+        }
+
+        fn start(&mut self) -> BoxFuture<'_, Result<()>> {
+            async move { Ok(()) }.boxed()
+        }
+
+        fn handle_command(&mut self, message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
+            async move {
+                self.commands.lock().unwrap().push(message);
+                Ok(())
+            }
+            .boxed()
+        }
+
+        fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
+            async move {
+                Ok(ParticipantState {
+                    username: "sim-user".to_string(),
+                    running: true,
+                    joined: true,
+                    ..Default::default()
+                })
+            }
+            .boxed()
+        }
+
+        fn close(&mut self) -> BoxFuture<'_, Result<()>> {
+            async move {
+                self.close_count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            .boxed()
+        }
+
+        fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
+            async move { pending::<DriverTermination>().await }.boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn close_uses_driver_close_without_sending_leave_first() {
+        let (command_tx, command_rx) = unbounded_channel();
+        let (log_tx, _log_rx) = unbounded_channel();
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let close_count = Arc::new(AtomicUsize::new(0));
+        let (state, task_guard) = spawn_session(
+            "sim-user".to_string(),
+            command_rx,
+            log_tx,
+            RecordingCloseDriver {
+                commands: Arc::clone(&commands),
+                close_count: Arc::clone(&close_count),
+            },
+        );
+
+        let participant = Participant {
+            name: "sim-user".to_string(),
+            created: Utc::now(),
+            state,
+            _participant_task_guard: task_guard,
+            sender: command_tx,
+            close_strategy: CloseStrategy::DriverCloseOnly,
+        };
+
+        participant
+            .state
+            .clone()
+            .wait_for(|state| state.running && state.joined)
+            .await
+            .unwrap();
+
+        participant.close().await;
+
+        assert_eq!(close_count.load(Ordering::SeqCst), 1);
+        assert!(commands.lock().unwrap().is_empty());
     }
 }
