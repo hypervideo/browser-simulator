@@ -12,17 +12,59 @@ use eyre::{
     OptionExt as _,
 };
 use tracing_subscriber::{
+    filter::LevelFilter,
     fmt,
     prelude::*,
     registry,
+    EnvFilter,
 };
 
-#[derive(Parser)]
+const DEFAULT_LOGGING_DIRECTIVE: &str = "info";
+const RUST_LOG_ENV: &str = "RUST_LOG";
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub enum Logging {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl Logging {
+    fn as_filter(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+            Self::Debug => "debug",
+            Self::Trace => "trace",
+        }
+    }
+}
+
+fn logging_filter(logging: Option<Logging>, rust_log: Option<&str>) -> EnvFilter {
+    let directive = logging
+        .map(Logging::as_filter)
+        .or(rust_log)
+        .unwrap_or(DEFAULT_LOGGING_DIRECTIVE);
+
+    EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .parse_lossy(directive)
+}
+
+fn logging_filter_from_env(logging: Option<Logging>) -> EnvFilter {
+    let rust_log = std::env::var(RUST_LOG_ENV).ok();
+    logging_filter(logging, rust_log.as_deref())
+}
+
+#[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct CliArgs {
-    /// Increase verbosity level (can be used multiple times). 1x = info, 2x = debug, 3x = trace.
-    #[clap(long = "debug", action = clap::ArgAction::Count)]
-    pub debug: u8,
+    /// Tracing filter level. If absent, RUST_LOG is used.
+    #[clap(long, value_enum, value_name = "LEVEL")]
+    pub logging: Option<Logging>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -46,7 +88,8 @@ mod tests {
     fn parses_headless_command_with_repeated_participants() {
         let args = CliArgs::parse_from([
             "hyper-client-simulator",
-            "--debug",
+            "--logging",
+            "debug",
             "headless",
             "--url",
             "https://latest.dev.hyper.video/F27-T5F-DXY",
@@ -58,7 +101,7 @@ mod tests {
 
         match args.command {
             Some(Command::Headless(headless)) => {
-                assert_eq!(args.debug, 1);
+                assert_eq!(args.logging, Some(Logging::Debug));
                 assert_eq!(
                     headless.url.as_ref().map(url::Url::as_str),
                     Some("https://latest.dev.hyper.video/F27-T5F-DXY")
@@ -67,6 +110,52 @@ mod tests {
             }
             other => panic!("expected headless command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_logging_levels() {
+        for (value, logging) in [
+            ("error", Logging::Error),
+            ("warn", Logging::Warn),
+            ("info", Logging::Info),
+            ("debug", Logging::Debug),
+            ("trace", Logging::Trace),
+        ] {
+            let args = CliArgs::parse_from(["hyper-client-simulator", "--logging", value, "headless"]);
+
+            assert_eq!(args.logging, Some(logging));
+        }
+    }
+
+    #[test]
+    fn leaves_logging_empty_when_not_provided() {
+        let args = CliArgs::parse_from(["hyper-client-simulator", "headless"]);
+
+        assert_eq!(args.logging, None);
+    }
+
+    #[test]
+    fn rejects_unknown_logging_level() {
+        let err = CliArgs::try_parse_from(["hyper-client-simulator", "--logging", "verbose", "headless"])
+            .expect_err("unknown logging level should fail");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
+    }
+
+    #[test]
+    fn uses_cli_logging_for_filter_when_present() {
+        let filter = logging_filter(Some(Logging::Trace), Some("warn"));
+
+        assert_eq!(filter.to_string(), "trace");
+    }
+
+    #[test]
+    fn uses_rust_log_for_filter_when_cli_logging_is_absent() {
+        let filter = logging_filter(None, Some("warn,client_simulator_browser=debug"));
+
+        let filter = filter.to_string();
+        assert!(filter.contains("warn"));
+        assert!(filter.contains("client_simulator_browser=debug"));
     }
 }
 
@@ -85,45 +174,32 @@ pub struct CookieArgs {
 async fn main() -> eyre::Result<()> {
     errors::init()?;
 
-    let CliArgs { command, debug } = CliArgs::parse();
+    let CliArgs { command, logging } = CliArgs::parse();
 
     match command {
         None => {
-            let args = TuiArgs {
-                debug,
-                ..Default::default()
-            };
-            start_tui(args).await
+            let args = TuiArgs::default();
+            start_tui(args, logging_filter_from_env(logging)).await
         }
-        Some(Command::Tui(mut args)) => {
-            args.debug = debug;
-            start_tui(args).await
-        }
+        Some(Command::Tui(args)) => start_tui(args, logging_filter_from_env(logging)).await,
         Some(Command::Headless(args)) => {
-            let code = headless::run(args, debug).await?;
+            let code = headless::run(args, logging_filter_from_env(logging)).await?;
             std::process::exit(code);
         }
-        Some(Command::Cookie(args)) => run_cookie(args, debug).await,
+        Some(Command::Cookie(args)) => run_cookie(args, logging_filter_from_env(logging)).await,
     }
 }
 
-async fn run_cookie(CookieArgs { base_url, user }: CookieArgs, debug: u8) -> eyre::Result<()> {
-    if debug > 0 {
-        let filter = match debug {
-            1 => "info",
-            2 => "debug",
-            _ => "trace",
-        };
-
-        registry()
-            .with(
-                fmt::layer()
-                    .with_span_events(fmt::format::FmtSpan::CLOSE)
-                    .with_filter(tracing_subscriber::EnvFilter::builder().parse_lossy(filter)),
-            )
-            .with(tracing_error::ErrorLayer::default())
-            .init();
-    }
+async fn run_cookie(CookieArgs { base_url, user }: CookieArgs, filter: EnvFilter) -> eyre::Result<()> {
+    registry()
+        .with(
+            fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_span_events(fmt::format::FmtSpan::CLOSE)
+                .with_filter(filter),
+        )
+        .with(tracing_error::ErrorLayer::default())
+        .init();
 
     let domain = base_url
         .host_str()

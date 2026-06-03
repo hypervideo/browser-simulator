@@ -85,8 +85,8 @@ struct ParticipantOverride {
     blur: Option<bool>,
 }
 
-pub async fn run(args: HeadlessArgs, debug: u8) -> Result<i32> {
-    init_logging(debug)?;
+pub async fn run(args: HeadlessArgs, filter: EnvFilter) -> Result<i32> {
+    init_logging(filter)?;
 
     let mut global_config = Config::new(TuiArgs::default()).context("Failed to create config")?;
     apply_cli_overrides(&mut global_config, &args);
@@ -201,23 +201,14 @@ fn build_participant_configs(global_config: Config, participants: &[String]) -> 
         .collect()
 }
 
-fn init_logging(debug: u8) -> Result<()> {
-    let filter = match debug {
-        0 => "info",
-        1 => "debug",
-        _ => "trace",
-    };
+fn init_logging(filter: EnvFilter) -> Result<()> {
     let writer = std::io::stderr
         .with_min_level(tracing::Level::WARN)
         .or_else(std::io::stdout);
 
     tracing_subscriber::registry()
         .with(tracing_error::ErrorLayer::default())
-        .with(
-            fmt::layer()
-                .with_writer(writer)
-                .with_filter(EnvFilter::builder().parse_lossy(filter)),
-        )
+        .with(fmt::layer().with_writer(writer).with_filter(filter))
         .try_init()?;
 
     Ok(())

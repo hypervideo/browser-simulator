@@ -1,10 +1,6 @@
 /// Client Simulator TUI
 #[derive(clap::Args, Default, Debug, Clone)]
 pub struct TuiArgs {
-    /// Verbosity level (set from parent command)
-    #[clap(skip)]
-    pub debug: u8,
-
     /// Optional URL to override the stored configuration.
     #[clap(long, value_name = "URL")]
     pub url: Option<String>,
@@ -45,9 +41,6 @@ mod config_ext {
 
         fn collect(&self) -> Result<Map<String, Value>, config::ConfigError> {
             let mut cache = HashMap::<String, Value>::new();
-            if self.debug > 0 {
-                cache.insert("debug".to_string(), (self.debug as i64).into());
-            }
             if let Some(url) = &self.url {
                 cache.insert("url".to_string(), url.clone().into());
             }
