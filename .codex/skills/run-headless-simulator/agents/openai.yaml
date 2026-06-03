@@ -1,0 +1,4 @@
+interface:
+  display_name: "Run Headless Simulator"
+  short_description: "Run simulator participants without the TUI"
+  default_prompt: "Use $run-headless-simulator to run hyper-client-simulator participants directly from the CLI with the headless command."
