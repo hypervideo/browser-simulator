@@ -59,6 +59,9 @@ client-simulator-config = { path = "./config" }
 client-simulator-tui = { path = "./tui" }
 cloudflare-worker-client = { path = "./cloudflare-worker-client" }
 
+[patch.crates-io]
+chromiumoxide_cdp = { path = "vendor/chromiumoxide_cdp" }
+
 [workspace.lints.clippy]
 # Allows for simpler exports.
 module_inception = "allow"

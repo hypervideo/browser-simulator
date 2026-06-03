@@ -516,6 +516,48 @@ mod tests {
         assert!(!audio_arg.starts_with("--"));
         assert!(!video_arg.starts_with("--"));
     }
+
+    #[test]
+    fn chromiumoxide_parses_chrome_146_request_extra_info_events() {
+        use chromiumoxide::{
+            cdp::events::CdpEvent,
+            types::Message,
+        };
+
+        let raw_event = serde_json::json!({
+            "method": "Network.requestWillBeSentExtraInfo",
+            "params": {
+                "requestId": "67875.221",
+                "associatedCookies": [],
+                "headers": {},
+                "connectTiming": {
+                    "requestTime": 1590260.969965
+                },
+                "clientSecurityState": {
+                    "initiatorIsSecureContext": true,
+                    "initiatorIPAddressSpace": "Public",
+                    "localNetworkAccessRequestPolicy": "PermissionBlock"
+                },
+                "siteHasCookieInOtherPartition": false
+            },
+            "sessionId": "CA7D85B4BA74D473D259E672BB4C4FB2"
+        });
+
+        let message: Message<chromiumoxide::cdp::CdpEventMessage> =
+            serde_json::from_value(raw_event).expect("Chrome 146 request extra info event should parse");
+
+        let Message::Event(event) = message else {
+            panic!("expected CDP event");
+        };
+
+        match event.params {
+            CdpEvent::NetworkRequestWillBeSentExtraInfo(event) => {
+                assert_eq!(event.request_id.as_ref(), "67875.221");
+                assert!(event.client_security_state.is_some());
+            }
+            other => panic!("expected Network.requestWillBeSentExtraInfo, got {other:?}"),
+        }
+    }
 }
 
 fn drive_browser_events(
