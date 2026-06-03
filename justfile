@@ -1,6 +1,9 @@
 default:
     just --list
 
+setup:
+    cat .env.tpl | op inject > .env
+
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 run *flags="":
