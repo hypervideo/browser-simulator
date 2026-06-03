@@ -48,5 +48,7 @@ video_enabled: true
 auto_gain_control: true
 noise_suppression: none
 transport: webtransport
-resolution: auto
+video_constraint_publish_webcam: none
+video_constraint_subscribe: none
+video_max_concurrent_tracks:
 blur: false

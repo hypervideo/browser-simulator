@@ -19,7 +19,8 @@ use client_simulator_config::{
     NoiseSuppression,
     ParticipantBackendKind,
     TransportMode,
-    WebcamResolution,
+    VideoConstraint,
+    VideoMaxConcurrentTracksPreset,
 };
 use color_eyre::Result;
 use crossterm::event::KeyCode;
@@ -47,7 +48,9 @@ enum SelectedField {
     AutoGainControl,
     NoiseSuppression,
     Transport,
-    Resolution,
+    VideoConstraintPublishWebcam,
+    VideoConstraintSubscribe,
+    VideoMaxConcurrentTracks,
     BackgroundBlur,
     Headless,
     Backend,
@@ -67,7 +70,13 @@ impl SelectedField {
             SelectedField::AutoGainControl => " Automatically adjust volume? <enter> to toggle. ",
             SelectedField::NoiseSuppression => " Enable noise suppression? <enter> to select noise suppression model. ",
             SelectedField::Transport => " Select transport protocol. <enter> to select. ",
-            SelectedField::Resolution => " Select resolution for video (camera). <enter> to select. ",
+            SelectedField::VideoConstraintPublishWebcam => {
+                " Select outgoing webcam video constraint. <enter> to select. "
+            }
+            SelectedField::VideoConstraintSubscribe => " Select incoming video constraint. <enter> to select. ",
+            SelectedField::VideoMaxConcurrentTracks => {
+                " Select max concurrent webcam tracks. <enter> to select. "
+            }
             SelectedField::BackgroundBlur => " Enable background blur? <enter> to toggle. ",
             SelectedField::Headless => " Run the browser in headless mode? When disabled, will show a browser window with which you can interact. <enter> to toggle. ",
             SelectedField::Backend => " Select the participant backend. <enter> to select, <del> to reset. ",
@@ -84,7 +93,9 @@ pub(crate) enum BrowserStartAction {
     StartSelectFakeMedia,
     StartSelectNoiseSuppression,
     StartSelectTransport,
-    StartSelectResolution,
+    StartSelectVideoConstraintPublishWebcam,
+    StartSelectVideoConstraintSubscribe,
+    StartSelectVideoMaxConcurrentTracks,
     StartSelectBackend,
     StartBrowser,
     Toggle,
@@ -109,7 +120,9 @@ pub struct BrowserStart {
     fake_media_builtin_list: Option<ListInput<FakeMediaWithDescriptionItem>>,
     noise_suppression_list: Option<EnumListInput<NoiseSuppression>>,
     transport_list: Option<EnumListInput<TransportMode>>,
-    resolution_list: Option<EnumListInput<WebcamResolution>>,
+    video_constraint_publish_webcam_list: Option<EnumListInput<VideoConstraint>>,
+    video_constraint_subscribe_list: Option<EnumListInput<VideoConstraint>>,
+    video_max_concurrent_tracks_list: Option<EnumListInput<VideoMaxConcurrentTracksPreset>>,
     backend_list: Option<EnumListInput<ParticipantBackendKind>>,
     participant_store: ParticipantStore,
 }
@@ -125,7 +138,9 @@ impl BrowserStart {
             selected: SelectedField::Url,
             fake_media_builtin_list: None,
             noise_suppression_list: None,
-            resolution_list: None,
+            video_constraint_publish_webcam_list: None,
+            video_constraint_subscribe_list: None,
+            video_max_concurrent_tracks_list: None,
             transport_list: None,
             backend_list: None,
             editing: None,
@@ -171,7 +186,9 @@ impl Component for BrowserStart {
                         | SelectedField::AutoGainControl
                         | SelectedField::NoiseSuppression
                         | SelectedField::Transport
-                        | SelectedField::Resolution
+                        | SelectedField::VideoConstraintPublishWebcam
+                        | SelectedField::VideoConstraintSubscribe
+                        | SelectedField::VideoMaxConcurrentTracks
                         | SelectedField::BackgroundBlur
                         | SelectedField::Headless
                         | SelectedField::Backend
@@ -266,12 +283,12 @@ impl Component for BrowserStart {
             }
         }
 
-        if let Some(mut list) = self.resolution_list.take() {
+        if let Some(mut list) = self.video_constraint_publish_webcam_list.take() {
             match key.code {
                 KeyCode::Enter => {
                     match list.finish() {
                         Ok(value) => {
-                            self.config.resolution = value;
+                            self.config.video_constraint_publish_webcam = value;
                         }
                         Err(err) => {
                             error!(?err, "Failed to parse");
@@ -288,7 +305,63 @@ impl Component for BrowserStart {
                 _ => {}
             }
             let handled = list.handle_key_event(key);
-            self.resolution_list = Some(list);
+            self.video_constraint_publish_webcam_list = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
+        if let Some(mut list) = self.video_constraint_subscribe_list.take() {
+            match key.code {
+                KeyCode::Enter => {
+                    match list.finish() {
+                        Ok(value) => {
+                            self.config.video_constraint_subscribe = value;
+                        }
+                        Err(err) => {
+                            error!(?err, "Failed to parse");
+                        }
+                    }
+                    if let Err(e) = self.config.save() {
+                        error!(?e, "Failed to save config after edit");
+                    }
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                _ => {}
+            }
+            let handled = list.handle_key_event(key);
+            self.video_constraint_subscribe_list = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
+        if let Some(mut list) = self.video_max_concurrent_tracks_list.take() {
+            match key.code {
+                KeyCode::Enter => {
+                    match list.finish() {
+                        Ok(value) => {
+                            self.config.video_max_concurrent_tracks = value.to_option();
+                        }
+                        Err(err) => {
+                            error!(?err, "Failed to parse");
+                        }
+                    }
+                    if let Err(e) = self.config.save() {
+                        error!(?e, "Failed to save config after edit");
+                    }
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                }
+                _ => {}
+            }
+            let handled = list.handle_key_event(key);
+            self.video_max_concurrent_tracks_list = Some(list);
             if handled {
                 return Ok(None);
             }
@@ -370,8 +443,14 @@ impl Component for BrowserStart {
             KeyCode::Enter if self.selected == SelectedField::Transport => {
                 Some(BrowserStartAction::StartSelectTransport)
             }
-            KeyCode::Enter if self.selected == SelectedField::Resolution => {
-                Some(BrowserStartAction::StartSelectResolution)
+            KeyCode::Enter if self.selected == SelectedField::VideoConstraintPublishWebcam => {
+                Some(BrowserStartAction::StartSelectVideoConstraintPublishWebcam)
+            }
+            KeyCode::Enter if self.selected == SelectedField::VideoConstraintSubscribe => {
+                Some(BrowserStartAction::StartSelectVideoConstraintSubscribe)
+            }
+            KeyCode::Enter if self.selected == SelectedField::VideoMaxConcurrentTracks => {
+                Some(BrowserStartAction::StartSelectVideoMaxConcurrentTracks)
             }
             KeyCode::Enter if self.selected == SelectedField::BackgroundBlur => Some(BrowserStartAction::Toggle),
             KeyCode::Enter if self.selected == SelectedField::Backend => Some(BrowserStartAction::StartSelectBackend),
@@ -389,8 +468,16 @@ impl Component for BrowserStart {
                 self.noise_suppression_list = None;
                 None
             }
-            KeyCode::Esc if self.resolution_list.is_some() => {
-                self.resolution_list = None;
+            KeyCode::Esc if self.video_constraint_publish_webcam_list.is_some() => {
+                self.video_constraint_publish_webcam_list = None;
+                None
+            }
+            KeyCode::Esc if self.video_constraint_subscribe_list.is_some() => {
+                self.video_constraint_subscribe_list = None;
+                None
+            }
+            KeyCode::Esc if self.video_max_concurrent_tracks_list.is_some() => {
+                self.video_max_concurrent_tracks_list = None;
                 None
             }
             KeyCode::Esc if self.transport_list.is_some() => {
@@ -448,8 +535,10 @@ impl Component for BrowserStart {
                     SelectedField::AutoGainControl => SelectedField::ScreenshareDisable,
                     SelectedField::NoiseSuppression => SelectedField::AutoGainControl,
                     SelectedField::Transport => SelectedField::NoiseSuppression,
-                    SelectedField::Resolution => SelectedField::Transport,
-                    SelectedField::BackgroundBlur => SelectedField::Resolution,
+                    SelectedField::VideoConstraintPublishWebcam => SelectedField::Transport,
+                    SelectedField::VideoConstraintSubscribe => SelectedField::VideoConstraintPublishWebcam,
+                    SelectedField::VideoMaxConcurrentTracks => SelectedField::VideoConstraintSubscribe,
+                    SelectedField::BackgroundBlur => SelectedField::VideoMaxConcurrentTracks,
                     SelectedField::Headless => SelectedField::BackgroundBlur,
                     SelectedField::Backend => SelectedField::Headless,
                     SelectedField::StartBrowser => SelectedField::Backend,
@@ -465,8 +554,10 @@ impl Component for BrowserStart {
                     SelectedField::ScreenshareDisable => SelectedField::AutoGainControl,
                     SelectedField::AutoGainControl => SelectedField::NoiseSuppression,
                     SelectedField::NoiseSuppression => SelectedField::Transport,
-                    SelectedField::Transport => SelectedField::Resolution,
-                    SelectedField::Resolution => SelectedField::BackgroundBlur,
+                    SelectedField::Transport => SelectedField::VideoConstraintPublishWebcam,
+                    SelectedField::VideoConstraintPublishWebcam => SelectedField::VideoConstraintSubscribe,
+                    SelectedField::VideoConstraintSubscribe => SelectedField::VideoMaxConcurrentTracks,
+                    SelectedField::VideoMaxConcurrentTracks => SelectedField::BackgroundBlur,
                     SelectedField::BackgroundBlur => SelectedField::Headless,
                     SelectedField::Headless => SelectedField::Backend,
                     SelectedField::Backend => SelectedField::StartBrowser,
@@ -544,11 +635,29 @@ impl Component for BrowserStart {
                 return Ok(None);
             }
 
-            BrowserStartAction::StartSelectResolution => {
-                self.resolution_list = Some(EnumListInput::new(
-                    "Camera resolution",
-                    WebcamResolution::iter(),
-                    self.config.resolution,
+            BrowserStartAction::StartSelectVideoConstraintPublishWebcam => {
+                self.video_constraint_publish_webcam_list = Some(EnumListInput::new(
+                    "Outgoing webcam video constraint",
+                    VideoConstraint::iter(),
+                    self.config.video_constraint_publish_webcam,
+                ));
+                return Ok(None);
+            }
+
+            BrowserStartAction::StartSelectVideoConstraintSubscribe => {
+                self.video_constraint_subscribe_list = Some(EnumListInput::new(
+                    "Incoming video constraint",
+                    VideoConstraint::iter(),
+                    self.config.video_constraint_subscribe,
+                ));
+                return Ok(None);
+            }
+
+            BrowserStartAction::StartSelectVideoMaxConcurrentTracks => {
+                self.video_max_concurrent_tracks_list = Some(EnumListInput::new(
+                    "Max concurrent webcam tracks",
+                    VideoMaxConcurrentTracksPreset::iter(),
+                    VideoMaxConcurrentTracksPreset::from_option(self.config.video_max_concurrent_tracks),
                 ));
                 return Ok(None);
             }
@@ -650,7 +759,9 @@ impl Component for BrowserStart {
                 Constraint::Length(1), // Auto gain control checkbox
                 Constraint::Length(1), // Noise suppression checkbox
                 Constraint::Length(1), // Transport
-                Constraint::Length(1), // Resolution
+                Constraint::Length(1), // Outgoing webcam video constraint
+                Constraint::Length(1), // Incoming video constraint
+                Constraint::Length(1), // Max concurrent video tracks
                 Constraint::Length(1), // Background blur checkbox
                 Constraint::Length(1), // Headless checkbox
                 Constraint::Length(1), // Backend
@@ -671,7 +782,9 @@ impl Component for BrowserStart {
             "Auto gain control:",
             "Noise suppression:",
             "Transport:",
-            "Resolution:",
+            "Outgoing constraint:",
+            "Incoming constraint:",
+            "Track limit:",
             "Background blur",
             "Headless:",
             "Backend:",
@@ -773,13 +886,41 @@ impl Component for BrowserStart {
         frame.render_widget(widget, rows[current_row_index]);
         current_row_index += 1;
 
-        // --- Resolution ---
-        let resolution = self.config.resolution.to_string();
+        // --- Outgoing webcam video constraint ---
+        let publish = self.config.video_constraint_publish_webcam.to_string();
         let widget = widgets::label_and_text(
             form_labels[current_row_index],
-            &resolution,
+            &publish,
             max_length,
-            self.focused && self.selected == SelectedField::Resolution,
+            self.focused && self.selected == SelectedField::VideoConstraintPublishWebcam,
+            &theme,
+        );
+        frame.render_widget(widget, rows[current_row_index]);
+        current_row_index += 1;
+
+        // --- Incoming video constraint ---
+        let subscribe = self.config.video_constraint_subscribe.to_string();
+        let widget = widgets::label_and_text(
+            form_labels[current_row_index],
+            &subscribe,
+            max_length,
+            self.focused && self.selected == SelectedField::VideoConstraintSubscribe,
+            &theme,
+        );
+        frame.render_widget(widget, rows[current_row_index]);
+        current_row_index += 1;
+
+        // --- Max concurrent video tracks ---
+        let max_tracks = self
+            .config
+            .video_max_concurrent_tracks
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unlimited".to_string());
+        let widget = widgets::label_and_text(
+            form_labels[current_row_index],
+            &max_tracks,
+            max_length,
+            self.focused && self.selected == SelectedField::VideoMaxConcurrentTracks,
             &theme,
         );
         frame.render_widget(widget, rows[current_row_index]);
@@ -841,7 +982,13 @@ impl Component for BrowserStart {
         if let Some(list) = &mut self.noise_suppression_list {
             list.draw(frame, area)?;
         }
-        if let Some(list) = &mut self.resolution_list {
+        if let Some(list) = &mut self.video_constraint_publish_webcam_list {
+            list.draw(frame, area)?;
+        }
+        if let Some(list) = &mut self.video_constraint_subscribe_list {
+            list.draw(frame, area)?;
+        }
+        if let Some(list) = &mut self.video_max_concurrent_tracks_list {
             list.draw(frame, area)?;
         }
         if let Some(list) = &mut self.transport_list {

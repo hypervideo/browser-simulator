@@ -27,8 +27,10 @@ pub use client_config::{
     ParticipantBackendKind,
     TransportMode,
     TransportModeIter,
-    WebcamResolution,
-    WebcamResolutionIter,
+    VideoConstraint,
+    VideoConstraintIter,
+    VideoMaxConcurrentTracksPreset,
+    VideoMaxConcurrentTracksPresetIter,
 };
 pub use cloudflare_config::CloudflareConfig;
 use color_eyre::Result;
@@ -78,7 +80,11 @@ pub struct Config {
     #[serde(default)]
     pub transport: TransportMode,
     #[serde(default)]
-    pub resolution: WebcamResolution,
+    pub video_constraint_publish_webcam: VideoConstraint,
+    #[serde(default)]
+    pub video_constraint_subscribe: VideoConstraint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_max_concurrent_tracks: Option<usize>,
     #[serde(default)]
     pub blur: bool,
 }
@@ -178,7 +184,17 @@ impl config::Source for Config {
             self.noise_suppression.to_string().into(),
         );
         cache.insert("transport".to_string(), self.transport.to_string().into());
-        cache.insert("resolution".to_string(), self.resolution.to_string().into());
+        cache.insert(
+            "video_constraint_publish_webcam".to_string(),
+            self.video_constraint_publish_webcam.to_string().into(),
+        );
+        cache.insert(
+            "video_constraint_subscribe".to_string(),
+            self.video_constraint_subscribe.to_string().into(),
+        );
+        if let Some(value) = self.video_max_concurrent_tracks {
+            cache.insert("video_max_concurrent_tracks".to_string(), (value as i64).into());
+        }
         cache.insert("blur".to_string(), self.blur.into());
         if let Some(value) = self.fake_media_selected {
             cache.insert("fake_media_selected".to_string(), (value as u64).into());
@@ -414,5 +430,36 @@ device_farm:
         );
         assert_eq!(config.device_farm.region, "us-west-2");
         assert!(config.device_farm.debug);
+    }
+
+    #[test]
+    fn parses_new_video_constraint_settings() {
+        let config: Config = config::Config::builder()
+            .add_source(Config::default())
+            .add_source(config::File::from_str(
+                r#"
+video_constraint_publish_webcam: 480p
+video_constraint_subscribe: 720p
+video_max_concurrent_tracks: 2
+"#,
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .expect("failed to build config")
+            .try_deserialize()
+            .expect("failed to deserialize config");
+
+        assert_eq!(config.video_constraint_publish_webcam, VideoConstraint::P480);
+        assert_eq!(config.video_constraint_subscribe, VideoConstraint::P720);
+        assert_eq!(config.video_max_concurrent_tracks, Some(2));
+    }
+
+    #[test]
+    fn default_video_max_concurrent_tracks_is_unlimited() {
+        let config = Config::default();
+
+        assert_eq!(config.video_constraint_publish_webcam, VideoConstraint::None);
+        assert_eq!(config.video_constraint_subscribe, VideoConstraint::None);
+        assert_eq!(config.video_max_concurrent_tracks, None);
     }
 }

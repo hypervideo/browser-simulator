@@ -62,7 +62,9 @@ impl ParticipantDriverSession for RemoteStubSession {
                 auto_gain_control: self.launch_spec.settings.auto_gain_control,
                 noise_suppression: self.launch_spec.settings.noise_suppression,
                 transport_mode: self.launch_spec.settings.transport,
-                webcam_resolution: self.launch_spec.settings.resolution,
+                video_constraint_publish_webcam: self.launch_spec.settings.video_constraint_publish_webcam,
+                video_constraint_subscribe: self.launch_spec.settings.video_constraint_subscribe,
+                video_max_concurrent_tracks: self.launch_spec.settings.video_max_concurrent_tracks,
                 background_blur: self.launch_spec.settings.blur,
                 screenshare_activated: self.launch_spec.settings.screenshare_enabled,
             };
@@ -106,9 +108,23 @@ impl ParticipantDriverSession for RemoteStubSession {
                     self.state.noise_suppression = value;
                     self.log_message("debug", format!("remote stub set noise suppression to {value}"));
                 }
-                ParticipantMessage::SetWebcamResolutions(value) => {
-                    self.state.webcam_resolution = value;
-                    self.log_message("debug", format!("remote stub set camera resolution to {value}"));
+                ParticipantMessage::SetVideoConstraintPublishWebcam(value) => {
+                    self.state.video_constraint_publish_webcam = value;
+                    self.log_message(
+                        "debug",
+                        format!("remote stub set outgoing webcam video constraint to {value}"),
+                    );
+                }
+                ParticipantMessage::SetVideoConstraintSubscribe(value) => {
+                    self.state.video_constraint_subscribe = value;
+                    self.log_message("debug", format!("remote stub set incoming video constraint to {value}"));
+                }
+                ParticipantMessage::SetVideoMaxConcurrentTracks(value) => {
+                    self.state.video_max_concurrent_tracks = value;
+                    self.log_message(
+                        "debug",
+                        format!("remote stub set max concurrent video tracks to {value:?}"),
+                    );
                 }
                 ParticipantMessage::ToggleBackgroundBlur => {
                     self.state.background_blur = !self.state.background_blur;

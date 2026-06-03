@@ -325,7 +325,9 @@ mod tests {
                     | ParticipantMessage::ToggleScreenshare
                     | ParticipantMessage::ToggleAutoGainControl
                     | ParticipantMessage::SetNoiseSuppression(_)
-                    | ParticipantMessage::SetWebcamResolutions(_)
+                    | ParticipantMessage::SetVideoConstraintPublishWebcam(_)
+                    | ParticipantMessage::SetVideoConstraintSubscribe(_)
+                    | ParticipantMessage::SetVideoMaxConcurrentTracks(_)
                     | ParticipantMessage::ToggleBackgroundBlur => {}
                 }
                 Ok(())

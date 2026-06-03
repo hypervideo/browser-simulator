@@ -35,8 +35,8 @@ pub(crate) fn header_and_two_main_areas(area: Rect) -> Result<[Rect; 3]> {
     let [header, area] = header_and_main_area(area)?;
     let [a, b] = *Layout::default()
         .direction(Direction::Vertical)
-        // The browser controls pane currently needs 17 rows including borders.
-        .constraints([Constraint::Max(17), Constraint::Min(0)])
+        // The browser controls pane currently needs 19 rows including borders.
+        .constraints([Constraint::Max(19), Constraint::Min(0)])
         .split(area)
     else {
         bail!("Failed to split the area");
@@ -48,7 +48,7 @@ pub(crate) fn header_and_two_main_areas(area: Rect) -> Result<[Rect; 3]> {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```ignore
 /// use ratatui::layout::{Constraint, Rect};
 ///
 /// let area = Rect::new(0, 0, 100, 100);

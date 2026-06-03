@@ -410,12 +410,16 @@ impl Participant {
         self.send_message(ParticipantMessage::SetNoiseSuppression(value));
     }
 
-    pub fn set_webcam_resolutions(&self, value: client_simulator_config::WebcamResolution) {
-        self.send_message(ParticipantMessage::SetWebcamResolutions(value));
+    pub fn set_video_constraint_publish_webcam(&self, value: client_simulator_config::VideoConstraint) {
+        self.send_message(ParticipantMessage::SetVideoConstraintPublishWebcam(value));
     }
 
-    pub fn set_webcam_resolution(&self, value: client_simulator_config::WebcamResolution) {
-        self.set_webcam_resolutions(value);
+    pub fn set_video_constraint_subscribe(&self, value: client_simulator_config::VideoConstraint) {
+        self.send_message(ParticipantMessage::SetVideoConstraintSubscribe(value));
+    }
+
+    pub fn set_video_max_concurrent_tracks(&self, value: Option<usize>) {
+        self.send_message(ParticipantMessage::SetVideoMaxConcurrentTracks(value));
     }
 
     pub fn toggle_background_blur(&self) {

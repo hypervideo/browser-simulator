@@ -10,12 +10,16 @@ use super::{
         get_background_blur,
         get_force_webrtc,
         get_noise_suppression,
-        get_outgoing_camera_resolution,
+        get_video_constraint_publish_webcam,
+        get_video_constraint_subscribe,
+        get_video_max_concurrent_tracks,
         set_auto_gain_control,
         set_background_blur,
         set_force_webrtc,
         set_noise_suppression,
-        set_outgoing_camera_resolution,
+        set_video_constraint_publish_webcam,
+        set_video_constraint_subscribe,
+        set_video_max_concurrent_tracks,
     },
     driver::{
         decode_test_state,
@@ -28,7 +32,7 @@ use crate::auth::BorrowedCookie;
 use client_simulator_config::{
     NoiseSuppression,
     TransportMode,
-    WebcamResolution,
+    VideoConstraint,
 };
 use eyre::{
     Context as _,
@@ -156,9 +160,15 @@ impl ParticipantInner {
         set_background_blur(driver, settings.blur)
             .await
             .context("failed to set background blur")?;
-        set_outgoing_camera_resolution(driver, &settings.resolution)
+        set_video_constraint_publish_webcam(driver, settings.video_constraint_publish_webcam)
             .await
-            .context("failed to set outgoing camera resolution")?;
+            .context("failed to set outgoing webcam video constraint")?;
+        set_video_constraint_subscribe(driver, settings.video_constraint_subscribe)
+            .await
+            .context("failed to set incoming video constraint")?;
+        set_video_max_concurrent_tracks(driver, settings.video_max_concurrent_tracks)
+            .await
+            .context("failed to set max concurrent video tracks")?;
         set_force_webrtc(driver, settings.transport == TransportMode::WebRTC)
             .await
             .context("failed to set transport mode")?;
@@ -226,14 +236,25 @@ impl ParticipantInner {
             .map(|_| ())
     }
 
-    async fn set_webcam_resolutions_inner(&self, value: WebcamResolution) -> Result<()> {
-        debug!(participant = %self.participant_name(), "Changing to {value} resolution");
-
-        set_outgoing_camera_resolution(self.context.driver.as_ref(), &value)
+    async fn set_video_constraint_publish_webcam_inner(&self, value: VideoConstraint) -> Result<()> {
+        info!(participant = %self.participant_name(), "Changing outgoing webcam video constraint to {value}");
+        set_video_constraint_publish_webcam(self.context.driver.as_ref(), value)
             .await
-            .context("Failed to set outgoing camera resolution")?;
+            .context("Failed to set outgoing webcam video constraint")
+    }
 
-        Ok(())
+    async fn set_video_constraint_subscribe_inner(&self, value: VideoConstraint) -> Result<()> {
+        info!(participant = %self.participant_name(), "Changing incoming video constraint to {value}");
+        set_video_constraint_subscribe(self.context.driver.as_ref(), value)
+            .await
+            .context("Failed to set incoming video constraint")
+    }
+
+    async fn set_video_max_concurrent_tracks_inner(&self, value: Option<usize>) -> Result<()> {
+        info!(participant = %self.participant_name(), ?value, "Changing max concurrent video tracks");
+        set_video_max_concurrent_tracks(self.context.driver.as_ref(), value)
+            .await
+            .context("Failed to set max concurrent video tracks")
     }
 
     async fn set_noise_suppression_inner(&self, value: NoiseSuppression) -> Result<()> {
@@ -311,8 +332,16 @@ impl ParticipantInner {
             }
         }
 
-        if let Ok(value) = get_outgoing_camera_resolution(driver).await {
-            state.webcam_resolution = value;
+        if let Ok(value) = get_video_constraint_publish_webcam(driver).await {
+            state.video_constraint_publish_webcam = value;
+        }
+
+        if let Ok(value) = get_video_constraint_subscribe(driver).await {
+            state.video_constraint_subscribe = value;
+        }
+
+        if let Ok(value) = get_video_max_concurrent_tracks(driver).await {
+            state.video_max_concurrent_tracks = value;
         }
 
         if let Ok(blur) = get_background_blur(driver).await {
@@ -342,7 +371,15 @@ impl FrontendAutomation for ParticipantInner {
                 ParticipantMessage::ToggleVideo => self.toggle_video_inner().await,
                 ParticipantMessage::ToggleScreenshare => self.toggle_screen_share_inner().await,
                 ParticipantMessage::ToggleAutoGainControl => self.toggle_auto_gain_control_inner().await,
-                ParticipantMessage::SetWebcamResolutions(value) => self.set_webcam_resolutions_inner(value).await,
+                ParticipantMessage::SetVideoConstraintPublishWebcam(value) => {
+                    self.set_video_constraint_publish_webcam_inner(value).await
+                }
+                ParticipantMessage::SetVideoConstraintSubscribe(value) => {
+                    self.set_video_constraint_subscribe_inner(value).await
+                }
+                ParticipantMessage::SetVideoMaxConcurrentTracks(value) => {
+                    self.set_video_max_concurrent_tracks_inner(value).await
+                }
                 ParticipantMessage::SetNoiseSuppression(value) => self.set_noise_suppression_inner(value).await,
                 ParticipantMessage::ToggleBackgroundBlur => self.toggle_background_blur_inner().await,
             }

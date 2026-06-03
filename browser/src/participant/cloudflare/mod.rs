@@ -310,9 +310,21 @@ impl CloudflareSession {
             ParticipantMessage::SetNoiseSuppression(value) => types::SessionCommandRequest::SetNoiseSuppression {
                 noise_suppression: map_command_noise_suppression(value),
             },
-            ParticipantMessage::SetWebcamResolutions(value) => types::SessionCommandRequest::SetWebcamResolution {
-                webcam_resolution: map_command_webcam_resolution(value),
-            },
+            ParticipantMessage::SetVideoConstraintPublishWebcam(value) => {
+                types::SessionCommandRequest::SetVideoConstraintPublishWebcam {
+                    video_constraint_publish_webcam: map_command_video_constraint_publish_webcam(value),
+                }
+            }
+            ParticipantMessage::SetVideoConstraintSubscribe(value) => {
+                types::SessionCommandRequest::SetVideoConstraintSubscribe {
+                    video_constraint_subscribe: map_command_video_constraint_subscribe(value),
+                }
+            }
+            ParticipantMessage::SetVideoMaxConcurrentTracks(value) => {
+                types::SessionCommandRequest::SetVideoMaxConcurrentTracks {
+                    video_max_concurrent_tracks: value.map(|value| value as u64),
+                }
+            }
             ParticipantMessage::ToggleBackgroundBlur => types::SessionCommandRequest::ToggleBackgroundBlur,
         }
     }
@@ -574,23 +586,14 @@ fn map_settings(settings: &crate::participant::shared::ParticipantSettings) -> t
                 types::ParticipantSettingsNoiseSuppression::AiCousticsRookL48khz
             }
         },
-        resolution: match settings.resolution {
-            client_simulator_config::WebcamResolution::Auto => types::ParticipantSettingsResolution::Auto,
-            client_simulator_config::WebcamResolution::P144 => types::ParticipantSettingsResolution::P144,
-            client_simulator_config::WebcamResolution::P240 => types::ParticipantSettingsResolution::P240,
-            client_simulator_config::WebcamResolution::P360 => types::ParticipantSettingsResolution::P360,
-            client_simulator_config::WebcamResolution::P480 => types::ParticipantSettingsResolution::P480,
-            client_simulator_config::WebcamResolution::P720 => types::ParticipantSettingsResolution::P720,
-            client_simulator_config::WebcamResolution::P1080 => types::ParticipantSettingsResolution::P1080,
-            client_simulator_config::WebcamResolution::P1440 => types::ParticipantSettingsResolution::P1440,
-            client_simulator_config::WebcamResolution::P2160 => types::ParticipantSettingsResolution::P2160,
-            client_simulator_config::WebcamResolution::P4320 => types::ParticipantSettingsResolution::P4320,
-        },
         screenshare_enabled: settings.screenshare_enabled,
         transport: match settings.transport {
             client_simulator_config::TransportMode::WebRTC => types::ParticipantSettingsTransport::Webrtc,
             client_simulator_config::TransportMode::WebTransport => types::ParticipantSettingsTransport::Webtransport,
         },
+        video_constraint_publish_webcam: map_video_constraint_publish_webcam(settings.video_constraint_publish_webcam),
+        video_constraint_subscribe: map_video_constraint_subscribe(settings.video_constraint_subscribe),
+        video_max_concurrent_tracks: settings.video_max_concurrent_tracks.map(|value| value as u64),
         video_enabled: settings.video_enabled,
     }
 }
@@ -652,18 +655,11 @@ fn map_state(state: &types::ParticipantState) -> ParticipantState {
             types::ParticipantStateTransportMode::Webrtc => client_simulator_config::TransportMode::WebRTC,
             types::ParticipantStateTransportMode::Webtransport => client_simulator_config::TransportMode::WebTransport,
         },
-        webcam_resolution: match state.webcam_resolution {
-            types::ParticipantStateWebcamResolution::Auto => client_simulator_config::WebcamResolution::Auto,
-            types::ParticipantStateWebcamResolution::P144 => client_simulator_config::WebcamResolution::P144,
-            types::ParticipantStateWebcamResolution::P240 => client_simulator_config::WebcamResolution::P240,
-            types::ParticipantStateWebcamResolution::P360 => client_simulator_config::WebcamResolution::P360,
-            types::ParticipantStateWebcamResolution::P480 => client_simulator_config::WebcamResolution::P480,
-            types::ParticipantStateWebcamResolution::P720 => client_simulator_config::WebcamResolution::P720,
-            types::ParticipantStateWebcamResolution::P1080 => client_simulator_config::WebcamResolution::P1080,
-            types::ParticipantStateWebcamResolution::P1440 => client_simulator_config::WebcamResolution::P1440,
-            types::ParticipantStateWebcamResolution::P2160 => client_simulator_config::WebcamResolution::P2160,
-            types::ParticipantStateWebcamResolution::P4320 => client_simulator_config::WebcamResolution::P4320,
-        },
+        video_constraint_publish_webcam: map_state_video_constraint_publish_webcam(
+            state.video_constraint_publish_webcam,
+        ),
+        video_constraint_subscribe: map_state_video_constraint_subscribe(state.video_constraint_subscribe),
+        video_max_concurrent_tracks: state.video_max_concurrent_tracks.map(|value| value as usize),
         background_blur: state.background_blur,
         screenshare_activated: state.screenshare_activated,
     }
@@ -719,20 +715,129 @@ fn map_command_noise_suppression(
     }
 }
 
-fn map_command_webcam_resolution(
-    webcam_resolution: client_simulator_config::WebcamResolution,
-) -> types::SessionCommandRequestWebcamResolution {
-    match webcam_resolution {
-        client_simulator_config::WebcamResolution::Auto => types::SessionCommandRequestWebcamResolution::Auto,
-        client_simulator_config::WebcamResolution::P144 => types::SessionCommandRequestWebcamResolution::P144,
-        client_simulator_config::WebcamResolution::P240 => types::SessionCommandRequestWebcamResolution::P240,
-        client_simulator_config::WebcamResolution::P360 => types::SessionCommandRequestWebcamResolution::P360,
-        client_simulator_config::WebcamResolution::P480 => types::SessionCommandRequestWebcamResolution::P480,
-        client_simulator_config::WebcamResolution::P720 => types::SessionCommandRequestWebcamResolution::P720,
-        client_simulator_config::WebcamResolution::P1080 => types::SessionCommandRequestWebcamResolution::P1080,
-        client_simulator_config::WebcamResolution::P1440 => types::SessionCommandRequestWebcamResolution::P1440,
-        client_simulator_config::WebcamResolution::P2160 => types::SessionCommandRequestWebcamResolution::P2160,
-        client_simulator_config::WebcamResolution::P4320 => types::SessionCommandRequestWebcamResolution::P4320,
+fn map_video_constraint_publish_webcam(
+    value: client_simulator_config::VideoConstraint,
+) -> types::ParticipantSettingsVideoConstraintPublishWebcam {
+    match value {
+        client_simulator_config::VideoConstraint::None => types::ParticipantSettingsVideoConstraintPublishWebcam::None,
+        client_simulator_config::VideoConstraint::P90 => types::ParticipantSettingsVideoConstraintPublishWebcam::X90p,
+        client_simulator_config::VideoConstraint::P144 => types::ParticipantSettingsVideoConstraintPublishWebcam::X144p,
+        client_simulator_config::VideoConstraint::P240 => types::ParticipantSettingsVideoConstraintPublishWebcam::X240p,
+        client_simulator_config::VideoConstraint::P360 => types::ParticipantSettingsVideoConstraintPublishWebcam::X360p,
+        client_simulator_config::VideoConstraint::P480 => types::ParticipantSettingsVideoConstraintPublishWebcam::X480p,
+        client_simulator_config::VideoConstraint::P720 => types::ParticipantSettingsVideoConstraintPublishWebcam::X720p,
+        client_simulator_config::VideoConstraint::P1080 => {
+            types::ParticipantSettingsVideoConstraintPublishWebcam::X1080p
+        }
+        client_simulator_config::VideoConstraint::P1440 => {
+            types::ParticipantSettingsVideoConstraintPublishWebcam::X1440p
+        }
+        client_simulator_config::VideoConstraint::P2160 => {
+            types::ParticipantSettingsVideoConstraintPublishWebcam::X2160p
+        }
+    }
+}
+
+fn map_video_constraint_subscribe(
+    value: client_simulator_config::VideoConstraint,
+) -> types::ParticipantSettingsVideoConstraintSubscribe {
+    match value {
+        client_simulator_config::VideoConstraint::None => types::ParticipantSettingsVideoConstraintSubscribe::None,
+        client_simulator_config::VideoConstraint::P90 => types::ParticipantSettingsVideoConstraintSubscribe::X90p,
+        client_simulator_config::VideoConstraint::P144 => types::ParticipantSettingsVideoConstraintSubscribe::X144p,
+        client_simulator_config::VideoConstraint::P240 => types::ParticipantSettingsVideoConstraintSubscribe::X240p,
+        client_simulator_config::VideoConstraint::P360 => types::ParticipantSettingsVideoConstraintSubscribe::X360p,
+        client_simulator_config::VideoConstraint::P480 => types::ParticipantSettingsVideoConstraintSubscribe::X480p,
+        client_simulator_config::VideoConstraint::P720 => types::ParticipantSettingsVideoConstraintSubscribe::X720p,
+        client_simulator_config::VideoConstraint::P1080 => types::ParticipantSettingsVideoConstraintSubscribe::X1080p,
+        client_simulator_config::VideoConstraint::P1440 => types::ParticipantSettingsVideoConstraintSubscribe::X1440p,
+        client_simulator_config::VideoConstraint::P2160 => types::ParticipantSettingsVideoConstraintSubscribe::X2160p,
+    }
+}
+
+fn map_state_video_constraint_publish_webcam(
+    value: types::ParticipantStateVideoConstraintPublishWebcam,
+) -> client_simulator_config::VideoConstraint {
+    match value {
+        types::ParticipantStateVideoConstraintPublishWebcam::None => client_simulator_config::VideoConstraint::None,
+        types::ParticipantStateVideoConstraintPublishWebcam::X90p => client_simulator_config::VideoConstraint::P90,
+        types::ParticipantStateVideoConstraintPublishWebcam::X144p => client_simulator_config::VideoConstraint::P144,
+        types::ParticipantStateVideoConstraintPublishWebcam::X240p => client_simulator_config::VideoConstraint::P240,
+        types::ParticipantStateVideoConstraintPublishWebcam::X360p => client_simulator_config::VideoConstraint::P360,
+        types::ParticipantStateVideoConstraintPublishWebcam::X480p => client_simulator_config::VideoConstraint::P480,
+        types::ParticipantStateVideoConstraintPublishWebcam::X720p => client_simulator_config::VideoConstraint::P720,
+        types::ParticipantStateVideoConstraintPublishWebcam::X1080p => client_simulator_config::VideoConstraint::P1080,
+        types::ParticipantStateVideoConstraintPublishWebcam::X1440p => client_simulator_config::VideoConstraint::P1440,
+        types::ParticipantStateVideoConstraintPublishWebcam::X2160p => client_simulator_config::VideoConstraint::P2160,
+    }
+}
+
+fn map_state_video_constraint_subscribe(
+    value: types::ParticipantStateVideoConstraintSubscribe,
+) -> client_simulator_config::VideoConstraint {
+    match value {
+        types::ParticipantStateVideoConstraintSubscribe::None => client_simulator_config::VideoConstraint::None,
+        types::ParticipantStateVideoConstraintSubscribe::X90p => client_simulator_config::VideoConstraint::P90,
+        types::ParticipantStateVideoConstraintSubscribe::X144p => client_simulator_config::VideoConstraint::P144,
+        types::ParticipantStateVideoConstraintSubscribe::X240p => client_simulator_config::VideoConstraint::P240,
+        types::ParticipantStateVideoConstraintSubscribe::X360p => client_simulator_config::VideoConstraint::P360,
+        types::ParticipantStateVideoConstraintSubscribe::X480p => client_simulator_config::VideoConstraint::P480,
+        types::ParticipantStateVideoConstraintSubscribe::X720p => client_simulator_config::VideoConstraint::P720,
+        types::ParticipantStateVideoConstraintSubscribe::X1080p => client_simulator_config::VideoConstraint::P1080,
+        types::ParticipantStateVideoConstraintSubscribe::X1440p => client_simulator_config::VideoConstraint::P1440,
+        types::ParticipantStateVideoConstraintSubscribe::X2160p => client_simulator_config::VideoConstraint::P2160,
+    }
+}
+
+fn map_command_video_constraint_publish_webcam(
+    value: client_simulator_config::VideoConstraint,
+) -> types::SessionCommandRequestVideoConstraintPublishWebcam {
+    match value {
+        client_simulator_config::VideoConstraint::None => {
+            types::SessionCommandRequestVideoConstraintPublishWebcam::None
+        }
+        client_simulator_config::VideoConstraint::P90 => types::SessionCommandRequestVideoConstraintPublishWebcam::X90p,
+        client_simulator_config::VideoConstraint::P144 => {
+            types::SessionCommandRequestVideoConstraintPublishWebcam::X144p
+        }
+        client_simulator_config::VideoConstraint::P240 => {
+            types::SessionCommandRequestVideoConstraintPublishWebcam::X240p
+        }
+        client_simulator_config::VideoConstraint::P360 => {
+            types::SessionCommandRequestVideoConstraintPublishWebcam::X360p
+        }
+        client_simulator_config::VideoConstraint::P480 => {
+            types::SessionCommandRequestVideoConstraintPublishWebcam::X480p
+        }
+        client_simulator_config::VideoConstraint::P720 => {
+            types::SessionCommandRequestVideoConstraintPublishWebcam::X720p
+        }
+        client_simulator_config::VideoConstraint::P1080 => {
+            types::SessionCommandRequestVideoConstraintPublishWebcam::X1080p
+        }
+        client_simulator_config::VideoConstraint::P1440 => {
+            types::SessionCommandRequestVideoConstraintPublishWebcam::X1440p
+        }
+        client_simulator_config::VideoConstraint::P2160 => {
+            types::SessionCommandRequestVideoConstraintPublishWebcam::X2160p
+        }
+    }
+}
+
+fn map_command_video_constraint_subscribe(
+    value: client_simulator_config::VideoConstraint,
+) -> types::SessionCommandRequestVideoConstraintSubscribe {
+    match value {
+        client_simulator_config::VideoConstraint::None => types::SessionCommandRequestVideoConstraintSubscribe::None,
+        client_simulator_config::VideoConstraint::P90 => types::SessionCommandRequestVideoConstraintSubscribe::X90p,
+        client_simulator_config::VideoConstraint::P144 => types::SessionCommandRequestVideoConstraintSubscribe::X144p,
+        client_simulator_config::VideoConstraint::P240 => types::SessionCommandRequestVideoConstraintSubscribe::X240p,
+        client_simulator_config::VideoConstraint::P360 => types::SessionCommandRequestVideoConstraintSubscribe::X360p,
+        client_simulator_config::VideoConstraint::P480 => types::SessionCommandRequestVideoConstraintSubscribe::X480p,
+        client_simulator_config::VideoConstraint::P720 => types::SessionCommandRequestVideoConstraintSubscribe::X720p,
+        client_simulator_config::VideoConstraint::P1080 => types::SessionCommandRequestVideoConstraintSubscribe::X1080p,
+        client_simulator_config::VideoConstraint::P1440 => types::SessionCommandRequestVideoConstraintSubscribe::X1440p,
+        client_simulator_config::VideoConstraint::P2160 => types::SessionCommandRequestVideoConstraintSubscribe::X2160p,
     }
 }
 
@@ -770,7 +875,7 @@ mod tests {
         CloudflareConfig,
         NoiseSuppression,
         TransportMode,
-        WebcamResolution,
+        VideoConstraint,
     };
     use serde_json::{
         json,
@@ -831,7 +936,9 @@ mod tests {
                         "autoGainControl": true,
                         "noiseSuppression": "rnnoise",
                         "transportMode": "webrtc",
-                        "webcamResolution": "p720",
+                        "videoConstraintPublishWebcam": "720p",
+                        "videoConstraintSubscribe": "none",
+                        "videoMaxConcurrentTracks": null,
                         "backgroundBlur": true
                     },
                     "log": [
@@ -883,7 +990,9 @@ mod tests {
         assert!(state.joined);
         assert_eq!(state.noise_suppression, NoiseSuppression::RNNoise);
         assert_eq!(state.transport_mode, TransportMode::WebRTC);
-        assert_eq!(state.webcam_resolution, WebcamResolution::P720);
+        assert_eq!(state.video_constraint_publish_webcam, VideoConstraint::P720);
+        assert_eq!(state.video_constraint_subscribe, VideoConstraint::None);
+        assert_eq!(state.video_max_concurrent_tracks, None);
         assert!(state.auto_gain_control);
         assert!(state.background_blur);
 
@@ -925,9 +1034,11 @@ mod tests {
                     "autoGainControl": true,
                     "blur": true,
                     "noiseSuppression": "rnnoise",
-                    "resolution": "p720",
                     "screenshareEnabled": false,
                     "transport": "webrtc",
+                    "videoConstraintPublishWebcam": "720p",
+                    "videoConstraintSubscribe": "none",
+                    "videoMaxConcurrentTracks": null,
                     "videoEnabled": true
                 }
             })
@@ -954,7 +1065,9 @@ mod tests {
                         "autoGainControl": true,
                         "noiseSuppression": "ai-coustics-rook-s-48khz",
                         "transportMode": "webrtc",
-                        "webcamResolution": "p720",
+                        "videoConstraintPublishWebcam": "720p",
+                        "videoConstraintSubscribe": "none",
+                        "videoMaxConcurrentTracks": null,
                         "backgroundBlur": true
                     },
                     "log": [],
@@ -1007,7 +1120,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(false, false, false, false, true, "none", "auto", false),
+                    "state": worker_state_json(false, false, false, false, true, "none", "none", false),
                     "log": [],
                 }),
             ),
@@ -1016,7 +1129,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, false, false, false, true, "none", "auto", false),
+                    "state": worker_state_json(true, false, false, false, true, "none", "none", false),
                     "log": [],
                 }),
             ),
@@ -1025,7 +1138,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, false, false, true, "none", "auto", false),
+                    "state": worker_state_json(true, true, false, false, true, "none", "none", false),
                     "log": [],
                 }),
             ),
@@ -1034,7 +1147,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, false, true, "none", "auto", false),
+                    "state": worker_state_json(true, true, true, false, true, "none", "none", false),
                     "log": [],
                 }),
             ),
@@ -1043,7 +1156,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, true, "none", "auto", false),
+                    "state": worker_state_json(true, true, true, true, true, "none", "none", false),
                     "log": [],
                 }),
             ),
@@ -1052,7 +1165,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, false, "none", "auto", false),
+                    "state": worker_state_json(true, true, true, true, false, "none", "none", false),
                     "log": [],
                 }),
             ),
@@ -1061,7 +1174,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "auto", false),
+                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "none", false),
                     "log": [],
                 }),
             ),
@@ -1070,7 +1183,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "p1080", false),
+                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "1080p", false),
                     "log": [],
                 }),
             ),
@@ -1079,7 +1192,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "p1080", true),
+                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "1080p", true),
                     "log": [],
                 }),
             ),
@@ -1088,7 +1201,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(false, true, true, false, false, "deepfilternet", "p1080", true),
+                    "state": worker_state_json(false, true, true, false, false, "deepfilternet", "1080p", true),
                     "log": [],
                 }),
             ),
@@ -1134,7 +1247,7 @@ mod tests {
                     false,
                     true,
                     NoiseSuppression::Disabled,
-                    WebcamResolution::Auto,
+                    VideoConstraint::None,
                     false,
                 ),
             ),
@@ -1148,7 +1261,7 @@ mod tests {
                     false,
                     true,
                     NoiseSuppression::Disabled,
-                    WebcamResolution::Auto,
+                    VideoConstraint::None,
                     false,
                 ),
             ),
@@ -1162,7 +1275,7 @@ mod tests {
                     false,
                     true,
                     NoiseSuppression::Disabled,
-                    WebcamResolution::Auto,
+                    VideoConstraint::None,
                     false,
                 ),
             ),
@@ -1176,7 +1289,7 @@ mod tests {
                     true,
                     true,
                     NoiseSuppression::Disabled,
-                    WebcamResolution::Auto,
+                    VideoConstraint::None,
                     false,
                 ),
             ),
@@ -1190,7 +1303,7 @@ mod tests {
                     true,
                     false,
                     NoiseSuppression::Disabled,
-                    WebcamResolution::Auto,
+                    VideoConstraint::None,
                     false,
                 ),
             ),
@@ -1204,13 +1317,13 @@ mod tests {
                     true,
                     false,
                     NoiseSuppression::Deepfilternet,
-                    WebcamResolution::Auto,
+                    VideoConstraint::None,
                     false,
                 ),
             ),
             (
-                ParticipantMessage::SetWebcamResolutions(WebcamResolution::P1080),
-                json!({ "type": "set-webcam-resolution", "webcamResolution": "p1080" }),
+                ParticipantMessage::SetVideoConstraintPublishWebcam(VideoConstraint::P1080),
+                json!({ "type": "set-video-constraint-publish-webcam", "videoConstraintPublishWebcam": "1080p" }),
                 expected_state(
                     true,
                     true,
@@ -1218,7 +1331,7 @@ mod tests {
                     true,
                     false,
                     NoiseSuppression::Deepfilternet,
-                    WebcamResolution::P1080,
+                    VideoConstraint::P1080,
                     false,
                 ),
             ),
@@ -1232,7 +1345,7 @@ mod tests {
                     true,
                     false,
                     NoiseSuppression::Deepfilternet,
-                    WebcamResolution::P1080,
+                    VideoConstraint::P1080,
                     true,
                 ),
             ),
@@ -1246,7 +1359,7 @@ mod tests {
                     false,
                     false,
                     NoiseSuppression::Deepfilternet,
-                    WebcamResolution::P1080,
+                    VideoConstraint::P1080,
                     true,
                 ),
             ),
@@ -1286,7 +1399,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-webrtc",
-                    "state": worker_state_json(false, false, false, false, true, "rnnoise", "p720", true),
+                    "state": worker_state_json(false, false, false, false, true, "rnnoise", "720p", true),
                     "log": [],
                 }),
             ),
@@ -1351,7 +1464,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-limitations",
-                    "state": worker_state_json(false, false, false, false, true, "rnnoise", "p720", true),
+                    "state": worker_state_json(false, false, false, false, true, "rnnoise", "720p", true),
                     "log": [],
                 }),
             ),
@@ -1407,7 +1520,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-terminated",
-                    "state": worker_state_json(true, false, false, false, true, "none", "auto", false),
+                    "state": worker_state_json(true, false, false, false, true, "none", "none", false),
                     "log": [],
                 }),
             ),
@@ -1475,7 +1588,9 @@ mod tests {
                 auto_gain_control: true,
                 noise_suppression: NoiseSuppression::RNNoise,
                 transport: TransportMode::WebRTC,
-                resolution: WebcamResolution::P720,
+                video_constraint_publish_webcam: VideoConstraint::P720,
+                video_constraint_subscribe: VideoConstraint::None,
+                video_max_concurrent_tracks: None,
                 blur: true,
             },
         }
@@ -1488,7 +1603,7 @@ mod tests {
         screenshare_activated: bool,
         auto_gain_control: bool,
         noise_suppression: &str,
-        webcam_resolution: &str,
+        video_constraint_publish_webcam: &str,
         background_blur: bool,
     ) -> Value {
         json!({
@@ -1500,7 +1615,9 @@ mod tests {
             "autoGainControl": auto_gain_control,
             "noiseSuppression": noise_suppression,
             "transportMode": "webrtc",
-            "webcamResolution": webcam_resolution,
+            "videoConstraintPublishWebcam": video_constraint_publish_webcam,
+            "videoConstraintSubscribe": "none",
+            "videoMaxConcurrentTracks": null,
             "backgroundBlur": background_blur,
         })
     }
@@ -1512,7 +1629,7 @@ mod tests {
         screenshare_activated: bool,
         auto_gain_control: bool,
         noise_suppression: NoiseSuppression,
-        webcam_resolution: WebcamResolution,
+        video_constraint_publish_webcam: VideoConstraint,
         background_blur: bool,
     ) -> ParticipantState {
         ParticipantState {
@@ -1524,7 +1641,9 @@ mod tests {
             auto_gain_control,
             noise_suppression,
             transport_mode: TransportMode::WebRTC,
-            webcam_resolution,
+            video_constraint_publish_webcam,
+            video_constraint_subscribe: VideoConstraint::None,
+            video_max_concurrent_tracks: None,
             background_blur,
             screenshare_activated,
         }
@@ -1539,7 +1658,12 @@ mod tests {
         assert_eq!(actual.auto_gain_control, expected.auto_gain_control);
         assert_eq!(actual.noise_suppression, expected.noise_suppression);
         assert_eq!(actual.transport_mode, expected.transport_mode);
-        assert_eq!(actual.webcam_resolution, expected.webcam_resolution);
+        assert_eq!(
+            actual.video_constraint_publish_webcam,
+            expected.video_constraint_publish_webcam
+        );
+        assert_eq!(actual.video_constraint_subscribe, expected.video_constraint_subscribe);
+        assert_eq!(actual.video_max_concurrent_tracks, expected.video_max_concurrent_tracks);
         assert_eq!(actual.background_blur, expected.background_blur);
         assert_eq!(actual.screenshare_activated, expected.screenshare_activated);
     }

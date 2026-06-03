@@ -1,7 +1,7 @@
 use client_simulator_config::{
     NoiseSuppression,
     TransportMode,
-    WebcamResolution,
+    VideoConstraint,
 };
 
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
@@ -14,7 +14,9 @@ pub struct ParticipantState {
     pub auto_gain_control: bool,
     pub noise_suppression: NoiseSuppression,
     pub transport_mode: TransportMode,
-    pub webcam_resolution: WebcamResolution,
+    pub video_constraint_publish_webcam: VideoConstraint,
+    pub video_constraint_subscribe: VideoConstraint,
+    pub video_max_concurrent_tracks: Option<usize>,
     pub background_blur: bool,
     pub screenshare_activated: bool,
 }

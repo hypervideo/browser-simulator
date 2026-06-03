@@ -5,7 +5,7 @@ use client_simulator_config::{
     ParticipantBackendKind,
     TransportMode,
     TuiArgs,
-    WebcamResolution,
+    VideoConstraint,
 };
 use eyre::{
     Context as _,
@@ -51,8 +51,14 @@ pub struct HeadlessArgs {
     #[clap(long, value_name = "MODE")]
     pub transport: Option<TransportMode>,
 
-    #[clap(long, value_name = "RESOLUTION")]
-    pub resolution: Option<WebcamResolution>,
+    #[clap(long = "video-constraint-publish-webcam", value_name = "CONSTRAINT")]
+    pub video_constraint_publish_webcam: Option<VideoConstraint>,
+
+    #[clap(long = "video-constraint-subscribe", value_name = "CONSTRAINT")]
+    pub video_constraint_subscribe: Option<VideoConstraint>,
+
+    #[clap(long = "video-max-concurrent-tracks", value_name = "TRACKS")]
+    pub video_max_concurrent_tracks: Option<usize>,
 
     #[clap(long, value_parser = clap::builder::BoolishValueParser::new())]
     pub blur: Option<bool>,
@@ -73,7 +79,9 @@ struct ParticipantOverride {
     auto_gain_control: Option<bool>,
     noise_suppression: Option<NoiseSuppression>,
     transport: Option<TransportMode>,
-    resolution: Option<WebcamResolution>,
+    video_constraint_publish_webcam: Option<VideoConstraint>,
+    video_constraint_subscribe: Option<VideoConstraint>,
+    video_max_concurrent_tracks: Option<usize>,
     blur: Option<bool>,
 }
 
@@ -121,8 +129,14 @@ fn apply_cli_overrides(config: &mut Config, args: &HeadlessArgs) {
     if let Some(transport) = args.transport {
         config.transport = transport;
     }
-    if let Some(resolution) = args.resolution {
-        config.resolution = resolution;
+    if let Some(value) = args.video_constraint_publish_webcam {
+        config.video_constraint_publish_webcam = value;
+    }
+    if let Some(value) = args.video_constraint_subscribe {
+        config.video_constraint_subscribe = value;
+    }
+    if let Some(value) = args.video_max_concurrent_tracks {
+        config.video_max_concurrent_tracks = Some(value);
     }
     if let Some(blur) = args.blur {
         config.blur = blur;
@@ -157,8 +171,14 @@ fn apply_participant_override(mut config: Config, override_: ParticipantOverride
     if let Some(transport) = override_.transport {
         config.transport = transport;
     }
-    if let Some(resolution) = override_.resolution {
-        config.resolution = resolution;
+    if let Some(value) = override_.video_constraint_publish_webcam {
+        config.video_constraint_publish_webcam = value;
+    }
+    if let Some(value) = override_.video_constraint_subscribe {
+        config.video_constraint_subscribe = value;
+    }
+    if let Some(value) = override_.video_max_concurrent_tracks {
+        config.video_max_concurrent_tracks = Some(value);
     }
     if let Some(blur) = override_.blur {
         config.blur = blur;
@@ -290,6 +310,7 @@ mod tests {
     use client_simulator_config::{
         Config,
         ParticipantBackendKind,
+        VideoConstraint,
     };
     use std::{
         fs,
@@ -341,6 +362,27 @@ mod tests {
     }
 
     #[test]
+    fn cli_parsing_accepts_video_constraint_options() {
+        let cli = TestHeadlessCli::parse_from([
+            "headless",
+            "--video-constraint-publish-webcam",
+            "480p",
+            "--video-constraint-subscribe",
+            "720p",
+            "--video-max-concurrent-tracks",
+            "2",
+            "--participant",
+            r#"{"video_constraint_publish_webcam":"360p","video_constraint_subscribe":"none","video_max_concurrent_tracks":1}"#,
+        ]);
+        let args = cli.args;
+
+        assert_eq!(args.video_constraint_publish_webcam, Some(VideoConstraint::P480));
+        assert_eq!(args.video_constraint_subscribe, Some(VideoConstraint::P720));
+        assert_eq!(args.video_max_concurrent_tracks, Some(2));
+        assert_eq!(args.participants.len(), 1);
+    }
+
+    #[test]
     fn participant_json_overrides_global_config() {
         let global_config = Config {
             url: Some(Url::parse("https://example.com/lite/global").expect("valid url")),
@@ -365,6 +407,41 @@ mod tests {
         );
         assert_eq!(configs[0].backend, ParticipantBackendKind::Cloudflare);
         assert!(!configs[0].audio_enabled);
+    }
+
+    #[test]
+    fn participant_json_overrides_video_constraints_and_treats_null_tracks_as_absent() {
+        let global_config = Config {
+            video_constraint_publish_webcam: VideoConstraint::P720,
+            video_constraint_subscribe: VideoConstraint::P720,
+            video_max_concurrent_tracks: Some(2),
+            ..Default::default()
+        };
+
+        let configs = build_participant_configs(
+            global_config,
+            &[r#"{"video_constraint_publish_webcam":"360p","video_max_concurrent_tracks":null}"#.to_string()],
+        )
+        .expect("participant configs");
+
+        // publish overridden; subscribe omitted -> inherits global;
+        // max tracks null is treated as absent -> inherits global Some(2).
+        assert_eq!(configs[0].video_constraint_publish_webcam, VideoConstraint::P360);
+        assert_eq!(configs[0].video_constraint_subscribe, VideoConstraint::P720);
+        assert_eq!(configs[0].video_max_concurrent_tracks, Some(2));
+    }
+
+    #[test]
+    fn participant_json_numeric_tracks_override_global() {
+        let global_config = Config {
+            video_max_concurrent_tracks: None,
+            ..Default::default()
+        };
+
+        let configs = build_participant_configs(global_config, &[r#"{"video_max_concurrent_tracks":3}"#.to_string()])
+            .expect("participant configs");
+
+        assert_eq!(configs[0].video_max_concurrent_tracks, Some(3));
     }
 
     #[test]

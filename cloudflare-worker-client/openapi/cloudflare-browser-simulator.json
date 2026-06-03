@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "cloudflare-browser-simulator",
-    "version": "0.3.0",
+    "version": "0.4.1",
     "description": "Cloudflare Worker that launches Browser Rendering sessions, joins Hyper rooms, and exposes its API contract from code."
   },
   "components": {
@@ -267,20 +267,40 @@
               "webtransport"
             ]
           },
-          "webcamResolution": {
+          "videoConstraintPublishWebcam": {
             "type": "string",
             "enum": [
-              "auto",
-              "p144",
-              "p240",
-              "p360",
-              "p480",
-              "p720",
-              "p1080",
-              "p1440",
-              "p2160",
-              "p4320"
+              "none",
+              "90p",
+              "144p",
+              "240p",
+              "360p",
+              "480p",
+              "720p",
+              "1080p",
+              "1440p",
+              "2160p"
             ]
+          },
+          "videoConstraintSubscribe": {
+            "type": "string",
+            "enum": [
+              "none",
+              "90p",
+              "144p",
+              "240p",
+              "360p",
+              "480p",
+              "720p",
+              "1080p",
+              "1440p",
+              "2160p"
+            ]
+          },
+          "videoMaxConcurrentTracks": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
           },
           "backgroundBlur": {
             "type": "boolean"
@@ -295,7 +315,9 @@
           "autoGainControl",
           "noiseSuppression",
           "transportMode",
-          "webcamResolution",
+          "videoConstraintPublishWebcam",
+          "videoConstraintSubscribe",
+          "videoMaxConcurrentTracks",
           "backgroundBlur"
         ]
       },
@@ -490,20 +512,40 @@
               "webtransport"
             ]
           },
-          "resolution": {
+          "videoConstraintPublishWebcam": {
             "type": "string",
             "enum": [
-              "auto",
-              "p144",
-              "p240",
-              "p360",
-              "p480",
-              "p720",
-              "p1080",
-              "p1440",
-              "p2160",
-              "p4320"
+              "none",
+              "90p",
+              "144p",
+              "240p",
+              "360p",
+              "480p",
+              "720p",
+              "1080p",
+              "1440p",
+              "2160p"
             ]
+          },
+          "videoConstraintSubscribe": {
+            "type": "string",
+            "enum": [
+              "none",
+              "90p",
+              "144p",
+              "240p",
+              "360p",
+              "480p",
+              "720p",
+              "1080p",
+              "1440p",
+              "2160p"
+            ]
+          },
+          "videoMaxConcurrentTracks": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
           },
           "blur": {
             "type": "boolean",
@@ -517,7 +559,9 @@
           "autoGainControl",
           "noiseSuppression",
           "transport",
-          "resolution",
+          "videoConstraintPublishWebcam",
+          "videoConstraintSubscribe",
+          "videoMaxConcurrentTracks",
           "blur"
         ]
       },
@@ -766,28 +810,78 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "set-webcam-resolution"
+                  "set-video-constraint-publish-webcam"
                 ]
               },
-              "webcamResolution": {
+              "videoConstraintPublishWebcam": {
                 "type": "string",
                 "enum": [
-                  "auto",
-                  "p144",
-                  "p240",
-                  "p360",
-                  "p480",
-                  "p720",
-                  "p1080",
-                  "p1440",
-                  "p2160",
-                  "p4320"
+                  "none",
+                  "90p",
+                  "144p",
+                  "240p",
+                  "360p",
+                  "480p",
+                  "720p",
+                  "1080p",
+                  "1440p",
+                  "2160p"
                 ]
               }
             },
             "required": [
               "type",
-              "webcamResolution"
+              "videoConstraintPublishWebcam"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set-video-constraint-subscribe"
+                ]
+              },
+              "videoConstraintSubscribe": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "90p",
+                  "144p",
+                  "240p",
+                  "360p",
+                  "480p",
+                  "720p",
+                  "1080p",
+                  "1440p",
+                  "2160p"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "videoConstraintSubscribe"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set-video-max-concurrent-tracks"
+                ]
+              },
+              "videoMaxConcurrentTracks": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0
+              }
+            },
+            "required": [
+              "type",
+              "videoMaxConcurrentTracks"
             ]
           },
           {
