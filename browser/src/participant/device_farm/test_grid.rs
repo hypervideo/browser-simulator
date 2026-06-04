@@ -1,8 +1,13 @@
+use aws_sdk_devicefarm::types::{
+    TestGridSession,
+    TestGridSessionStatus,
+};
 use client_simulator_config::{
     DEVICE_FARM_AWS_ACCESS_KEY_ID,
     DEVICE_FARM_AWS_SECRET_ACCESS_KEY,
 };
 use eyre::{
+    bail,
     Context as _,
     Result,
 };
@@ -16,16 +21,32 @@ use futures::{
 pub trait TestGridApi: Send + Sync {
     /// Create a short-lived Selenium Remote WebDriver URL for `project_arn`.
     fn create_test_grid_url(&self, project_arn: &str, expires_seconds: u64) -> BoxFuture<'_, Result<String>>;
+
+    fn list_test_grid_sessions(
+        &self,
+        _project_arn: &str,
+        _status: Option<TestGridSessionStatus>,
+    ) -> BoxFuture<'_, Result<Vec<TestGridSession>>> {
+        async move { bail!("ListTestGridSessions is not implemented by this TestGridApi") }.boxed()
+    }
+
+    fn get_test_grid_session(
+        &self,
+        _project_arn: &str,
+        _session_id: &str,
+    ) -> BoxFuture<'_, Result<Option<TestGridSession>>> {
+        async move { bail!("GetTestGridSession is not implemented by this TestGridApi") }.boxed()
+    }
 }
 
 /// Real implementation backed by `aws-sdk-devicefarm`.
-pub(crate) struct AwsTestGrid {
+pub struct AwsTestGrid {
     region: String,
     client: tokio::sync::OnceCell<aws_sdk_devicefarm::Client>,
 }
 
 impl AwsTestGrid {
-    pub(crate) fn new(region: &str) -> Self {
+    pub fn new(region: &str) -> Self {
         Self {
             region: region.to_owned(),
             client: tokio::sync::OnceCell::new(),
@@ -72,6 +93,51 @@ impl TestGridApi for AwsTestGrid {
                 .url()
                 .map(str::to_owned)
                 .ok_or_else(|| eyre::eyre!("CreateTestGridUrl returned no url"))
+        }
+        .boxed()
+    }
+
+    fn list_test_grid_sessions(
+        &self,
+        project_arn: &str,
+        status: Option<TestGridSessionStatus>,
+    ) -> BoxFuture<'_, Result<Vec<TestGridSession>>> {
+        let project_arn = project_arn.to_owned();
+        async move {
+            let mut builder = self.client().await.list_test_grid_sessions().project_arn(project_arn);
+            if let Some(status) = status {
+                builder = builder.status(status);
+            }
+
+            let mut pages = builder.into_paginator().send();
+            let mut sessions = Vec::new();
+            while let Some(page) = pages.next().await {
+                let page = page.context("ListTestGridSessions failed")?;
+                sessions.extend(page.test_grid_sessions().iter().cloned());
+            }
+            Ok(sessions)
+        }
+        .boxed()
+    }
+
+    fn get_test_grid_session(
+        &self,
+        project_arn: &str,
+        session_id: &str,
+    ) -> BoxFuture<'_, Result<Option<TestGridSession>>> {
+        let project_arn = project_arn.to_owned();
+        let session_id = session_id.to_owned();
+        async move {
+            let output = self
+                .client()
+                .await
+                .get_test_grid_session()
+                .project_arn(project_arn)
+                .session_id(session_id)
+                .send()
+                .await
+                .context("GetTestGridSession failed")?;
+            Ok(output.test_grid_session().cloned())
         }
         .boxed()
     }

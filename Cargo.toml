@@ -87,6 +87,7 @@ repository.workspace = true
 
 [dependencies]
 better-panic.workspace = true
+chrono.workspace = true
 clap.workspace = true
 client-simulator-browser.workspace = true
 client-simulator-config.workspace = true

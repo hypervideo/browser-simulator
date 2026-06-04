@@ -1,3 +1,4 @@
+mod aws;
 mod errors;
 mod headless;
 
@@ -78,6 +79,8 @@ enum Command {
     Headless(headless::HeadlessArgs),
     /// Connect to the hyper server to get a hyper session cookie
     Cookie(CookieArgs),
+    /// Manage AWS Device Farm Test Grid sessions
+    Aws(aws::AwsArgs),
 }
 
 #[cfg(test)]
@@ -157,6 +160,110 @@ mod tests {
         assert!(filter.contains("warn"));
         assert!(filter.contains("client_simulator_browser=debug"));
     }
+
+    #[test]
+    fn parses_aws_list_sessions_json() {
+        let args = CliArgs::parse_from(["hyper-client-simulator", "aws", "list-sessions", "--json"]);
+        match args.command {
+            Some(Command::Aws(aws::AwsArgs {
+                command: aws::AwsCommand::ListSessions(args),
+            })) => {
+                assert!(args.json);
+                assert_eq!(args.status, aws::ListSessionsStatus::Active);
+            }
+            other => panic!("expected aws list-sessions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_aws_list_sessions_closed_status() {
+        let args = CliArgs::parse_from(["hyper-client-simulator", "aws", "list-sessions", "--status", "closed"]);
+        match args.command {
+            Some(Command::Aws(aws::AwsArgs {
+                command: aws::AwsCommand::ListSessions(args),
+            })) => {
+                assert_eq!(args.status, aws::ListSessionsStatus::Closed);
+            }
+            other => panic!("expected aws list-sessions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_aws_list_sessions_all_status() {
+        let args = CliArgs::parse_from(["hyper-client-simulator", "aws", "list-sessions", "--status", "all"]);
+        match args.command {
+            Some(Command::Aws(aws::AwsArgs {
+                command: aws::AwsCommand::ListSessions(args),
+            })) => {
+                assert_eq!(args.status, aws::ListSessionsStatus::All);
+            }
+            other => panic!("expected aws list-sessions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_aws_list_sessions_since_date() {
+        let args = CliArgs::parse_from([
+            "hyper-client-simulator",
+            "aws",
+            "list-sessions",
+            "--since",
+            "2026-06-04",
+        ]);
+        match args.command {
+            Some(Command::Aws(aws::AwsArgs {
+                command: aws::AwsCommand::ListSessions(args),
+            })) => {
+                assert!(args.since.is_some());
+            }
+            other => panic!("expected aws list-sessions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_aws_list_sessions_since_date_time() {
+        let args = CliArgs::parse_from([
+            "hyper-client-simulator",
+            "aws",
+            "list-sessions",
+            "--since",
+            "2026-06-04 10:11",
+        ]);
+        match args.command {
+            Some(Command::Aws(aws::AwsArgs {
+                command: aws::AwsCommand::ListSessions(args),
+            })) => {
+                assert!(args.since.is_some());
+            }
+            other => panic!("expected aws list-sessions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_aws_close_sessions_with_comma_separated_ids() {
+        let args = CliArgs::parse_from(["hyper-client-simulator", "aws", "close-sessions", "a,b,c"]);
+        match args.command {
+            Some(Command::Aws(aws::AwsArgs {
+                command: aws::AwsCommand::CloseSessions(args),
+            })) => {
+                assert_eq!(args.session_ids, vec!["a", "b", "c"]);
+            }
+            other => panic!("expected aws close-sessions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_aws_close_sessions_without_ids() {
+        let args = CliArgs::parse_from(["hyper-client-simulator", "aws", "close-sessions"]);
+        match args.command {
+            Some(Command::Aws(aws::AwsArgs {
+                command: aws::AwsCommand::CloseSessions(args),
+            })) => {
+                assert!(args.session_ids.is_empty());
+            }
+            other => panic!("expected aws close-sessions, got {other:?}"),
+        }
+    }
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -187,6 +294,7 @@ async fn main() -> eyre::Result<()> {
             std::process::exit(code);
         }
         Some(Command::Cookie(args)) => run_cookie(args, logging_filter_from_env(logging)).await,
+        Some(Command::Aws(args)) => aws::run(args, logging_filter_from_env(logging)).await,
     }
 }
 

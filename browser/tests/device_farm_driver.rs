@@ -7,6 +7,10 @@
 use client_simulator_browser::{
     auth::HyperSessionCookieManger,
     participant::{
+        device_farm::{
+            close_test_grid_session,
+            DeviceFarmCloseResult,
+        },
         Participant,
         ParticipantState,
     },
@@ -116,6 +120,41 @@ async fn device_farm_session_preserves_signed_test_grid_url_path_and_query() {
     assert!(requests
         .iter()
         .all(|request| { request.path.starts_with("/signed-grid/wd/hub/") && request.path.contains(signature) }));
+}
+
+#[tokio::test]
+async fn close_test_grid_session_preserves_signed_test_grid_url_path_and_query() {
+    let signature = "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=test-signature";
+    let (base_url, requests, server) = spawn_webdriver_mock_with_options(WebDriverMockOptions {
+        path_prefix: "/signed-grid/wd/hub".to_string(),
+        required_query: Some(signature.to_string()),
+        ..Default::default()
+    })
+    .await;
+    let api = TestGridStub {
+        url: format!("{base_url}/signed-grid/wd/hub?{signature}"),
+    };
+
+    let result = close_test_grid_session(
+        &api,
+        "arn:aws:devicefarm:us-west-2:123456789012:testgrid-project:abc",
+        300,
+        "df-1",
+    )
+    .await
+    .expect("close helper should send signed WebDriver delete");
+
+    assert_eq!(result, DeviceFarmCloseResult::Closed);
+
+    server.abort();
+
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].path,
+        format!("/signed-grid/wd/hub/session/df-1?{signature}")
+    );
+    assert_eq!(requests[0].method, "DELETE");
 }
 
 #[tokio::test]

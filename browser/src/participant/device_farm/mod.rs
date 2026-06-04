@@ -1,3 +1,4 @@
+mod control;
 mod test_grid;
 mod webdriver_driver;
 
@@ -25,9 +26,17 @@ use crate::{
         },
     },
 };
+pub use aws_sdk_devicefarm::types::TestGridSessionStatus;
 use client_simulator_config::{
     media::FakeMedia,
     DeviceFarmConfig,
+};
+pub use control::{
+    close_test_grid_session,
+    list_active_project_sessions,
+    list_project_sessions,
+    DeviceFarmCloseResult,
+    DeviceFarmSessionInfo,
 };
 use eyre::{
     bail,
@@ -44,9 +53,10 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-pub(crate) use test_grid::AwsTestGrid;
-#[allow(unused_imports)]
-pub use test_grid::TestGridApi;
+pub use test_grid::{
+    AwsTestGrid,
+    TestGridApi,
+};
 use thirtyfour::{
     common::config::WebDriverConfig,
     prelude::{
@@ -404,52 +414,8 @@ fn rewrite_device_farm_request_uri<'a>(
 }
 
 fn signed_test_grid_command_url(signed_url: &url::Url, command_uri: &http::Uri) -> WebDriverResult<url::Url> {
-    let mut url = signed_url.clone();
-    let command_path = webdriver_command_path(signed_url, command_uri);
-    let base_path = signed_url.path().trim_end_matches('/');
-    let path = if base_path.is_empty() {
-        format!("/{command_path}")
-    } else if command_path.is_empty() {
-        base_path.to_string()
-    } else {
-        format!("{base_path}/{command_path}")
-    };
-    url.set_path(&path);
-
-    let query = match (signed_url.query(), command_uri.query()) {
-        (Some(signed), Some(command)) if !command.is_empty() => Some(format!("{signed}&{command}")),
-        (Some(signed), _) => Some(signed.to_string()),
-        (None, Some(command)) if !command.is_empty() => Some(command.to_string()),
-        _ => None,
-    };
-    url.set_query(query.as_deref());
-
-    Ok(url)
-}
-
-fn webdriver_command_path(signed_url: &url::Url, command_uri: &http::Uri) -> String {
-    let joined_path = command_uri.path();
-    let base_path = signed_url.path().trim_end_matches('/');
-
-    if !base_path.is_empty() {
-        let base_prefix = format!("{base_path}/");
-        if let Some(command) = joined_path.strip_prefix(&base_prefix) {
-            return command.trim_start_matches('/').to_string();
-        }
-
-        if let Some((parent, _)) = base_path.rsplit_once('/') {
-            let parent_prefix = if parent.is_empty() {
-                "/".to_string()
-            } else {
-                format!("{parent}/")
-            };
-            if let Some(command) = joined_path.strip_prefix(&parent_prefix) {
-                return command.trim_start_matches('/').to_string();
-            }
-        }
-    }
-
-    joined_path.trim_start_matches('/').to_string()
+    control::signed_test_grid_command_url(signed_url, command_uri)
+        .map_err(|err| WebDriverError::ParseError(format!("invalid Device Farm WebDriver request URI: {err}")))
 }
 
 fn aws_duration_secs(duration_ms: u64, min_secs: u64, max_secs: u64) -> u64 {
