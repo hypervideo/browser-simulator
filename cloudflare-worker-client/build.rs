@@ -6,13 +6,17 @@ use std::{
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
-    let spec_path = manifest_dir.join("openapi/cloudflare-browser-simulator.json");
+    let spec_path = manifest_dir.join("../cloudflare-browser-simulator/cli/openapi/cloudflare-browser-simulator.json");
 
     println!("cargo:rerun-if-changed={}", spec_path.display());
 
-    let spec =
-        serde_json::from_slice::<openapiv3::OpenAPI>(&fs::read(&spec_path).expect("failed to read OpenAPI spec"))
-            .expect("failed to parse OpenAPI spec");
+    let spec_bytes = fs::read(&spec_path).unwrap_or_else(|error| {
+        panic!(
+            "failed to read OpenAPI spec at {}: {error}. Initialize the cloudflare-browser-simulator submodule with `git submodule update --init --recursive`.",
+            spec_path.display()
+        )
+    });
+    let spec = serde_json::from_slice::<openapiv3::OpenAPI>(&spec_bytes).expect("failed to parse OpenAPI spec");
 
     let mut generator = progenitor::Generator::default();
     let tokens = generator

@@ -60,6 +60,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          token: ${{ secrets.CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN }}
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -120,6 +121,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          token: ${{ secrets.CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN }}
       - name: Install Rust non-interactively if not already installed
         if: ${{ matrix.container }}
         run: |
@@ -179,6 +181,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          token: ${{ secrets.CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN }}
       - name: Install cached dist
         uses: actions/download-artifact@v7
         with:
@@ -229,6 +232,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          token: ${{ secrets.CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN }}
       - name: Install cached dist
         uses: actions/download-artifact@v7
         with:
@@ -341,3 +345,4 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          token: ${{ secrets.CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN }}

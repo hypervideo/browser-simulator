@@ -1,0 +1,3 @@
+[submodule "cloudflare-browser-simulator"]
+	path = cloudflare-browser-simulator
+	url = https://github.com/hypervideo/cloudflare-browser-simulator.git
