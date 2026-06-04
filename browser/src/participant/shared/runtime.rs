@@ -5,14 +5,27 @@ use super::{
     },
     ParticipantState,
 };
-use eyre::Result;
+use eyre::{
+    Report,
+    Result,
+};
 use futures::future::BoxFuture;
-use tokio::sync::{
-    mpsc::{
-        UnboundedReceiver,
-        UnboundedSender,
+use std::{
+    future::pending,
+    time::Duration,
+};
+use tokio::{
+    sync::{
+        mpsc::{
+            UnboundedReceiver,
+            UnboundedSender,
+        },
+        watch,
     },
-    watch,
+    time::{
+        Instant,
+        MissedTickBehavior,
+    },
 };
 use tokio_util::sync::CancellationToken;
 
@@ -40,6 +53,14 @@ pub(in crate::participant) trait ParticipantDriverSession: Send {
     fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>>;
     fn close(&mut self) -> BoxFuture<'_, Result<()>>;
     fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination>;
+
+    fn state_refresh_interval(&self) -> Option<Duration> {
+        None
+    }
+
+    fn state_refresh_error_termination(&self, _err: &Report) -> Option<DriverTermination> {
+        None
+    }
 }
 
 /// Drive one participant session by translating runtime messages into backend operations.
@@ -95,13 +116,33 @@ where
         return Ok(());
     }
 
-    sync_state(&mut driver, &state, &sender).await;
+    if let Some(termination) = sync_state(&mut driver, &state, &sender).await {
+        let participant_name = driver.participant_name().to_string();
+        log_runtime_message(&sender, termination.level, &participant_name, termination.message);
+        if let Err(err) = driver.close().await {
+            log_runtime_message(
+                &sender,
+                "error",
+                &participant_name,
+                format!("Failed closing participant after state refresh failure: {err}"),
+            );
+        }
+        mark_stopped(&state);
+        return Ok(());
+    }
+
+    let mut state_refresh_ticker = driver.state_refresh_interval().map(|interval| {
+        let mut ticker = tokio::time::interval_at(Instant::now() + interval, interval);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        ticker
+    });
 
     loop {
         enum RuntimeEvent {
             Command(ParticipantMessage),
             ChannelClosed,
             Terminated(DriverTermination),
+            RefreshState,
             Cancelled,
         }
 
@@ -114,6 +155,13 @@ where
                 Some(message) => RuntimeEvent::Command(message),
                 None => RuntimeEvent::ChannelClosed,
             },
+            _ = async {
+                if let Some(ticker) = state_refresh_ticker.as_mut() {
+                    ticker.tick().await;
+                } else {
+                    pending::<()>().await;
+                }
+            } => RuntimeEvent::RefreshState,
         };
 
         match event {
@@ -152,6 +200,21 @@ where
                 }
                 break;
             }
+            RuntimeEvent::RefreshState => {
+                if let Some(termination) = sync_state(&mut driver, &state, &sender).await {
+                    let participant_name = driver.participant_name().to_string();
+                    log_runtime_message(&sender, termination.level, &participant_name, termination.message);
+                    if let Err(err) = driver.close().await {
+                        log_runtime_message(
+                            &sender,
+                            "error",
+                            &participant_name,
+                            format!("Failed closing participant after state refresh failure: {err}"),
+                        );
+                    }
+                    break;
+                }
+            }
             RuntimeEvent::Command(ParticipantMessage::Close) => {
                 if let Err(err) = driver.close().await {
                     log_runtime_message(
@@ -173,7 +236,19 @@ where
                     );
                 }
 
-                sync_state(&mut driver, &state, &sender).await;
+                if let Some(termination) = sync_state(&mut driver, &state, &sender).await {
+                    let participant_name = driver.participant_name().to_string();
+                    log_runtime_message(&sender, termination.level, &participant_name, termination.message);
+                    if let Err(err) = driver.close().await {
+                        log_runtime_message(
+                            &sender,
+                            "error",
+                            &participant_name,
+                            format!("Failed closing participant after state refresh failure: {err}"),
+                        );
+                    }
+                    break;
+                }
             }
         }
     }
@@ -188,7 +263,8 @@ async fn sync_state<D>(
     driver: &mut D,
     state: &watch::Sender<ParticipantState>,
     sender: &UnboundedSender<ParticipantLogMessage>,
-) where
+) -> Option<DriverTermination>
+where
     D: ParticipantDriverSession,
 {
     match driver.refresh_state().await {
@@ -198,14 +274,19 @@ async fn sync_state<D>(
             state.send_modify(|current| {
                 *current = next_state;
             });
+            None
         }
         Err(err) => {
-            log_runtime_message(
-                sender,
-                "error",
-                driver.participant_name(),
-                format!("Failed refreshing participant state: {err}"),
-            );
+            let termination = driver.state_refresh_error_termination(&err);
+            if termination.is_none() {
+                log_runtime_message(
+                    sender,
+                    "error",
+                    driver.participant_name(),
+                    format!("Failed refreshing participant state: {err}"),
+                );
+            }
+            termination
         }
     }
 }

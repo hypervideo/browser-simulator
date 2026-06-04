@@ -64,6 +64,9 @@ async fn device_farm_session_creates_url_connects_joins_and_closes() {
     let joined = wait_for_state(&state, |current| current.running && current.joined).await;
     assert!(joined.running);
     assert!(joined.joined);
+    assert!(!joined.muted);
+    assert!(joined.video_activated);
+    assert!(!joined.screenshare_activated);
 
     participant.close().await;
     assert!(!state.borrow().running);
@@ -88,6 +91,7 @@ async fn device_farm_session_preserves_signed_test_grid_url_path_and_query() {
     let (base_url, requests, server) = spawn_webdriver_mock_with_options(WebDriverMockOptions {
         path_prefix: "/signed-grid/wd/hub".to_string(),
         required_query: Some(signature.to_string()),
+        ..Default::default()
     })
     .await;
     let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
@@ -112,6 +116,130 @@ async fn device_farm_session_preserves_signed_test_grid_url_path_and_query() {
     assert!(requests
         .iter()
         .all(|request| { request.path.starts_with("/signed-grid/wd/hub/") && request.path.contains(signature) }));
+}
+
+#[tokio::test]
+async fn device_farm_session_polls_and_publishes_frontend_state_changes() {
+    let (base_url, requests, server) = spawn_webdriver_mock_with_options(WebDriverMockOptions {
+        media_change_after_attribute_reads: Some(5),
+        ..Default::default()
+    })
+    .await;
+    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let mut config = device_farm_config();
+    config.device_farm.health_poll_interval_ms = 100;
+    let participant =
+        Participant::spawn_device_farm_with_api(&config, cookie_manager, Arc::new(TestGridStub { url: base_url }))
+            .expect("device farm participant should spawn");
+    let state = participant.state.clone();
+
+    let initial = {
+        let mut state = state.clone();
+        timeout(Duration::from_secs(2), async move {
+            state
+                .wait_for(|current| {
+                    current.running
+                        && current.joined
+                        && !current.muted
+                        && current.video_activated
+                        && !current.screenshare_activated
+                })
+                .await
+                .unwrap()
+                .clone()
+        })
+        .await
+    };
+
+    if initial.is_err() {
+        participant.clone().close().await;
+        server.abort();
+    }
+
+    let initial = initial.unwrap_or_else(|_| {
+        panic!(
+            "timed out waiting for initial Device Farm state; current: {:?}; requests: {:?}",
+            state.borrow(),
+            request_summary(&requests.lock().unwrap())
+        )
+    });
+    assert!(!initial.muted);
+    assert!(initial.video_activated);
+    assert!(!initial.screenshare_activated);
+
+    let updated = {
+        let mut state = state.clone();
+        timeout(Duration::from_secs(2), async move {
+            state
+                .wait_for(|current| {
+                    current.running
+                        && current.joined
+                        && current.muted
+                        && !current.video_activated
+                        && current.screenshare_activated
+                })
+                .await
+                .unwrap()
+                .clone()
+        })
+        .await
+    };
+
+    if updated.is_err() {
+        participant.clone().close().await;
+        server.abort();
+    }
+
+    let updated = updated.unwrap_or_else(|_| {
+        panic!(
+            "timed out waiting for Device Farm state refresh; requests: {:?}",
+            request_summary(&requests.lock().unwrap())
+        )
+    });
+    assert!(updated.muted);
+    assert!(!updated.video_activated);
+    assert!(updated.screenshare_activated);
+
+    participant.close().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn device_farm_session_stops_when_webdriver_health_check_fails() {
+    let (base_url, _requests, server) = spawn_webdriver_mock_with_options(WebDriverMockOptions {
+        fail_current_url_after: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let mut config = device_farm_config();
+    config.device_farm.health_poll_interval_ms = 20;
+    let participant =
+        Participant::spawn_device_farm_with_api(&config, cookie_manager, Arc::new(TestGridStub { url: base_url }))
+            .expect("device farm participant should spawn");
+    let state = participant.state.clone();
+
+    wait_for_state(&state, |current| current.running && current.joined).await;
+
+    let stopped = {
+        let mut state = state.clone();
+        timeout(Duration::from_secs(2), async move {
+            state
+                .wait_for(|current| !current.running && !current.joined)
+                .await
+                .unwrap()
+                .clone()
+        })
+        .await
+    };
+
+    participant.close().await;
+    server.abort();
+
+    assert!(
+        stopped.is_ok(),
+        "Device Farm participant should stop when WebDriver stops responding"
+    );
 }
 
 #[derive(Debug)]
@@ -166,12 +294,16 @@ struct CapturedRequest {
 #[derive(Debug, Default)]
 struct WebDriverState {
     joined: bool,
+    current_url_requests: usize,
+    media_attribute_reads: usize,
 }
 
 #[derive(Debug, Default)]
 struct WebDriverMockOptions {
     path_prefix: String,
     required_query: Option<String>,
+    media_change_after_attribute_reads: Option<usize>,
+    fail_current_url_after: Option<usize>,
 }
 
 async fn spawn_webdriver_mock() -> (String, Arc<Mutex<Vec<CapturedRequest>>>, tokio::task::JoinHandle<()>) {
@@ -223,13 +355,35 @@ fn webdriver_response(
             }),
         ),
         ("POST", "/session/df-1/url") => MockResponse::json(200, json!({ "value": null })),
-        ("GET", "/session/df-1/url") => MockResponse::json(200, json!({ "value": "https://example.com/m/demo" })),
+        ("GET", "/session/df-1/url") => current_url_response(state, options),
         ("DELETE", "/session/df-1") => MockResponse::json(200, json!({ "value": null })),
         ("POST", "/session/df-1/element") => element_response(request, state),
-        _ if path.starts_with("/session/df-1/element/") => element_command_response(&path, state),
+        _ if path.starts_with("/session/df-1/element/") => element_command_response(&path, state, options),
         _ if path == "/session/df-1/execute/sync" => MockResponse::json(200, json!({ "value": null })),
         _ => MockResponse::json(200, json!({ "value": null })),
     }
+}
+
+fn current_url_response(state: &Arc<Mutex<WebDriverState>>, options: &WebDriverMockOptions) -> MockResponse {
+    let mut state = state.lock().unwrap();
+    state.current_url_requests += 1;
+    if options
+        .fail_current_url_after
+        .is_some_and(|limit| state.current_url_requests > limit)
+    {
+        return MockResponse::json(
+            500,
+            json!({
+                "value": {
+                    "error": "invalid session id",
+                    "message": "session is no longer available",
+                    "stacktrace": ""
+                }
+            }),
+        );
+    }
+
+    MockResponse::json(200, json!({ "value": "https://example.com/m/demo" }))
 }
 
 fn normalize_signed_path(request: &CapturedRequest, options: &WebDriverMockOptions) -> Option<String> {
@@ -286,7 +440,11 @@ fn element_response(request: &CapturedRequest, state: &Arc<Mutex<WebDriverState>
     element("generic")
 }
 
-fn element_command_response(path: &str, state: &Arc<Mutex<WebDriverState>>) -> MockResponse {
+fn element_command_response(
+    path: &str,
+    state: &Arc<Mutex<WebDriverState>>,
+    options: &WebDriverMockOptions,
+) -> MockResponse {
     if path.ends_with("/click") {
         if path.contains("/element/join/") {
             state.lock().unwrap().joined = true;
@@ -297,10 +455,29 @@ fn element_command_response(path: &str, state: &Arc<Mutex<WebDriverState>>) -> M
     }
 
     if let Some(attribute) = path.rsplit('/').next().filter(|_| path.contains("/attribute/")) {
+        let media_attribute = attribute == "data-test-state"
+            && (path.contains("/element/audio/")
+                || path.contains("/element/video/")
+                || path.contains("/element/screen/"));
+        let media_changed = {
+            let mut state = state.lock().unwrap();
+            if media_attribute {
+                state.media_attribute_reads += 1;
+            }
+            options
+                .media_change_after_attribute_reads
+                .is_some_and(|limit| state.media_attribute_reads > limit)
+        };
         let value = match attribute {
-            "data-test-state" if path.contains("/element/audio/") => json!("true"),
-            "data-test-state" if path.contains("/element/video/") => json!("true"),
-            "data-test-state" if path.contains("/element/screen/") => json!("false"),
+            "data-test-state" if path.contains("/element/audio/") => {
+                json!(if media_changed { "false" } else { "true" })
+            }
+            "data-test-state" if path.contains("/element/video/") => {
+                json!(if media_changed { "false" } else { "true" })
+            }
+            "data-test-state" if path.contains("/element/screen/") => {
+                json!(if media_changed { "true" } else { "false" })
+            }
             "aria-pressed" => Value::Null,
             "aria-label" => Value::Null,
             _ => Value::Null,
@@ -415,6 +592,13 @@ fn find_header_end(buffer: &[u8]) -> Option<usize> {
 
 fn request_json(request: &CapturedRequest) -> Value {
     serde_json::from_str(&request.body).unwrap_or(Value::Null)
+}
+
+fn request_summary(requests: &[CapturedRequest]) -> Vec<String> {
+    requests
+        .iter()
+        .map(|request| format!("{} {}", request.method, request.path))
+        .collect()
 }
 
 fn unique_temp_dir() -> PathBuf {

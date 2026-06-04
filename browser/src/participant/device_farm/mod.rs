@@ -33,6 +33,7 @@ use eyre::{
     bail,
     Context as _,
     ContextCompat as _,
+    Report,
     Result,
 };
 use futures::{
@@ -232,9 +233,10 @@ impl DeviceFarmSession {
         };
         let mut automation = FrontendKindBuilder::build(context, auth).await?;
 
-        self.start_keep_alive_poller();
+        self.termination_tx.send_replace(None);
+        self.start_max_duration_poller();
         if let Err(err) = automation.join().await {
-            self.stop_keep_alive_poller().await;
+            self.stop_max_duration_poller().await;
             return Err(err);
         }
 
@@ -252,16 +254,29 @@ impl DeviceFarmSession {
 
     fn effective_poll_interval(&self) -> Duration {
         let configured = self.config.health_poll_interval_ms.max(1);
-        let budget = self.config.idle_timeout_ms.saturating_div(2).max(1);
+        let budget = aws_duration_secs(
+            self.config.idle_timeout_ms,
+            DEVICE_FARM_IDLE_TIMEOUT_MIN_SECS,
+            DEVICE_FARM_IDLE_TIMEOUT_MAX_SECS,
+        )
+        .saturating_mul(500)
+        .max(1);
         Duration::from_millis(configured.min(budget))
     }
 
-    fn start_keep_alive_poller(&mut self) {
-        // The WebDriver is owned by frontend automation, so Phase 4 keeps
-        // reclamation implicit: Device Farm reclaims an abandoned session after
-        // aws:idleTimeoutSecs, and hard-stops it at aws:maxDurationSecs.
+    fn effective_max_duration(&self) -> Duration {
+        Duration::from_secs(aws_duration_secs(
+            self.config.session_max_duration_ms,
+            DEVICE_FARM_MAX_DURATION_MIN_SECS,
+            DEVICE_FARM_MAX_DURATION_MAX_SECS,
+        ))
+    }
+
+    fn start_max_duration_poller(&mut self) {
+        // Periodic runtime state refreshes send WebDriver commands and keep the
+        // AWS idle timeout alive. This task only mirrors the AWS hard session cap.
         let interval = self.effective_poll_interval();
-        let max_duration = Duration::from_millis(self.config.session_max_duration_ms);
+        let max_duration = self.effective_max_duration();
         let termination_tx = self.termination_tx.clone();
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
@@ -290,7 +305,7 @@ impl DeviceFarmSession {
         self.poller_task = Some(task);
     }
 
-    async fn stop_keep_alive_poller(&mut self) {
+    async fn stop_max_duration_poller(&mut self) {
         if let Some(tx) = self.poller_shutdown_tx.take() {
             let _ = tx.send(());
         }
@@ -300,7 +315,7 @@ impl DeviceFarmSession {
     }
 
     async fn close_inner(&mut self) -> Result<()> {
-        self.stop_keep_alive_poller().await;
+        self.stop_max_duration_poller().await;
 
         if let Some(mut automation) = self.automation.take() {
             let joined = automation
@@ -325,6 +340,14 @@ impl DeviceFarmSession {
         self.cached_state.joined = false;
         self.cached_state.screenshare_activated = false;
         self.log_message("info", "Closed Device Farm browser session");
+        Ok(())
+    }
+
+    async fn ping_webdriver(driver: WebDriver) -> Result<()> {
+        driver
+            .current_url()
+            .await
+            .context("Device Farm WebDriver session is not responsive")?;
         Ok(())
     }
 
@@ -448,14 +471,20 @@ impl ParticipantDriverSession for DeviceFarmSession {
 
     fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
         async move {
-            match self.automation.as_mut() {
-                Some(automation) => {
-                    let state = automation.refresh_state().await?;
-                    self.cached_state = state.clone();
-                    Ok(state)
-                }
-                None => Ok(self.cached_state.clone()),
+            if self.automation.is_none() {
+                return Ok(self.cached_state.clone());
             }
+
+            let driver = self
+                .webdriver
+                .as_ref()
+                .context("Device Farm WebDriver session not started")?
+                .clone();
+            Self::ping_webdriver(driver).await?;
+            let automation = self.automation.as_mut().context("Device Farm automation not started")?;
+            let state = automation.refresh_state().await?;
+            self.cached_state = state.clone();
+            Ok(state)
         }
         .boxed()
     }
@@ -466,6 +495,17 @@ impl ParticipantDriverSession for DeviceFarmSession {
 
     fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
         self.wait_for_termination_inner().boxed()
+    }
+
+    fn state_refresh_interval(&self) -> Option<Duration> {
+        Some(self.effective_poll_interval())
+    }
+
+    fn state_refresh_error_termination(&self, err: &Report) -> Option<DriverTermination> {
+        Some(DriverTermination::new(
+            "warn",
+            format!("Device Farm browser session stopped responding while refreshing state: {err}"),
+        ))
     }
 }
 
