@@ -16,8 +16,8 @@ homepage = "https://github.com/hypervideo/browser-simulator"
 repository = "https://github.com/hypervideo/browser-simulator"
 
 [workspace.dependencies]
-aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls"] }
-aws-sdk-devicefarm = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls"] }
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
+aws-sdk-devicefarm = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
 async-trait = "0.1.89"
 better-panic = "0.3.0"
 bytes = "1.11.1"
