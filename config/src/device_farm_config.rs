@@ -23,8 +23,6 @@ pub struct DeviceFarmConfig {
     pub session_max_duration_ms: u64,
     /// `aws:idleTimeoutSecs` capability - max gap between WebDriver commands.
     pub idle_timeout_ms: u64,
-    pub navigation_timeout_ms: u64,
-    pub selector_timeout_ms: u64,
     /// How often the keep-alive poller pings the live session.
     pub health_poll_interval_ms: u64,
     pub debug: bool,
@@ -44,8 +42,6 @@ impl Default for DeviceFarmConfig {
             url_expires_seconds: 300,
             session_max_duration_ms: 1_800_000,
             idle_timeout_ms: 180_000,
-            navigation_timeout_ms: 45_000,
-            selector_timeout_ms: 20_000,
             health_poll_interval_ms: 30_000,
             debug: false,
         }

@@ -164,14 +164,6 @@ impl config::Source for Config {
                     ),
                     ("idle_timeout_ms".to_string(), self.device_farm.idle_timeout_ms.into()),
                     (
-                        "navigation_timeout_ms".to_string(),
-                        self.device_farm.navigation_timeout_ms.into(),
-                    ),
-                    (
-                        "selector_timeout_ms".to_string(),
-                        self.device_farm.selector_timeout_ms.into(),
-                    ),
-                    (
                         "health_poll_interval_ms".to_string(),
                         self.device_farm.health_poll_interval_ms.into(),
                     ),
@@ -420,8 +412,6 @@ device_farm:
   url_expires_seconds: 300
   session_max_duration_ms: 1800000
   idle_timeout_ms: 180000
-  navigation_timeout_ms: 45000
-  selector_timeout_ms: 20000
   health_poll_interval_ms: 30000
   debug: true
 "#,
@@ -439,6 +429,19 @@ device_farm:
         );
         assert_eq!(config.device_farm.region, "us-west-2");
         assert!(config.device_farm.debug);
+    }
+
+    #[test]
+    fn default_device_farm_config_omits_unused_timeouts() {
+        let defaults = include_str!("default-config.yaml");
+        let device_farm = defaults
+            .split_once("device_farm:\n")
+            .and_then(|(_, rest)| rest.split_once("\naudio_enabled:"))
+            .map(|(device_farm, _)| device_farm)
+            .expect("default config should contain a device_farm section");
+
+        assert!(!device_farm.contains("navigation_timeout_ms"));
+        assert!(!device_farm.contains("selector_timeout_ms"));
     }
 
     #[test]

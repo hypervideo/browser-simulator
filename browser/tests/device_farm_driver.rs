@@ -303,8 +303,6 @@ fn device_farm_config() -> Config {
         url_expires_seconds: 300,
         session_max_duration_ms: 60_000,
         idle_timeout_ms: 30_000,
-        navigation_timeout_ms: 45_000,
-        selector_timeout_ms: 20_000,
         health_poll_interval_ms: 30_000,
         debug: false,
     };
