@@ -47,6 +47,15 @@ pub(crate) use test_grid::AwsTestGrid;
 #[allow(unused_imports)]
 pub use test_grid::TestGridApi;
 use thirtyfour::{
+    common::config::WebDriverConfig,
+    prelude::{
+        WebDriverError,
+        WebDriverResult,
+    },
+    session::http::{
+        Body,
+        HttpClient,
+    },
     CapabilitiesHelper,
     ChromeCapabilities,
     ChromiumLikeCapabilities,
@@ -64,6 +73,11 @@ use tokio::{
 };
 #[allow(unused_imports)]
 pub(crate) use webdriver_driver::WebDriverDriver;
+
+const DEVICE_FARM_MAX_DURATION_MIN_SECS: u64 = 180;
+const DEVICE_FARM_MAX_DURATION_MAX_SECS: u64 = 2400;
+const DEVICE_FARM_IDLE_TIMEOUT_MIN_SECS: u64 = 30;
+const DEVICE_FARM_IDLE_TIMEOUT_MAX_SECS: u64 = 900;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
@@ -156,11 +170,19 @@ impl DeviceFarmSession {
         caps.add_arg("--use-fake-device-for-media-stream")?;
         caps.insert_base_capability(
             "aws:maxDurationSecs".to_string(),
-            serde_json::json!((config.session_max_duration_ms / 1000).max(1)),
+            serde_json::json!(aws_duration_secs(
+                config.session_max_duration_ms,
+                DEVICE_FARM_MAX_DURATION_MIN_SECS,
+                DEVICE_FARM_MAX_DURATION_MAX_SECS,
+            )),
         );
         caps.insert_base_capability(
             "aws:idleTimeoutSecs".to_string(),
-            serde_json::json!((config.idle_timeout_ms / 1000).max(1)),
+            serde_json::json!(aws_duration_secs(
+                config.idle_timeout_ms,
+                DEVICE_FARM_IDLE_TIMEOUT_MIN_SECS,
+                DEVICE_FARM_IDLE_TIMEOUT_MAX_SECS,
+            )),
         );
         Ok(caps)
     }
@@ -170,8 +192,17 @@ impl DeviceFarmSession {
             .create_test_grid_url(&config.project_arn, config.url_expires_seconds)
             .await?;
         let caps = Self::build_capabilities(&config)?;
+        let endpoint_url: url::Url = url
+            .parse()
+            .context("Device Farm returned an invalid Selenium endpoint URL")?;
+        debug!(
+            endpoint_host = endpoint_url.host_str().unwrap_or("<unknown>"),
+            endpoint_uses_wd_hub = endpoint_url.path().ends_with("/wd/hub"),
+            "Received Device Farm Selenium endpoint",
+        );
+        let client = DeviceFarmHttpClient::new(endpoint_url);
         // Device Farm can take 60-120s before a requested session becomes usable.
-        WebDriver::new(&url, caps)
+        WebDriver::new_with_config_and_client(&url, caps, WebDriverConfig::default(), client)
             .await
             .context("failed to connect to Device Farm Selenium endpoint")
     }
@@ -309,6 +340,99 @@ impl DeviceFarmSession {
     }
 }
 
+#[derive(Clone)]
+struct DeviceFarmHttpClient {
+    signed_url: url::Url,
+    inner: reqwest::Client,
+}
+
+impl DeviceFarmHttpClient {
+    fn new(signed_url: url::Url) -> Self {
+        Self {
+            signed_url,
+            inner: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl HttpClient for DeviceFarmHttpClient {
+    async fn send(&self, request: http::Request<Body<'_>>) -> WebDriverResult<http::Response<bytes::Bytes>> {
+        let request = rewrite_device_farm_request_uri(&self.signed_url, request)?;
+        HttpClient::send(&self.inner, request).await
+    }
+
+    async fn new(&self) -> Arc<dyn HttpClient> {
+        Arc::new(Self::new(self.signed_url.clone()))
+    }
+}
+
+fn rewrite_device_farm_request_uri<'a>(
+    signed_url: &url::Url,
+    request: http::Request<Body<'a>>,
+) -> WebDriverResult<http::Request<Body<'a>>> {
+    let (mut parts, body) = request.into_parts();
+    let rewritten = signed_test_grid_command_url(signed_url, &parts.uri)?;
+    parts.uri = rewritten
+        .as_str()
+        .parse()
+        .map_err(|err| WebDriverError::ParseError(format!("invalid Device Farm WebDriver request URI: {err}")))?;
+    Ok(http::Request::from_parts(parts, body))
+}
+
+fn signed_test_grid_command_url(signed_url: &url::Url, command_uri: &http::Uri) -> WebDriverResult<url::Url> {
+    let mut url = signed_url.clone();
+    let command_path = webdriver_command_path(signed_url, command_uri);
+    let base_path = signed_url.path().trim_end_matches('/');
+    let path = if base_path.is_empty() {
+        format!("/{command_path}")
+    } else if command_path.is_empty() {
+        base_path.to_string()
+    } else {
+        format!("{base_path}/{command_path}")
+    };
+    url.set_path(&path);
+
+    let query = match (signed_url.query(), command_uri.query()) {
+        (Some(signed), Some(command)) if !command.is_empty() => Some(format!("{signed}&{command}")),
+        (Some(signed), _) => Some(signed.to_string()),
+        (None, Some(command)) if !command.is_empty() => Some(command.to_string()),
+        _ => None,
+    };
+    url.set_query(query.as_deref());
+
+    Ok(url)
+}
+
+fn webdriver_command_path(signed_url: &url::Url, command_uri: &http::Uri) -> String {
+    let joined_path = command_uri.path();
+    let base_path = signed_url.path().trim_end_matches('/');
+
+    if !base_path.is_empty() {
+        let base_prefix = format!("{base_path}/");
+        if let Some(command) = joined_path.strip_prefix(&base_prefix) {
+            return command.trim_start_matches('/').to_string();
+        }
+
+        if let Some((parent, _)) = base_path.rsplit_once('/') {
+            let parent_prefix = if parent.is_empty() {
+                "/".to_string()
+            } else {
+                format!("{parent}/")
+            };
+            if let Some(command) = joined_path.strip_prefix(&parent_prefix) {
+                return command.trim_start_matches('/').to_string();
+            }
+        }
+    }
+
+    joined_path.trim_start_matches('/').to_string()
+}
+
+fn aws_duration_secs(duration_ms: u64, min_secs: u64, max_secs: u64) -> u64 {
+    duration_ms.div_ceil(1000).clamp(min_secs, max_secs)
+}
+
 impl ParticipantDriverSession for DeviceFarmSession {
     fn participant_name(&self) -> &str {
         &self.launch_spec.username
@@ -342,5 +466,31 @@ impl ParticipantDriverSession for DeviceFarmSession {
 
     fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
         self.wait_for_termination_inner().boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn capabilities_clamp_aws_duration_ranges() {
+        let high_max_low_idle = capabilities_for_duration(3_600_000, 5_000);
+        assert_eq!(high_max_low_idle._get("aws:maxDurationSecs"), Some(&json!(2400)));
+        assert_eq!(high_max_low_idle._get("aws:idleTimeoutSecs"), Some(&json!(30)));
+
+        let low_max_high_idle = capabilities_for_duration(60_000, 2_000_000);
+        assert_eq!(low_max_high_idle._get("aws:maxDurationSecs"), Some(&json!(180)));
+        assert_eq!(low_max_high_idle._get("aws:idleTimeoutSecs"), Some(&json!(900)));
+    }
+
+    fn capabilities_for_duration(session_max_duration_ms: u64, idle_timeout_ms: u64) -> ChromeCapabilities {
+        let config = DeviceFarmConfig {
+            session_max_duration_ms,
+            idle_timeout_ms,
+            ..DeviceFarmConfig::default()
+        };
+        DeviceFarmSession::build_capabilities(&config).unwrap()
     }
 }

@@ -8,11 +8,14 @@ repository.workspace = true
 [dependencies]
 aws-config.workspace = true
 aws-sdk-devicefarm.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
 chromiumoxide.workspace = true
 chrono.workspace = true
 derive_more.workspace = true
 eyre.workspace = true
 futures.workspace = true
+http.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

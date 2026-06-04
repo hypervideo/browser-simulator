@@ -82,6 +82,38 @@ async fn device_farm_session_creates_url_connects_joins_and_closes() {
     assert!(paths.contains(&("DELETE", "/session/df-1")));
 }
 
+#[tokio::test]
+async fn device_farm_session_preserves_signed_test_grid_url_path_and_query() {
+    let signature = "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=test-signature";
+    let (base_url, requests, server) = spawn_webdriver_mock_with_options(WebDriverMockOptions {
+        path_prefix: "/signed-grid/wd/hub".to_string(),
+        required_query: Some(signature.to_string()),
+    })
+    .await;
+    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let participant = Participant::spawn_device_farm_with_api(
+        &device_farm_config(),
+        cookie_manager,
+        Arc::new(TestGridStub {
+            url: format!("{base_url}/signed-grid/wd/hub?{signature}"),
+        }),
+    )
+    .expect("device farm participant should spawn");
+    let state = participant.state.clone();
+
+    let joined = wait_for_state(&state, |current| current.running && current.joined).await;
+    assert!(joined.running);
+    assert!(joined.joined);
+
+    participant.close().await;
+    server.abort();
+
+    let requests = requests.lock().unwrap().clone();
+    assert!(requests
+        .iter()
+        .all(|request| { request.path.starts_with("/signed-grid/wd/hub/") && request.path.contains(signature) }));
+}
+
 #[derive(Debug)]
 struct TestGridStub {
     url: String,
@@ -136,18 +168,31 @@ struct WebDriverState {
     joined: bool,
 }
 
+#[derive(Debug, Default)]
+struct WebDriverMockOptions {
+    path_prefix: String,
+    required_query: Option<String>,
+}
+
 async fn spawn_webdriver_mock() -> (String, Arc<Mutex<Vec<CapturedRequest>>>, tokio::task::JoinHandle<()>) {
+    spawn_webdriver_mock_with_options(WebDriverMockOptions::default()).await
+}
+
+async fn spawn_webdriver_mock_with_options(
+    options: WebDriverMockOptions,
+) -> (String, Arc<Mutex<Vec<CapturedRequest>>>, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let requests = Arc::new(Mutex::new(Vec::new()));
     let requests_for_task = Arc::clone(&requests);
     let state = Arc::new(Mutex::new(WebDriverState::default()));
+    let options = Arc::new(options);
 
     let task = tokio::spawn(async move {
         loop {
             let (mut stream, _) = listener.accept().await.unwrap();
             let request = read_request(&mut stream).await;
-            let response = webdriver_response(&request, &state);
+            let response = webdriver_response(&request, &state, &options);
             requests_for_task.lock().unwrap().push(request);
             write_response(&mut stream, response).await;
         }
@@ -156,8 +201,16 @@ async fn spawn_webdriver_mock() -> (String, Arc<Mutex<Vec<CapturedRequest>>>, to
     (base_url, requests, task)
 }
 
-fn webdriver_response(request: &CapturedRequest, state: &Arc<Mutex<WebDriverState>>) -> MockResponse {
-    match (request.method.as_str(), request.path.as_str()) {
+fn webdriver_response(
+    request: &CapturedRequest,
+    state: &Arc<Mutex<WebDriverState>>,
+    options: &WebDriverMockOptions,
+) -> MockResponse {
+    let Some(path) = normalize_signed_path(request, options) else {
+        return no_such_element();
+    };
+
+    match (request.method.as_str(), path.as_str()) {
         ("POST", "/session") => MockResponse::json(
             200,
             json!({
@@ -173,10 +226,31 @@ fn webdriver_response(request: &CapturedRequest, state: &Arc<Mutex<WebDriverStat
         ("GET", "/session/df-1/url") => MockResponse::json(200, json!({ "value": "https://example.com/m/demo" })),
         ("DELETE", "/session/df-1") => MockResponse::json(200, json!({ "value": null })),
         ("POST", "/session/df-1/element") => element_response(request, state),
-        _ if request.path.starts_with("/session/df-1/element/") => element_command_response(request, state),
-        _ if request.path == "/session/df-1/execute/sync" => MockResponse::json(200, json!({ "value": null })),
+        _ if path.starts_with("/session/df-1/element/") => element_command_response(&path, state),
+        _ if path == "/session/df-1/execute/sync" => MockResponse::json(200, json!({ "value": null })),
         _ => MockResponse::json(200, json!({ "value": null })),
     }
+}
+
+fn normalize_signed_path(request: &CapturedRequest, options: &WebDriverMockOptions) -> Option<String> {
+    let (path, query) = request
+        .path
+        .split_once('?')
+        .map_or((request.path.as_str(), ""), |(path, query)| (path, query));
+
+    if let Some(required_query) = &options.required_query {
+        if query != required_query {
+            return None;
+        }
+    }
+
+    if options.path_prefix.is_empty() {
+        return Some(path.to_string());
+    }
+
+    path.strip_prefix(&options.path_prefix)
+        .filter(|path| path.starts_with('/'))
+        .map(ToOwned::to_owned)
 }
 
 fn element_response(request: &CapturedRequest, state: &Arc<Mutex<WebDriverState>>) -> MockResponse {
@@ -212,26 +286,21 @@ fn element_response(request: &CapturedRequest, state: &Arc<Mutex<WebDriverState>
     element("generic")
 }
 
-fn element_command_response(request: &CapturedRequest, state: &Arc<Mutex<WebDriverState>>) -> MockResponse {
-    if request.path.ends_with("/click") {
-        if request.path.contains("/element/join/") {
+fn element_command_response(path: &str, state: &Arc<Mutex<WebDriverState>>) -> MockResponse {
+    if path.ends_with("/click") {
+        if path.contains("/element/join/") {
             state.lock().unwrap().joined = true;
-        } else if request.path.contains("/element/leave/") || request.path.contains("/element/confirm/") {
+        } else if path.contains("/element/leave/") || path.contains("/element/confirm/") {
             state.lock().unwrap().joined = false;
         }
         return MockResponse::json(200, json!({ "value": null }));
     }
 
-    if let Some(attribute) = request
-        .path
-        .rsplit('/')
-        .next()
-        .filter(|_| request.path.contains("/attribute/"))
-    {
+    if let Some(attribute) = path.rsplit('/').next().filter(|_| path.contains("/attribute/")) {
         let value = match attribute {
-            "data-test-state" if request.path.contains("/element/audio/") => json!("true"),
-            "data-test-state" if request.path.contains("/element/video/") => json!("true"),
-            "data-test-state" if request.path.contains("/element/screen/") => json!("false"),
+            "data-test-state" if path.contains("/element/audio/") => json!("true"),
+            "data-test-state" if path.contains("/element/video/") => json!("true"),
+            "data-test-state" if path.contains("/element/screen/") => json!("false"),
             "aria-pressed" => Value::Null,
             "aria-label" => Value::Null,
             _ => Value::Null,
