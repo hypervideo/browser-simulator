@@ -61,6 +61,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    env:
+      DEVICE_FARM_AWS_ACCESS_KEY_ID: ${{ secrets.DEVICE_FARM_AWS_ACCESS_KEY_ID }}
+      DEVICE_FARM_AWS_SECRET_ACCESS_KEY: ${{ secrets.DEVICE_FARM_AWS_SECRET_ACCESS_KEY }}
+      DEVICE_FARM_AWS_REGION: ${{ secrets.DEVICE_FARM_AWS_REGION }}
+      DEVICE_FARM_PROJECT_ARN: ${{ secrets.DEVICE_FARM_PROJECT_ARN }}
 
     steps:
       - name: Checkout repository

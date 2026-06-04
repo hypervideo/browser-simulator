@@ -113,6 +113,10 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/${{ join(matrix.targets, '-') }}-dist-manifest.json
+      DEVICE_FARM_AWS_ACCESS_KEY_ID: ${{ secrets.DEVICE_FARM_AWS_ACCESS_KEY_ID }}
+      DEVICE_FARM_AWS_SECRET_ACCESS_KEY: ${{ secrets.DEVICE_FARM_AWS_SECRET_ACCESS_KEY }}
+      DEVICE_FARM_AWS_REGION: ${{ secrets.DEVICE_FARM_AWS_REGION }}
+      DEVICE_FARM_PROJECT_ARN: ${{ secrets.DEVICE_FARM_PROJECT_ARN }}
     steps:
       - name: enable windows longpaths
         run: |
@@ -176,6 +180,10 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
+      DEVICE_FARM_AWS_ACCESS_KEY_ID: ${{ secrets.DEVICE_FARM_AWS_ACCESS_KEY_ID }}
+      DEVICE_FARM_AWS_SECRET_ACCESS_KEY: ${{ secrets.DEVICE_FARM_AWS_SECRET_ACCESS_KEY }}
+      DEVICE_FARM_AWS_REGION: ${{ secrets.DEVICE_FARM_AWS_REGION }}
+      DEVICE_FARM_PROJECT_ARN: ${{ secrets.DEVICE_FARM_PROJECT_ARN }}
     steps:
       - uses: actions/checkout@v6
         with:
