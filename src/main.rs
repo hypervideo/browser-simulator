@@ -240,6 +240,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_aws_list_sessions_since_human_duration() {
+        let args = CliArgs::parse_from(["hyper-client-simulator", "aws", "list-sessions", "--since", "1 day"]);
+        match args.command {
+            Some(Command::Aws(aws::AwsArgs {
+                command: aws::AwsCommand::ListSessions(args),
+            })) => {
+                assert!(args.since.is_some());
+            }
+            other => panic!("expected aws list-sessions, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parses_aws_close_sessions_with_comma_separated_ids() {
         let args = CliArgs::parse_from(["hyper-client-simulator", "aws", "close-sessions", "a,b,c"]);
         match args.command {

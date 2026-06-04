@@ -49,8 +49,8 @@ pub struct ListSessionsArgs {
     /// Filter sessions by Device Farm status.
     #[clap(long, value_enum, default_value_t = ListSessionsStatus::Active)]
     pub status: ListSessionsStatus,
-    /// Only show sessions created at or after this local date/time or RFC3339 timestamp.
-    #[clap(long, value_name = "DATE", value_parser = parse_since_arg)]
+    /// Only show sessions created at or after this local date/time, RFC3339 timestamp, or relative duration.
+    #[clap(long, value_name = "DATE_OR_DURATION", value_parser = parse_since_arg)]
     pub since: Option<SinceDate>,
 }
 
@@ -250,7 +250,7 @@ fn parse_since_arg(value: &str) -> std::result::Result<SinceDate, String> {
     parse_since_epoch_seconds(value)
         .map(|epoch_seconds| SinceDate { epoch_seconds })
         .ok_or_else(|| {
-            "expected YYYY-MM-DD, YYYY-MM-DD HH:MM[:SS], YYYY-MM-DDTHH:MM[:SS], or RFC3339 timestamp".to_string()
+            "expected YYYY-MM-DD, YYYY-MM-DD HH:MM[:SS], YYYY-MM-DDTHH:MM[:SS], RFC3339 timestamp, or human duration like '1 day'".to_string()
         })
 }
 
@@ -277,11 +277,18 @@ fn parse_since_epoch_seconds(value: &str) -> Option<i64> {
         }
     }
 
-    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+    if let Some(timestamp) = NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .ok()
         .and_then(|date| date.and_hms_opt(0, 0, 0))
         .and_then(|date| Local.from_local_datetime(&date).single())
         .map(|date| date.timestamp())
+    {
+        return Some(timestamp);
+    }
+
+    let duration = humantime::parse_duration(value).ok()?;
+    let duration = chrono::Duration::from_std(duration).ok()?;
+    Local::now().checked_sub_signed(duration).map(|date| date.timestamp())
 }
 
 fn filter_sessions_since(
@@ -449,6 +456,16 @@ mod tests {
         assert!(parse_since_arg("2026-06-04 10:11").is_ok());
         assert!(parse_since_arg("2026-06-04T10:11:12").is_ok());
         assert!(parse_since_arg("2026-06-04T10:11:12Z").is_ok());
+    }
+
+    #[test]
+    fn parse_since_accepts_human_duration_relative_to_now() {
+        let before = chrono::Local::now().timestamp();
+        let since = parse_since_arg("1 day").unwrap();
+        let after = chrono::Local::now().timestamp();
+
+        assert!(since.epoch_seconds >= before - 86_400);
+        assert!(since.epoch_seconds <= after - 86_400);
     }
 
     #[test]
