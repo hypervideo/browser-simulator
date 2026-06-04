@@ -3,12 +3,14 @@ use serde::{
     Serialize,
 };
 
-const DEFAULT_REGION: &str = "us-west-2";
+pub const DEVICE_FARM_AWS_ACCESS_KEY_ID: &str = env!("DEVICE_FARM_AWS_ACCESS_KEY_ID");
+pub const DEVICE_FARM_AWS_SECRET_ACCESS_KEY: &str = env!("DEVICE_FARM_AWS_SECRET_ACCESS_KEY");
+pub const DEVICE_FARM_AWS_REGION: &str = env!("DEVICE_FARM_AWS_REGION");
+pub const DEVICE_FARM_PROJECT_ARN: &str = env!("DEVICE_FARM_PROJECT_ARN");
 
 /// Configuration for the AWS Device Farm desktop-browser ("Test Grid") backend.
 ///
-/// Credentials are NOT stored here; they are resolved from the standard AWS
-/// credential chain (env vars / shared profile) by `aws-config` at runtime.
+/// Credentials are embedded at compile time.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeviceFarmConfig {
     /// ARN of the Device Farm Test Grid project (from Terraform output).
@@ -37,8 +39,8 @@ impl DeviceFarmConfig {
 impl Default for DeviceFarmConfig {
     fn default() -> Self {
         Self {
-            project_arn: String::new(),
-            region: DEFAULT_REGION.to_owned(),
+            project_arn: DEVICE_FARM_PROJECT_ARN.to_owned(),
+            region: DEVICE_FARM_AWS_REGION.to_owned(),
             url_expires_seconds: 300,
             session_max_duration_ms: 1_800_000,
             idle_timeout_ms: 180_000,
@@ -57,7 +59,8 @@ mod tests {
     #[test]
     fn default_targets_us_west_2_and_is_default() {
         let config = DeviceFarmConfig::default();
-        assert_eq!(config.region, "us-west-2");
+        assert_eq!(config.region, DEVICE_FARM_AWS_REGION);
+        assert_eq!(config.project_arn, DEVICE_FARM_PROJECT_ARN);
         assert!(config.is_default());
         // Poll interval must stay safely inside the idle timeout window.
         assert!(config.health_poll_interval_ms < config.idle_timeout_ms);

@@ -1,3 +1,7 @@
+use client_simulator_config::{
+    DEVICE_FARM_AWS_ACCESS_KEY_ID,
+    DEVICE_FARM_AWS_SECRET_ACCESS_KEY,
+};
 use eyre::{
     Context as _,
     Result,
@@ -33,8 +37,16 @@ impl AwsTestGrid {
         self.client
             .get_or_init(|| async move {
                 let region = aws_sdk_devicefarm::config::Region::new(region);
+                let credentials = aws_sdk_devicefarm::config::Credentials::new(
+                    DEVICE_FARM_AWS_ACCESS_KEY_ID,
+                    DEVICE_FARM_AWS_SECRET_ACCESS_KEY,
+                    None,
+                    None,
+                    "embedded-device-farm-env",
+                );
                 let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
                     .region(region)
+                    .credentials_provider(credentials)
                     .load()
                     .await;
                 aws_sdk_devicefarm::Client::new(&config)
