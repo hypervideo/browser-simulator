@@ -94,11 +94,23 @@ pub async fn run(args: HeadlessArgs, filter: EnvFilter) -> Result<i32> {
     let participant_configs = build_participant_configs(global_config.clone(), &args.participants)?;
     let store = client_simulator_browser::participant::ParticipantStore::new(global_config.data_dir());
 
-    for config in &participant_configs {
-        store.spawn(config).context("Failed to spawn participant")?;
-    }
+    spawn_participants_or_shutdown(&store, &participant_configs).await?;
 
     Ok(wait_for_exit(store).await)
+}
+
+async fn spawn_participants_or_shutdown(
+    store: &client_simulator_browser::participant::ParticipantStore,
+    participant_configs: &[Config],
+) -> Result<()> {
+    for config in participant_configs {
+        if let Err(err) = store.spawn(config).context("Failed to spawn participant") {
+            store.shutdown_all().await;
+            return Err(err);
+        }
+    }
+
+    Ok(())
 }
 
 fn apply_cli_overrides(config: &mut Config, args: &HeadlessArgs) {
@@ -522,6 +534,32 @@ mod tests {
         let code = wait_for_exit_with(pending(), ready(()), pending, || ready(())).await;
 
         assert_eq!(code, 130);
+    }
+
+    #[tokio::test]
+    async fn spawn_participants_shuts_down_already_spawned_on_later_spawn_error() {
+        let data_dir = unique_test_data_dir();
+        fs::create_dir_all(&data_dir).expect("create temp data dir");
+        let store = client_simulator_browser::participant::ParticipantStore::new(&data_dir);
+        let configs = vec![
+            Config {
+                url: Some(Url::parse("https://example.com/lite/first").expect("valid url")),
+                backend: ParticipantBackendKind::RemoteStub,
+                ..Default::default()
+            },
+            Config {
+                url: None,
+                backend: ParticipantBackendKind::RemoteStub,
+                ..Default::default()
+            },
+        ];
+
+        let error = spawn_participants_or_shutdown(&store, &configs)
+            .await
+            .expect_err("second participant should fail to spawn");
+
+        assert!(error.to_string().contains("Failed to spawn participant"));
+        assert!(store.is_empty());
     }
 
     fn unique_test_data_dir() -> PathBuf {
