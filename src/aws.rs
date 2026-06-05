@@ -18,6 +18,14 @@ use eyre::{
     Result,
 };
 use serde::Serialize;
+use std::{
+    fs,
+    path::{
+        Path,
+        PathBuf,
+    },
+    process::Command,
+};
 use tracing_subscriber::{
     fmt,
     prelude::*,
@@ -26,6 +34,9 @@ use tracing_subscriber::{
 };
 
 const DEVICE_FARM_DESKTOP_INSTANCE_MINUTE_USD: f64 = 0.005;
+const DEVICE_FARM_ACCESS_KEY_ID_SECRET_REF: &str = "op://infra/aws-device-farm-simulator-credentials/access_key_id";
+const DEVICE_FARM_SECRET_ACCESS_KEY_SECRET_REF: &str =
+    "op://infra/aws-device-farm-simulator-credentials/secret_access_key";
 
 #[derive(Args, Debug, Clone)]
 pub struct AwsArgs {
@@ -35,6 +46,8 @@ pub struct AwsArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum AwsCommand {
+    /// Configure the AWS profile used by Device Farm commands from 1Password.
+    SetupAuth,
     /// List AWS Device Farm Test Grid sessions for the configured project.
     ListSessions(ListSessionsArgs),
     /// Force-close AWS Device Farm Test Grid sessions for the configured project.
@@ -86,6 +99,10 @@ pub struct CloseSessionsArgs {
 pub async fn run(args: AwsArgs, filter: EnvFilter) -> Result<()> {
     init_logging(filter)?;
 
+    if let AwsCommand::SetupAuth = args.command {
+        return setup_auth();
+    }
+
     let config = Config::new(TuiArgs::default()).context("Failed to create config")?;
     if config.device_farm.project_arn.trim().is_empty() {
         bail!("device_farm.project_arn is not configured; set it in config.yaml before using `aws`");
@@ -93,9 +110,166 @@ pub async fn run(args: AwsArgs, filter: EnvFilter) -> Result<()> {
 
     let api = AwsTestGrid::new(&config.device_farm.region);
     match args.command {
+        AwsCommand::SetupAuth => unreachable!("setup-auth returns before loading AWS config"),
         AwsCommand::ListSessions(args) => list_sessions(&api, &config.device_farm.project_arn, args).await,
         AwsCommand::CloseSessions(args) => close_sessions(&api, &config, args).await,
     }
+}
+
+fn setup_auth() -> Result<()> {
+    let access_key_id = read_op_secret(DEVICE_FARM_ACCESS_KEY_ID_SECRET_REF, "AWS access key ID")?;
+    let secret_access_key = read_op_secret(DEVICE_FARM_SECRET_ACCESS_KEY_SECRET_REF, "AWS secret access key")?;
+    let credentials_path = aws_credentials_path()?;
+
+    ensure_aws_profile_credentials_file(
+        &credentials_path,
+        client_simulator_config::DEVICE_FARM_AWS_PROFILE,
+        &access_key_id,
+        &secret_access_key,
+    )?;
+
+    println!(
+        "Configured AWS profile `{}` in {}.",
+        client_simulator_config::DEVICE_FARM_AWS_PROFILE,
+        credentials_path.display()
+    );
+    Ok(())
+}
+
+fn read_op_secret(secret_ref: &str, label: &str) -> Result<String> {
+    let output = Command::new("op")
+        .arg("read")
+        .arg(secret_ref)
+        .output()
+        .with_context(|| "failed to run `op`; install the 1Password CLI and sign in before running `aws setup-auth`")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("failed to read {label} from 1Password: {}", stderr.trim());
+    }
+
+    let value = String::from_utf8(output.stdout).with_context(|| format!("1Password returned non-UTF-8 {label}"))?;
+    let value = value.trim_end_matches(['\r', '\n']).to_string();
+    if value.is_empty() {
+        bail!("1Password returned an empty {label}");
+    }
+    if value.contains('\r') || value.contains('\n') {
+        bail!("1Password returned a multiline {label}, which cannot be written to AWS credentials");
+    }
+    Ok(value)
+}
+
+fn aws_credentials_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").ok_or_else(|| eyre::eyre!("HOME is not set"))?;
+    Ok(PathBuf::from(home).join(".aws").join("credentials"))
+}
+
+fn ensure_aws_profile_credentials_file(
+    path: &Path,
+    profile_name: &str,
+    access_key_id: &str,
+    secret_access_key: &str,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error).with_context(|| format!("failed to read {}", path.display())),
+    };
+    let contents = ensure_aws_profile_credentials(&contents, profile_name, access_key_id, secret_access_key);
+
+    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))?;
+    set_credentials_file_permissions(path)?;
+    Ok(())
+}
+
+fn ensure_aws_profile_credentials(
+    contents: &str,
+    profile_name: &str,
+    access_key_id: &str,
+    secret_access_key: &str,
+) -> String {
+    let mut output = Vec::new();
+    let mut in_target_profile = false;
+    let mut found_target_profile = false;
+
+    for line in contents.lines() {
+        if let Some(section) = aws_credentials_section_name(line) {
+            if in_target_profile {
+                push_aws_profile_credentials(&mut output, access_key_id, secret_access_key);
+            }
+            in_target_profile = section == profile_name;
+            found_target_profile |= in_target_profile;
+            output.push(line.to_string());
+            continue;
+        }
+
+        if in_target_profile && is_aws_profile_credential_key(line) {
+            continue;
+        }
+
+        output.push(line.to_string());
+    }
+
+    if in_target_profile {
+        push_aws_profile_credentials(&mut output, access_key_id, secret_access_key);
+    } else if !found_target_profile {
+        if output.last().is_some_and(|line| !line.is_empty()) {
+            output.push(String::new());
+        }
+        output.push(format!("[{profile_name}]"));
+        push_aws_profile_credentials(&mut output, access_key_id, secret_access_key);
+    }
+
+    let mut contents = output.join("\n");
+    contents.push('\n');
+    contents
+}
+
+fn aws_credentials_section_name(line: &str) -> Option<&str> {
+    let line = line.trim();
+    line.strip_prefix('[')?.strip_suffix(']').map(str::trim)
+}
+
+fn is_aws_profile_credential_key(line: &str) -> bool {
+    let Some((key, _)) = line.split_once('=') else {
+        return false;
+    };
+    matches!(
+        key.trim(),
+        "aws_access_key_id" | "aws_secret_access_key" | "aws_session_token"
+    )
+}
+
+fn push_aws_profile_credentials(output: &mut Vec<String>, access_key_id: &str, secret_access_key: &str) {
+    let mut trailing_blank_lines = 0;
+    while output.last().is_some_and(|line| line.is_empty()) {
+        output.pop();
+        trailing_blank_lines += 1;
+    }
+
+    output.push(format!("aws_access_key_id = {access_key_id}"));
+    output.push(format!("aws_secret_access_key = {secret_access_key}"));
+
+    for _ in 0..trailing_blank_lines {
+        output.push(String::new());
+    }
+}
+
+#[cfg(unix)]
+fn set_credentials_file_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("failed to set permissions on {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_credentials_file_permissions(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 async fn list_sessions(api: &AwsTestGrid, project_arn: &str, args: ListSessionsArgs) -> Result<()> {
@@ -540,6 +714,32 @@ mod tests {
         );
 
         assert_eq!(targets, vec!["b", "a", "c"]);
+    }
+
+    #[test]
+    fn ensure_aws_profile_credentials_appends_missing_profile() {
+        let updated =
+            ensure_aws_profile_credentials("[default]\naws_access_key_id = old\n", "sim", "new-key", "new-secret");
+
+        assert_eq!(
+            updated,
+            "[default]\naws_access_key_id = old\n\n[sim]\naws_access_key_id = new-key\naws_secret_access_key = new-secret\n"
+        );
+    }
+
+    #[test]
+    fn ensure_aws_profile_credentials_replaces_existing_profile_credentials() {
+        let updated = ensure_aws_profile_credentials(
+            "[default]\naws_access_key_id = old\n\n[sim]\naws_access_key_id = stale\naws_secret_access_key = stale\naws_session_token = stale\nregion = us-west-2\n\n[other]\naws_access_key_id = keep\n",
+            "sim",
+            "new-key",
+            "new-secret",
+        );
+
+        assert_eq!(
+            updated,
+            "[default]\naws_access_key_id = old\n\n[sim]\nregion = us-west-2\naws_access_key_id = new-key\naws_secret_access_key = new-secret\n\n[other]\naws_access_key_id = keep\n"
+        );
     }
 
     fn session_fixture(session_id: &str, status: &str) -> DeviceFarmSessionInfo {

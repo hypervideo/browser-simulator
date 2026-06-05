@@ -277,6 +277,17 @@ mod tests {
             other => panic!("expected aws close-sessions, got {other:?}"),
         }
     }
+
+    #[test]
+    fn parses_aws_setup_auth() {
+        let args = CliArgs::parse_from(["hyper-client-simulator", "aws", "setup-auth"]);
+        match args.command {
+            Some(Command::Aws(aws::AwsArgs {
+                command: aws::AwsCommand::SetupAuth,
+            })) => {}
+            other => panic!("expected aws setup-auth, got {other:?}"),
+        }
+    }
 }
 
 #[derive(clap::Args, Debug, Clone)]

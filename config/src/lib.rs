@@ -35,11 +35,16 @@ pub use client_config::{
 pub use cloudflare_config::CloudflareConfig;
 use color_eyre::Result;
 pub use device_farm_config::{
+    default_device_farm_project_arn,
+    default_device_farm_region,
+    device_farm_aws_access_key_id,
+    device_farm_aws_secret_access_key,
     DeviceFarmConfig,
-    DEVICE_FARM_AWS_ACCESS_KEY_ID,
-    DEVICE_FARM_AWS_REGION,
-    DEVICE_FARM_AWS_SECRET_ACCESS_KEY,
-    DEVICE_FARM_PROJECT_ARN,
+    DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV,
+    DEVICE_FARM_AWS_PROFILE,
+    DEVICE_FARM_AWS_REGION_ENV,
+    DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV,
+    DEVICE_FARM_PROJECT_ARN_ENV,
 };
 use eyre::Context as _;
 pub use participant_config::{
@@ -104,8 +109,8 @@ const fn default_auto_gain_control() -> bool {
 impl Default for Config {
     fn default() -> Self {
         let mut config: Self = yaml_serde::from_str(DEFAULT_CONFIG).expect("Failed to parse default config");
-        config.device_farm.project_arn = DEVICE_FARM_PROJECT_ARN.to_owned();
-        config.device_farm.region = DEVICE_FARM_AWS_REGION.to_owned();
+        config.device_farm.project_arn = default_device_farm_project_arn();
+        config.device_farm.region = default_device_farm_region();
         config
     }
 }
