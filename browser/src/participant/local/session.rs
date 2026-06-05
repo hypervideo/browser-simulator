@@ -1,16 +1,15 @@
+use super::chromium_driver::ChromiumDriver;
 use crate::{
     auth::{
         BorrowedCookie,
         HyperSessionCookieManger,
     },
     participant::{
-        local::{
-            core::ParticipantInner,
-            frontend::{
-                FrontendAutomation,
-                FrontendContext,
-            },
-            lite::ParticipantInnerLite,
+        frontend::{
+            FrontendAuth,
+            FrontendAutomation,
+            FrontendContext,
+            FrontendKindBuilder,
         },
         shared::{
             messages::{
@@ -20,7 +19,6 @@ use crate::{
             DriverTermination,
             ParticipantDriverSession,
             ParticipantLaunchSpec,
-            ResolvedFrontendKind,
         },
     },
 };
@@ -57,7 +55,13 @@ use std::{
         Path,
         PathBuf,
     },
-    sync::Arc,
+    sync::{
+        atomic::{
+            AtomicBool,
+            Ordering,
+        },
+        Arc,
+    },
     time::Duration,
 };
 use tokio::{
@@ -66,13 +70,14 @@ use tokio::{
         watch,
     },
     task::JoinHandle,
+    time::timeout,
 };
 
 pub(crate) struct LocalChromiumSession {
     launch_spec: ParticipantLaunchSpec,
     browser_config: BrowserConfig,
     sender: UnboundedSender<ParticipantLogMessage>,
-    frontend_builder: Option<LocalFrontendBuilder>,
+    frontend_builder: Option<FrontendAuth>,
     automation: Option<Box<dyn FrontendAutomation>>,
     browser: Option<Browser>,
     page: Option<Page>,
@@ -80,14 +85,7 @@ pub(crate) struct LocalChromiumSession {
     detached_target_task: Option<JoinHandle<()>>,
     termination_tx: watch::Sender<Option<DriverTermination>>,
     termination_rx: watch::Receiver<Option<DriverTermination>>,
-}
-
-enum LocalFrontendBuilder {
-    HyperCore {
-        auth: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
-    },
-    HyperLite,
+    closing: Arc<AtomicBool>,
 }
 
 impl LocalChromiumSession {
@@ -98,11 +96,9 @@ impl LocalChromiumSession {
         auth: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
     ) -> Self {
-        let frontend_builder = match launch_spec.frontend_kind {
-            ResolvedFrontendKind::HyperCore => LocalFrontendBuilder::HyperCore { auth, cookie_manager },
-            ResolvedFrontendKind::HyperLite => LocalFrontendBuilder::HyperLite,
-        };
+        let frontend_builder = FrontendAuth::for_kind(launch_spec.frontend_kind, auth, cookie_manager);
         let (termination_tx, termination_rx) = watch::channel(None);
+        let closing = Arc::new(AtomicBool::new(false));
 
         Self {
             launch_spec,
@@ -116,38 +112,45 @@ impl LocalChromiumSession {
             detached_target_task: None,
             termination_tx,
             termination_rx,
+            closing,
         }
     }
 
     fn log_message(&self, level: &str, message: impl ToString) {
-        let log_message = ParticipantLogMessage::new(level, &self.launch_spec.username, message);
-        log_message.write();
-        if let Err(err) = self.sender.send(log_message) {
-            trace!(
-                participant = %self.launch_spec.username,
-                "Failed to send local driver log message: {err}"
-            );
-        }
+        log_local_message(&self.sender, &self.launch_spec.username, level, message);
     }
 
     async fn start_inner(&mut self) -> Result<()> {
+        self.closing.store(false, Ordering::SeqCst);
         let (mut browser, handler) = create_browser(&self.browser_config).await?;
-        let browser_event_task = drive_browser_events(&self.launch_spec.username, handler, self.termination_tx.clone());
+        let browser_event_task = drive_browser_events(
+            &self.launch_spec.username,
+            handler,
+            self.termination_tx.clone(),
+            Arc::clone(&self.closing),
+        );
         let page = create_page_retry(&self.launch_spec, &mut browser).await?;
-        let detached_target_task =
-            drive_detached_target_events(&self.launch_spec.username, &mut browser, self.termination_tx.clone()).await?;
+        let detached_target_task = drive_detached_target_events(
+            &self.launch_spec.username,
+            &mut browser,
+            self.termination_tx.clone(),
+            Arc::clone(&self.closing),
+        )
+        .await?;
 
-        let frontend_builder = self
+        let auth = self
             .frontend_builder
             .take()
-            .context("local frontend builder already consumed")?;
-        let automation = frontend_builder
-            .build(FrontendContext {
+            .context("local frontend auth already consumed")?;
+        let automation = FrontendKindBuilder::build(
+            FrontendContext {
                 launch_spec: self.launch_spec.clone(),
-                page: page.clone(),
+                driver: Box::new(ChromiumDriver::new(page.clone())),
                 sender: self.sender.clone(),
-            })
-            .await?;
+            },
+            auth,
+        )
+        .await?;
 
         self.browser = Some(browser);
         self.page = Some(page);
@@ -170,6 +173,8 @@ impl LocalChromiumSession {
     }
 
     async fn close_inner(&mut self) -> Result<()> {
+        self.closing.store(true, Ordering::SeqCst);
+
         if let Some(handle) = self.detached_target_task.take() {
             handle.abort();
         }
@@ -199,15 +204,53 @@ impl LocalChromiumSession {
             }
         }
 
-        if let Some(page) = self.page.take() {
-            if let Err(err) = page.close().await {
-                self.log_message("error", format!("Error closing page: {err}"));
-            }
-        }
+        self.page = None;
 
         if let Some(browser) = self.browser.as_mut() {
-            browser.close().await?;
-            browser.wait().await?;
+            let sender = self.sender.clone();
+            let participant_name = self.launch_spec.username.clone();
+
+            match timeout(BROWSER_CLOSE_COMMAND_TIMEOUT, browser.close()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => {
+                    log_local_message(
+                        &sender,
+                        &participant_name,
+                        "debug",
+                        format!("Browser close command failed during shutdown: {err}"),
+                    );
+                }
+                Err(_) => {
+                    log_local_message(
+                        &sender,
+                        &participant_name,
+                        "debug",
+                        "Timed out waiting for browser close command response, waiting for browser process exit",
+                    );
+                }
+            }
+
+            match timeout(BROWSER_EXIT_TIMEOUT, browser.wait()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => {
+                    log_local_message(
+                        &sender,
+                        &participant_name,
+                        "error",
+                        format!("Failed waiting for browser process to exit: {err}"),
+                    );
+                    self.kill_browser().await;
+                }
+                Err(_) => {
+                    log_local_message(
+                        &sender,
+                        &participant_name,
+                        "warn",
+                        "Timed out waiting for browser process to exit, killing browser",
+                    );
+                    self.kill_browser().await;
+                }
+            }
         }
 
         if let Some(handle) = self.browser_event_task.take() {
@@ -223,6 +266,8 @@ impl LocalChromiumSession {
     }
 
     async fn kill_browser(&mut self) {
+        self.closing.store(true, Ordering::SeqCst);
+
         if let Some(handle) = self.detached_target_task.take() {
             handle.abort();
         }
@@ -283,25 +328,9 @@ impl ParticipantDriverSession for LocalChromiumSession {
     }
 }
 
-impl LocalFrontendBuilder {
-    async fn build(self, context: FrontendContext) -> Result<Box<dyn FrontendAutomation>> {
-        match self {
-            Self::HyperCore { auth, cookie_manager } => {
-                let auth = if let Some(cookie) = auth {
-                    cookie
-                } else {
-                    cookie_manager
-                        .fetch_new_cookie(context.launch_spec.base_url(), context.participant_name())
-                        .await?
-                };
-                Ok(Box::new(ParticipantInner::new(context, auth)))
-            }
-            Self::HyperLite => Ok(Box::new(ParticipantInnerLite::new(context))),
-        }
-    }
-}
-
 const CHROME_BINARY_NAMES: &[&str] = &["chromium", "google-chrome", "google-chrome-stable", "chrome"];
+const BROWSER_CLOSE_COMMAND_TIMEOUT: Duration = Duration::from_secs(1);
+const BROWSER_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(any(test, target_os = "macos"))]
 const MACOS_GOOGLE_CHROME_APP_BINARY: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 #[cfg(any(test, target_os = "macos"))]
@@ -392,6 +421,22 @@ fn is_executable_file(path: &Path) -> bool {
     #[cfg(not(unix))]
     {
         true
+    }
+}
+
+fn log_local_message(
+    sender: &UnboundedSender<ParticipantLogMessage>,
+    participant_name: &str,
+    level: &str,
+    message: impl ToString,
+) {
+    let log_message = ParticipantLogMessage::new(level, participant_name, message);
+    log_message.write();
+    if let Err(err) = sender.send(log_message) {
+        trace!(
+            participant = %participant_name,
+            "Failed to send local driver log message: {err}"
+        );
     }
 }
 
@@ -545,19 +590,70 @@ mod tests {
         assert!(!audio_arg.starts_with("--"));
         assert!(!video_arg.starts_with("--"));
     }
+
+    #[test]
+    fn chromiumoxide_parses_chrome_146_request_extra_info_events() {
+        use chromiumoxide::{
+            cdp::events::CdpEvent,
+            types::Message,
+        };
+
+        let raw_event = serde_json::json!({
+            "method": "Network.requestWillBeSentExtraInfo",
+            "params": {
+                "requestId": "67875.221",
+                "associatedCookies": [],
+                "headers": {},
+                "connectTiming": {
+                    "requestTime": 1590260.969965
+                },
+                "clientSecurityState": {
+                    "initiatorIsSecureContext": true,
+                    "initiatorIPAddressSpace": "Public",
+                    "localNetworkAccessRequestPolicy": "PermissionBlock"
+                },
+                "siteHasCookieInOtherPartition": false
+            },
+            "sessionId": "CA7D85B4BA74D473D259E672BB4C4FB2"
+        });
+
+        let message: Message<chromiumoxide::cdp::CdpEventMessage> =
+            serde_json::from_value(raw_event).expect("Chrome 146 request extra info event should parse");
+
+        let Message::Event(event) = message else {
+            panic!("expected CDP event");
+        };
+
+        match event.params {
+            CdpEvent::NetworkRequestWillBeSentExtraInfo(event) => {
+                assert_eq!(event.request_id.as_ref(), "67875.221");
+                assert!(event.client_security_state.is_some());
+            }
+            other => panic!("expected Network.requestWillBeSentExtraInfo, got {other:?}"),
+        }
+    }
 }
 
 fn drive_browser_events(
     name: &str,
     mut handler: Handler,
     termination_tx: watch::Sender<Option<DriverTermination>>,
+    closing: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     let participant_name = name.to_string();
     tokio::spawn(async move {
         while let Some(event) = handler.next().await {
             if let Err(err) = event {
+                if closing.load(Ordering::SeqCst) {
+                    debug!(
+                        participant = %participant_name,
+                        "Browser event handler stopped during shutdown: {err:?}"
+                    );
+                    break;
+                }
+
                 if err.to_string().contains("ResetWithoutClosingHandshake") {
-                    error!(participant = %participant_name, "Browser unexpectedly closed");
+                    warn!(participant = %participant_name, "Browser unexpectedly closed");
                     signal_termination(
                         &termination_tx,
                         DriverTermination::new("warn", "Browser unexpectedly closed"),
@@ -566,6 +662,11 @@ fn drive_browser_events(
                 }
 
                 error!(participant = %participant_name, "error in browser handler: {err:?}");
+                signal_termination(
+                    &termination_tx,
+                    DriverTermination::new("error", format!("error in browser handler: {err:?}")),
+                );
+                break;
             }
         }
 
@@ -577,6 +678,7 @@ async fn drive_detached_target_events(
     name: &str,
     browser: &mut Browser,
     termination_tx: watch::Sender<Option<DriverTermination>>,
+    closing: Arc<AtomicBool>,
 ) -> Result<JoinHandle<()>> {
     let participant_name = Arc::new(name.to_string());
     let mut detached_event = browser
@@ -586,6 +688,11 @@ async fn drive_detached_target_events(
 
     Ok(tokio::spawn(async move {
         if detached_event.next().await.is_some() {
+            if closing.load(Ordering::SeqCst) {
+                debug!(participant = %participant_name, "Browser target detached during shutdown");
+                return;
+            }
+
             warn!(participant = %participant_name, "Browser unexpectedly closed");
             signal_termination(
                 &termination_tx,

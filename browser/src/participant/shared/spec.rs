@@ -2,7 +2,7 @@ use client_simulator_config::{
     NoiseSuppression,
     ParticipantConfig,
     TransportMode,
-    WebcamResolution,
+    VideoConstraint,
 };
 use url::Url;
 
@@ -31,7 +31,9 @@ pub(in crate::participant) struct ParticipantSettings {
     pub(in crate::participant) auto_gain_control: bool,
     pub(in crate::participant) noise_suppression: NoiseSuppression,
     pub(in crate::participant) transport: TransportMode,
-    pub(in crate::participant) resolution: WebcamResolution,
+    pub(in crate::participant) video_constraint_publish_webcam: VideoConstraint,
+    pub(in crate::participant) video_constraint_subscribe: VideoConstraint,
+    pub(in crate::participant) video_max_concurrent_tracks: Option<usize>,
     pub(in crate::participant) blur: bool,
 }
 
@@ -45,7 +47,9 @@ impl From<&ParticipantConfig> for ParticipantSettings {
             auto_gain_control: app_config.auto_gain_control,
             noise_suppression: app_config.noise_suppression,
             transport: app_config.transport,
-            resolution: app_config.resolution,
+            video_constraint_publish_webcam: app_config.video_constraint_publish_webcam,
+            video_constraint_subscribe: app_config.video_constraint_subscribe,
+            video_max_concurrent_tracks: app_config.video_max_concurrent_tracks,
             blur: app_config.blur,
         }
     }
@@ -89,7 +93,7 @@ mod tests {
         NoiseSuppression,
         ParticipantConfig,
         TransportMode,
-        WebcamResolution,
+        VideoConstraint,
     };
     use url::Url;
 
@@ -105,7 +109,9 @@ mod tests {
                 auto_gain_control: true,
                 noise_suppression: NoiseSuppression::RNNoise,
                 transport: TransportMode::WebRTC,
-                resolution: WebcamResolution::P720,
+                video_constraint_publish_webcam: VideoConstraint::P480,
+                video_constraint_subscribe: VideoConstraint::P720,
+                video_max_concurrent_tracks: Some(2),
                 blur: true,
                 ..Default::default()
             },
@@ -122,7 +128,9 @@ mod tests {
         assert!(spec.settings.auto_gain_control);
         assert_eq!(spec.settings.noise_suppression, NoiseSuppression::RNNoise);
         assert_eq!(spec.settings.transport, TransportMode::WebRTC);
-        assert_eq!(spec.settings.resolution, WebcamResolution::P720);
+        assert_eq!(spec.settings.video_constraint_publish_webcam, VideoConstraint::P480);
+        assert_eq!(spec.settings.video_constraint_subscribe, VideoConstraint::P720);
+        assert_eq!(spec.settings.video_max_concurrent_tracks, Some(2));
         assert!(spec.settings.blur);
     }
 }

@@ -60,6 +60,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          token: ${{ secrets.CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN }}
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -112,6 +113,10 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/${{ join(matrix.targets, '-') }}-dist-manifest.json
+      DEVICE_FARM_AWS_ACCESS_KEY_ID: ${{ secrets.DEVICE_FARM_AWS_ACCESS_KEY_ID }}
+      DEVICE_FARM_AWS_SECRET_ACCESS_KEY: ${{ secrets.DEVICE_FARM_AWS_SECRET_ACCESS_KEY }}
+      DEVICE_FARM_AWS_REGION: ${{ secrets.DEVICE_FARM_AWS_REGION }}
+      DEVICE_FARM_PROJECT_ARN: ${{ secrets.DEVICE_FARM_PROJECT_ARN }}
     steps:
       - name: enable windows longpaths
         run: |
@@ -120,6 +125,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          token: ${{ secrets.CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN }}
       - name: Install Rust non-interactively if not already installed
         if: ${{ matrix.container }}
         run: |
@@ -174,11 +180,16 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
+      DEVICE_FARM_AWS_ACCESS_KEY_ID: ${{ secrets.DEVICE_FARM_AWS_ACCESS_KEY_ID }}
+      DEVICE_FARM_AWS_SECRET_ACCESS_KEY: ${{ secrets.DEVICE_FARM_AWS_SECRET_ACCESS_KEY }}
+      DEVICE_FARM_AWS_REGION: ${{ secrets.DEVICE_FARM_AWS_REGION }}
+      DEVICE_FARM_PROJECT_ARN: ${{ secrets.DEVICE_FARM_PROJECT_ARN }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
           submodules: recursive
+          token: ${{ secrets.CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN }}
       - name: Install cached dist
         uses: actions/download-artifact@v7
         with:
@@ -229,6 +240,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          token: ${{ secrets.CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN }}
       - name: Install cached dist
         uses: actions/download-artifact@v7
         with:
@@ -341,3 +353,4 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          token: ${{ secrets.CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN }}

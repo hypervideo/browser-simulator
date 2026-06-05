@@ -1,6 +1,10 @@
 default:
     just --list
 
+setup:
+    git submodule update --init --recursive
+    cat .env.tpl | op inject > .env
+
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 run *flags="":

@@ -33,10 +33,20 @@ cloudflare:
   selector_timeout_ms: 20000
   debug: false
   health_poll_interval_ms: 5000
+device_farm:
+  project_arn: ''
+  region: us-west-2
+  url_expires_seconds: 300
+  session_max_duration_ms: 1800000
+  idle_timeout_ms: 180000
+  health_poll_interval_ms: 30000
+  debug: false
 audio_enabled: true
 video_enabled: true
 auto_gain_control: true
 noise_suppression: none
 transport: webtransport
-resolution: auto
+video_constraint_publish_webcam: none
+video_constraint_subscribe: none
+video_max_concurrent_tracks:
 blur: false

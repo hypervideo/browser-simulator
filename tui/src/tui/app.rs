@@ -188,6 +188,11 @@ impl App {
                 Action::ForceQuit => {
                     if self.shutdown_in_progress {
                         warn!("Force quitting while participant shutdown is still in progress");
+                        // Follow-up hardening: force quit currently lets Tokio
+                        // tear down tasks that may still own browser driver
+                        // handles. A safer force path would track participant
+                        // task handles and run a bounded driver cleanup, or
+                        // explicitly suppress driver Drop cleanup, before exit.
                         self.should_quit = true;
                     } else {
                         self.begin_shutdown(action_tx.clone());

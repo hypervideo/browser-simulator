@@ -26,7 +26,17 @@ use eyre::{
     OptionExt as _,
     Result,
 };
-use std::sync::Arc;
+use futures::{
+    future::{
+        BoxFuture,
+        Shared,
+    },
+    FutureExt as _,
+};
+use std::{
+    fmt,
+    sync::Arc,
+};
 use tokio::{
     sync::{
         mpsc::{
@@ -36,6 +46,7 @@ use tokio::{
         },
         watch,
     },
+    task::JoinHandle,
     time::{
         timeout,
         Duration,
@@ -47,6 +58,8 @@ use tokio_util::sync::{
 };
 
 mod cloudflare;
+pub mod device_farm;
+mod frontend;
 mod local;
 mod remote_stub;
 pub mod shared;
@@ -56,19 +69,68 @@ pub use shared::{
     ParticipantStore,
 };
 
+#[cfg(not(test))]
+const PARTICIPANT_CLOSE_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const PARTICIPANT_CLOSE_PROGRESS_INTERVAL: Duration = Duration::from_millis(10);
+
 /// Handle to a participant session managed by the participant runtime.
 #[derive(Debug, Clone)]
 pub struct Participant {
     pub name: String,
     pub created: chrono::DateTime<chrono::Utc>,
     pub state: watch::Receiver<ParticipantState>,
-    _participant_task_guard: Arc<DropGuard>,
+    participant_task: ParticipantTaskControl,
     sender: UnboundedSender<ParticipantMessage>,
+    close_strategy: CloseStrategy,
 }
 
 impl PartialEq for Participant {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseStrategy {
+    DriverCloseOnly,
+    LeaveBeforeClose,
+}
+
+#[derive(Clone)]
+struct ParticipantTaskControl {
+    cancellation_token: CancellationToken,
+    _drop_guard: Arc<DropGuard>,
+    completion: Shared<BoxFuture<'static, Option<String>>>,
+}
+
+impl fmt::Debug for ParticipantTaskControl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParticipantTaskControl").finish_non_exhaustive()
+    }
+}
+
+impl ParticipantTaskControl {
+    fn new(cancellation_token: CancellationToken, drop_guard: DropGuard, handle: JoinHandle<()>) -> Self {
+        let completion = async move { handle.await.err().map(|err| err.to_string()) }
+            .boxed()
+            .shared();
+
+        Self {
+            cancellation_token,
+            _drop_guard: Arc::new(drop_guard),
+            completion,
+        }
+    }
+
+    fn cancel(&self) {
+        self.cancellation_token.cancel();
+    }
+
+    async fn wait(&self, participant_name: &str) {
+        if let Some(err) = self.completion.clone().await {
+            error!(participant = %participant_name, "Participant task failed while closing: {err}");
+        }
     }
 }
 
@@ -83,6 +145,7 @@ impl Participant {
             ParticipantBackendKind::Local => Self::spawn_with_app_config(config, cookie_manager),
             ParticipantBackendKind::Cloudflare => Self::spawn_cloudflare(config, cookie_manager),
             ParticipantBackendKind::RemoteStub => Self::spawn_remote_stub(config, cookie_manager),
+            ParticipantBackendKind::AwsDeviceFarm => Self::spawn_device_farm(config, cookie_manager),
         }
     }
 
@@ -123,8 +186,9 @@ impl Participant {
                 name,
                 created: chrono::Utc::now(),
                 state: state_receiver,
-                _participant_task_guard: task_guard,
+                participant_task: task_guard,
                 sender: sender_tx,
+                close_strategy: CloseStrategy::DriverCloseOnly,
             },
             receiver_rx,
         ))
@@ -152,8 +216,9 @@ impl Participant {
             name,
             created: Utc::now(),
             state: state_receiver,
-            _participant_task_guard: task_guard,
+            participant_task: task_guard,
             sender,
+            close_strategy: CloseStrategy::DriverCloseOnly,
         })
     }
 
@@ -189,8 +254,70 @@ impl Participant {
             name,
             created: Utc::now(),
             state: state_receiver,
-            _participant_task_guard: task_guard,
+            participant_task: task_guard,
             sender,
+            close_strategy: CloseStrategy::LeaveBeforeClose,
+        })
+    }
+
+    pub fn spawn_device_farm(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+        let device_farm_config = config.device_farm.clone();
+        let api = Arc::new(crate::participant::device_farm::AwsTestGrid::new(
+            &device_farm_config.region,
+        ));
+        Self::spawn_device_farm_with_api(config, cookie_manager, api)
+    }
+
+    #[doc(hidden)]
+    pub fn spawn_device_farm_with_api(
+        config: &Config,
+        cookie_manager: HyperSessionCookieManger,
+        api: Arc<dyn crate::testing::TestGridApi>,
+    ) -> Result<Self> {
+        use crate::participant::device_farm::{
+            DeviceFarmLaunchOptions,
+            DeviceFarmSession,
+        };
+
+        let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
+        let frontend_kind = ResolvedFrontendKind::from_session_url(&session_url);
+        let base_url = session_url.origin().unicode_serialization();
+        let cookie = matches!(frontend_kind, ResolvedFrontendKind::HyperCore)
+            .then(|| cookie_manager.give_cookie(&base_url))
+            .flatten();
+        let name = cookie.as_ref().map(BorrowedCookie::username);
+        let participant_config = ParticipantConfig::new(config, name)?;
+        let launch_spec = ParticipantLaunchSpec::from(participant_config);
+        let name = launch_spec.username.clone();
+
+        let device_farm_config = config.device_farm.clone();
+        let launch_options = DeviceFarmLaunchOptions::from(config);
+
+        let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
+        let (log_sender, _log_receiver) = unbounded_channel::<ParticipantLogMessage>();
+
+        let (state_receiver, task_guard) = spawn_session(
+            name.clone(),
+            receiver,
+            log_sender.clone(),
+            DeviceFarmSession::new(
+                launch_spec,
+                launch_options,
+                device_farm_config,
+                log_sender,
+                cookie,
+                cookie_manager,
+                api,
+            ),
+        );
+
+        Ok(Self {
+            name,
+            created: Utc::now(),
+            state: state_receiver,
+            participant_task: task_guard,
+            sender,
+            close_strategy: CloseStrategy::DriverCloseOnly,
         })
     }
 }
@@ -200,24 +327,19 @@ fn spawn_session<S>(
     receiver: UnboundedReceiver<ParticipantMessage>,
     log_sender: UnboundedSender<ParticipantLogMessage>,
     session: S,
-) -> (watch::Receiver<ParticipantState>, Arc<DropGuard>)
+) -> (watch::Receiver<ParticipantState>, ParticipantTaskControl)
 where
     S: ParticipantDriverSession + 'static,
 {
     let task_cancellation_token = CancellationToken::new();
+    let task_token = task_cancellation_token.clone();
     let task_cancellation_guard = task_cancellation_token.clone().drop_guard();
     let (state_sender, state_receiver) = watch::channel(Default::default());
     let task_sender_for_task = log_sender.clone();
 
-    tokio::task::spawn(async move {
-        let result = run_participant_runtime(
-            receiver,
-            log_sender.clone(),
-            state_sender,
-            session,
-            task_cancellation_token.clone(),
-        )
-        .await;
+    let handle = tokio::task::spawn(async move {
+        let result =
+            run_participant_runtime(receiver, log_sender.clone(), state_sender, session, task_token.clone()).await;
 
         if let Err(err) = result {
             error!(participant = %name, "Failed to create participant: {err}");
@@ -236,18 +358,38 @@ where
         ));
     });
 
-    (state_receiver, Arc::new(task_cancellation_guard))
+    (
+        state_receiver,
+        ParticipantTaskControl::new(task_cancellation_token, task_cancellation_guard, handle),
+    )
+}
+
+async fn wait_for_close_observed(state: &mut watch::Receiver<ParticipantState>) {
+    let mut saw_running = state.borrow().running;
+
+    loop {
+        let running = state.borrow().running;
+        if running {
+            saw_running = true;
+        } else if saw_running {
+            return;
+        }
+
+        if state.changed().await.is_err() {
+            return;
+        }
+    }
 }
 
 impl Participant {
     pub async fn close(mut self) {
         let initial_state = self.state.borrow().clone();
         if !initial_state.running {
-            debug!(participant = %self.name, "Already closed the browser");
-            return;
+            debug!(participant = %self.name, "Closing participant before it reported running");
+            self.participant_task.cancel();
         }
 
-        if initial_state.joined {
+        if self.close_strategy == CloseStrategy::LeaveBeforeClose && initial_state.joined {
             if self.sender.send(ParticipantMessage::Leave).is_err() {
                 error!(participant = %self.name, "Was not able to send ParticipantMessage::Leave message");
             } else {
@@ -269,18 +411,28 @@ impl Participant {
         }
 
         if self.sender.send(ParticipantMessage::Close).is_ok() {
-            match timeout(Duration::from_secs(10), self.state.wait_for(|state| !state.running)).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(err)) => {
-                    error!(participant = %self.name, "Failed to wait for participant to close: {err}");
-                }
-                Err(_) => {
-                    warn!(participant = %self.name, "Timed out waiting for participant to close");
+            // The timeout is only a progress heartbeat. Returning while the
+            // participant task is still running lets the TUI exit and drop
+            // driver state during Tokio shutdown.
+            loop {
+                match timeout(
+                    PARTICIPANT_CLOSE_PROGRESS_INTERVAL,
+                    wait_for_close_observed(&mut self.state),
+                )
+                .await
+                {
+                    Ok(()) => break,
+                    Err(_) => {
+                        warn!(participant = %self.name, "Still waiting for participant to close");
+                    }
                 }
             }
         } else {
             error!(participant = %self.name, "Was not able to send ParticipantMessage::Close message");
+            self.participant_task.cancel();
         }
+
+        self.participant_task.wait(&self.name).await;
     }
 
     pub fn join(&self) {
@@ -347,15 +499,446 @@ impl Participant {
         self.send_message(ParticipantMessage::SetNoiseSuppression(value));
     }
 
-    pub fn set_webcam_resolutions(&self, value: client_simulator_config::WebcamResolution) {
-        self.send_message(ParticipantMessage::SetWebcamResolutions(value));
+    pub fn set_video_constraint_publish_webcam(&self, value: client_simulator_config::VideoConstraint) {
+        self.send_message(ParticipantMessage::SetVideoConstraintPublishWebcam(value));
     }
 
-    pub fn set_webcam_resolution(&self, value: client_simulator_config::WebcamResolution) {
-        self.set_webcam_resolutions(value);
+    pub fn set_video_constraint_subscribe(&self, value: client_simulator_config::VideoConstraint) {
+        self.send_message(ParticipantMessage::SetVideoConstraintSubscribe(value));
+    }
+
+    pub fn set_video_max_concurrent_tracks(&self, value: Option<usize>) {
+        self.send_message(ParticipantMessage::SetVideoMaxConcurrentTracks(value));
     }
 
     pub fn toggle_background_blur(&self) {
         self.send_message(ParticipantMessage::ToggleBackgroundBlur);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::participant::shared::{
+        DriverTermination,
+        ParticipantState,
+    };
+    use futures::future::BoxFuture;
+    use std::{
+        future::pending,
+        sync::{
+            atomic::{
+                AtomicUsize,
+                Ordering,
+            },
+            Arc,
+            Mutex,
+        },
+    };
+    use tokio::{
+        sync::{
+            mpsc::unbounded_channel,
+            oneshot,
+        },
+        time::sleep,
+    };
+
+    struct RecordingCloseDriver {
+        commands: Arc<Mutex<Vec<ParticipantMessage>>>,
+        close_count: Arc<AtomicUsize>,
+    }
+
+    impl ParticipantDriverSession for RecordingCloseDriver {
+        fn participant_name(&self) -> &str {
+            "sim-user"
+        }
+
+        fn start(&mut self) -> BoxFuture<'_, Result<()>> {
+            async move { Ok(()) }.boxed()
+        }
+
+        fn handle_command(&mut self, message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
+            async move {
+                self.commands.lock().unwrap().push(message);
+                Ok(())
+            }
+            .boxed()
+        }
+
+        fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
+            async move {
+                Ok(ParticipantState {
+                    username: "sim-user".to_string(),
+                    running: true,
+                    joined: true,
+                    ..Default::default()
+                })
+            }
+            .boxed()
+        }
+
+        fn close(&mut self) -> BoxFuture<'_, Result<()>> {
+            async move {
+                self.close_count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            .boxed()
+        }
+
+        fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
+            async move { pending::<DriverTermination>().await }.boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn close_uses_driver_close_without_sending_leave_first() {
+        let (command_tx, command_rx) = unbounded_channel();
+        let (log_tx, _log_rx) = unbounded_channel();
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let close_count = Arc::new(AtomicUsize::new(0));
+        let (state, task_guard) = spawn_session(
+            "sim-user".to_string(),
+            command_rx,
+            log_tx,
+            RecordingCloseDriver {
+                commands: Arc::clone(&commands),
+                close_count: Arc::clone(&close_count),
+            },
+        );
+
+        let participant = Participant {
+            name: "sim-user".to_string(),
+            created: Utc::now(),
+            state,
+            participant_task: task_guard,
+            sender: command_tx,
+            close_strategy: CloseStrategy::DriverCloseOnly,
+        };
+
+        participant
+            .state
+            .clone()
+            .wait_for(|state| state.running && state.joined)
+            .await
+            .unwrap();
+
+        participant.close().await;
+
+        assert_eq!(close_count.load(Ordering::SeqCst), 1);
+        assert!(commands.lock().unwrap().is_empty());
+    }
+
+    struct BlockingCloseDriver {
+        close_rx: Option<oneshot::Receiver<()>>,
+    }
+
+    impl ParticipantDriverSession for BlockingCloseDriver {
+        fn participant_name(&self) -> &str {
+            "sim-user"
+        }
+
+        fn start(&mut self) -> BoxFuture<'_, Result<()>> {
+            async move { Ok(()) }.boxed()
+        }
+
+        fn handle_command(&mut self, _message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
+            async move { Ok(()) }.boxed()
+        }
+
+        fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
+            async move {
+                Ok(ParticipantState {
+                    username: "sim-user".to_string(),
+                    running: true,
+                    joined: true,
+                    ..Default::default()
+                })
+            }
+            .boxed()
+        }
+
+        fn close(&mut self) -> BoxFuture<'_, Result<()>> {
+            let close_rx = self.close_rx.take().expect("close should be called once");
+            async move {
+                let _ = close_rx.await;
+                Ok(())
+            }
+            .boxed()
+        }
+
+        fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
+            async move { pending::<DriverTermination>().await }.boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn close_keeps_waiting_after_progress_timeout_until_driver_stops() {
+        let (command_tx, command_rx) = unbounded_channel();
+        let (log_tx, _log_rx) = unbounded_channel();
+        let (close_tx, close_rx) = oneshot::channel();
+        let (state, task_guard) = spawn_session(
+            "sim-user".to_string(),
+            command_rx,
+            log_tx,
+            BlockingCloseDriver {
+                close_rx: Some(close_rx),
+            },
+        );
+
+        let participant = Participant {
+            name: "sim-user".to_string(),
+            created: Utc::now(),
+            state,
+            participant_task: task_guard,
+            sender: command_tx,
+            close_strategy: CloseStrategy::DriverCloseOnly,
+        };
+
+        participant
+            .state
+            .clone()
+            .wait_for(|state| state.running && state.joined)
+            .await
+            .unwrap();
+
+        let state = participant.state.clone();
+        let close_task = tokio::spawn(participant.close());
+
+        sleep(PARTICIPANT_CLOSE_PROGRESS_INTERVAL * 2).await;
+        assert!(!close_task.is_finished());
+
+        close_tx.send(()).unwrap();
+        timeout(Duration::from_secs(1), close_task).await.unwrap().unwrap();
+        assert!(!state.borrow().running);
+    }
+
+    struct CancelGuard {
+        cancel_count: Arc<AtomicUsize>,
+        disarmed: bool,
+    }
+
+    impl CancelGuard {
+        fn new(cancel_count: Arc<AtomicUsize>) -> Self {
+            Self {
+                cancel_count,
+                disarmed: false,
+            }
+        }
+
+        fn disarm(&mut self) {
+            self.disarmed = true;
+        }
+    }
+
+    impl Drop for CancelGuard {
+        fn drop(&mut self) {
+            if !self.disarmed {
+                self.cancel_count.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    struct BlockingStartDriver {
+        start_rx: Option<oneshot::Receiver<()>>,
+        start_cancel_count: Arc<AtomicUsize>,
+        close_count: Arc<AtomicUsize>,
+    }
+
+    impl ParticipantDriverSession for BlockingStartDriver {
+        fn participant_name(&self) -> &str {
+            "sim-user"
+        }
+
+        fn start(&mut self) -> BoxFuture<'_, Result<()>> {
+            let start_rx = self.start_rx.take().expect("start should be called once");
+            let start_cancel_count = Arc::clone(&self.start_cancel_count);
+            async move {
+                let mut cancel_guard = CancelGuard::new(start_cancel_count);
+                let _ = start_rx.await;
+                cancel_guard.disarm();
+                Ok(())
+            }
+            .boxed()
+        }
+
+        fn handle_command(&mut self, _message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
+            async move { Ok(()) }.boxed()
+        }
+
+        fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
+            async move {
+                Ok(ParticipantState {
+                    username: "sim-user".to_string(),
+                    running: true,
+                    joined: true,
+                    ..Default::default()
+                })
+            }
+            .boxed()
+        }
+
+        fn close(&mut self) -> BoxFuture<'_, Result<()>> {
+            async move {
+                self.close_count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            .boxed()
+        }
+
+        fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
+            async move { pending::<DriverTermination>().await }.boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn close_does_not_cancel_start_after_running_state_is_published() {
+        let (command_tx, command_rx) = unbounded_channel();
+        let (log_tx, _log_rx) = unbounded_channel();
+        let (start_tx, start_rx) = oneshot::channel();
+        let start_cancel_count = Arc::new(AtomicUsize::new(0));
+        let close_count = Arc::new(AtomicUsize::new(0));
+        let (state, task_guard) = spawn_session(
+            "sim-user".to_string(),
+            command_rx,
+            log_tx,
+            BlockingStartDriver {
+                start_rx: Some(start_rx),
+                start_cancel_count: Arc::clone(&start_cancel_count),
+                close_count: Arc::clone(&close_count),
+            },
+        );
+
+        let participant = Participant {
+            name: "sim-user".to_string(),
+            created: Utc::now(),
+            state: state.clone(),
+            participant_task: task_guard,
+            sender: command_tx,
+            close_strategy: CloseStrategy::DriverCloseOnly,
+        };
+
+        state
+            .clone()
+            .wait_for(|state| state.running)
+            .await
+            .expect("participant should publish running state before start completes");
+
+        let close_task = tokio::spawn(participant.close());
+
+        sleep(PARTICIPANT_CLOSE_PROGRESS_INTERVAL * 2).await;
+        assert!(!close_task.is_finished());
+        assert_eq!(start_cancel_count.load(Ordering::SeqCst), 0);
+        assert_eq!(close_count.load(Ordering::SeqCst), 0);
+
+        start_tx.send(()).unwrap();
+        timeout(Duration::from_secs(1), close_task).await.unwrap().unwrap();
+        assert_eq!(start_cancel_count.load(Ordering::SeqCst), 0);
+        assert_eq!(close_count.load(Ordering::SeqCst), 1);
+        assert!(!state.borrow().running);
+    }
+
+    struct PendingStartDriver {
+        close_count: Arc<AtomicUsize>,
+    }
+
+    impl ParticipantDriverSession for PendingStartDriver {
+        fn participant_name(&self) -> &str {
+            "sim-user"
+        }
+
+        fn start(&mut self) -> BoxFuture<'_, Result<()>> {
+            async move { pending::<Result<()>>().await }.boxed()
+        }
+
+        fn handle_command(&mut self, _message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
+            async move { Ok(()) }.boxed()
+        }
+
+        fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
+            async move {
+                Ok(ParticipantState {
+                    username: "sim-user".to_string(),
+                    running: true,
+                    joined: true,
+                    ..Default::default()
+                })
+            }
+            .boxed()
+        }
+
+        fn close(&mut self) -> BoxFuture<'_, Result<()>> {
+            async move {
+                self.close_count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            .boxed()
+        }
+
+        fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
+            async move { pending::<DriverTermination>().await }.boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn close_cleans_up_participant_before_running_state_is_published() {
+        let (command_tx, command_rx) = unbounded_channel();
+        let (log_tx, _log_rx) = unbounded_channel();
+        let close_count = Arc::new(AtomicUsize::new(0));
+        let (state, task_guard) = spawn_session(
+            "sim-user".to_string(),
+            command_rx,
+            log_tx,
+            PendingStartDriver {
+                close_count: Arc::clone(&close_count),
+            },
+        );
+
+        let participant = Participant {
+            name: "sim-user".to_string(),
+            created: Utc::now(),
+            state: state.clone(),
+            participant_task: task_guard,
+            sender: command_tx,
+            close_strategy: CloseStrategy::DriverCloseOnly,
+        };
+
+        participant.close().await;
+
+        assert_eq!(close_count.load(Ordering::SeqCst), 1);
+        assert!(!state.borrow().running);
+    }
+
+    #[tokio::test]
+    async fn racing_close_callers_all_wait_for_runtime_task_completion() {
+        let (command_tx, command_rx) = unbounded_channel();
+        drop(command_rx);
+        let (_state_tx, state) = watch::channel(ParticipantState::default());
+        let task_cancellation_token = CancellationToken::new();
+        let task_cancellation_guard = task_cancellation_token.clone().drop_guard();
+        let (release_task_tx, release_task_rx) = oneshot::channel();
+        let task_handle = tokio::spawn(async move {
+            let _ = release_task_rx.await;
+        });
+        let participant_task =
+            ParticipantTaskControl::new(task_cancellation_token, task_cancellation_guard, task_handle);
+        let participant = Participant {
+            name: "sim-user".to_string(),
+            created: Utc::now(),
+            state,
+            participant_task,
+            sender: command_tx,
+            close_strategy: CloseStrategy::DriverCloseOnly,
+        };
+
+        let close_task_one = tokio::spawn(participant.clone().close());
+        let close_task_two = tokio::spawn(participant.close());
+
+        sleep(PARTICIPANT_CLOSE_PROGRESS_INTERVAL * 2).await;
+        assert!(!close_task_one.is_finished());
+        assert!(!close_task_two.is_finished());
+
+        release_task_tx.send(()).unwrap();
+        timeout(Duration::from_secs(1), close_task_one).await.unwrap().unwrap();
+        timeout(Duration::from_secs(1), close_task_two).await.unwrap().unwrap();
     }
 }

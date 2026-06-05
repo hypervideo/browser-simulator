@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: ['**']
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -41,14 +44,36 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  private-submodule-notice:
+    name: Private Submodule Notice
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+
+    steps:
+      - name: Explain limited fork CI
+        run: |
+          echo "Full lint/test CI is skipped for fork pull requests because this public repository depends on the private hypervideo/cloudflare-browser-simulator submodule."
+          echo "Run the full workflow from a trusted branch after review."
+
   lint-and-test:
     name: Lint and Test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    env:
+      DEVICE_FARM_AWS_ACCESS_KEY_ID: ${{ secrets.DEVICE_FARM_AWS_ACCESS_KEY_ID }}
+      DEVICE_FARM_AWS_SECRET_ACCESS_KEY: ${{ secrets.DEVICE_FARM_AWS_SECRET_ACCESS_KEY }}
+      DEVICE_FARM_AWS_REGION: ${{ secrets.DEVICE_FARM_AWS_REGION }}
+      DEVICE_FARM_PROJECT_ARN: ${{ secrets.DEVICE_FARM_PROJECT_ARN }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
+          submodules: recursive
+          token: ${{ secrets.CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

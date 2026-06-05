@@ -3,4 +3,8 @@ extern crate tracing;
 
 pub mod auth;
 pub mod participant;
-pub mod util;
+
+#[doc(hidden)]
+pub mod testing {
+    pub use crate::participant::device_farm::TestGridApi;
+}

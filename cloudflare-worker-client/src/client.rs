@@ -220,8 +220,9 @@ mod tests {
     use crate::generated::types::{
         ParticipantSettings,
         ParticipantSettingsNoiseSuppression,
-        ParticipantSettingsResolution,
         ParticipantSettingsTransport,
+        ParticipantSettingsVideoConstraintPublishWebcam,
+        ParticipantSettingsVideoConstraintSubscribe,
         SessionCreateRequest,
         SessionCreateRequestDisplayName,
         SessionCreateRequestFrontendKind,
@@ -269,7 +270,7 @@ mod tests {
     #[tokio::test]
     async fn translates_schema_mismatches_into_rebuild_hints() {
         let response = concat!(
-            r#"{"ok":true,"sessionId":"cf-session-123","state":{"running":true,"joined":true,"muted":false,"videoActivated":true,"screenshareActivated":false,"noiseSuppression":"future-noise-model","transportMode":"webrtc","webcamResolution":"auto","backgroundBlur":false},"log":[]}"#
+            r#"{"ok":true,"sessionId":"cf-session-123","state":{"running":true,"joined":true,"muted":false,"videoActivated":true,"screenshareActivated":false,"noiseSuppression":"future-noise-model","transportMode":"webrtc","videoConstraintPublishWebcam":"none","videoConstraintSubscribe":"none","videoMaxConcurrentTracks":null,"backgroundBlur":false},"log":[]}"#
         );
         let (base_url, _request_task) = spawn_json_server(200, response).await;
         let client = CloudflareWorkerClient::new(&base_url, Duration::from_secs(5)).unwrap();
@@ -300,9 +301,11 @@ mod tests {
                 auto_gain_control: true,
                 blur: false,
                 noise_suppression: ParticipantSettingsNoiseSuppression::None,
-                resolution: ParticipantSettingsResolution::Auto,
                 screenshare_enabled: false,
                 transport: ParticipantSettingsTransport::Webrtc,
+                video_constraint_publish_webcam: ParticipantSettingsVideoConstraintPublishWebcam::None,
+                video_constraint_subscribe: ParticipantSettingsVideoConstraintSubscribe::None,
+                video_max_concurrent_tracks: None,
                 video_enabled: true,
             },
         }

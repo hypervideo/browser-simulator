@@ -6,6 +6,7 @@ mod args;
 mod browser_config;
 mod client_config;
 mod cloudflare_config;
+mod device_farm_config;
 pub mod media;
 mod participant_config;
 
@@ -26,11 +27,20 @@ pub use client_config::{
     ParticipantBackendKind,
     TransportMode,
     TransportModeIter,
-    WebcamResolution,
-    WebcamResolutionIter,
+    VideoConstraint,
+    VideoConstraintIter,
+    VideoMaxConcurrentTracksPreset,
+    VideoMaxConcurrentTracksPresetIter,
 };
 pub use cloudflare_config::CloudflareConfig;
 use color_eyre::Result;
+pub use device_farm_config::{
+    DeviceFarmConfig,
+    DEVICE_FARM_AWS_ACCESS_KEY_ID,
+    DEVICE_FARM_AWS_REGION,
+    DEVICE_FARM_AWS_SECRET_ACCESS_KEY,
+    DEVICE_FARM_PROJECT_ARN,
+};
 use eyre::Context as _;
 pub use participant_config::{
     generate_random_name,
@@ -61,6 +71,8 @@ pub struct Config {
     pub backend: ParticipantBackendKind,
     #[serde(default, skip_serializing_if = "CloudflareConfig::is_default")]
     pub cloudflare: CloudflareConfig,
+    #[serde(default, skip_serializing_if = "DeviceFarmConfig::is_default")]
+    pub device_farm: DeviceFarmConfig,
     #[serde(default)]
     pub audio_enabled: bool,
     #[serde(default)]
@@ -74,7 +86,11 @@ pub struct Config {
     #[serde(default)]
     pub transport: TransportMode,
     #[serde(default)]
-    pub resolution: WebcamResolution,
+    pub video_constraint_publish_webcam: VideoConstraint,
+    #[serde(default)]
+    pub video_constraint_subscribe: VideoConstraint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_max_concurrent_tracks: Option<usize>,
     #[serde(default)]
     pub blur: bool,
 }
@@ -87,7 +103,10 @@ const fn default_auto_gain_control() -> bool {
 
 impl Default for Config {
     fn default() -> Self {
-        yaml_serde::from_str(DEFAULT_CONFIG).expect("Failed to parse default config")
+        let mut config: Self = yaml_serde::from_str(DEFAULT_CONFIG).expect("Failed to parse default config");
+        config.device_farm.project_arn = DEVICE_FARM_PROJECT_ARN.to_owned();
+        config.device_farm.region = DEVICE_FARM_AWS_REGION.to_owned();
+        config
     }
 }
 
@@ -129,6 +148,30 @@ impl config::Source for Config {
                 .into(),
             );
         }
+        if !self.device_farm.is_default() {
+            cache.insert(
+                "device_farm".to_string(),
+                config::ValueKind::Table(HashMap::from_iter([
+                    ("project_arn".to_string(), self.device_farm.project_arn.clone().into()),
+                    ("region".to_string(), self.device_farm.region.clone().into()),
+                    (
+                        "url_expires_seconds".to_string(),
+                        self.device_farm.url_expires_seconds.into(),
+                    ),
+                    (
+                        "session_max_duration_ms".to_string(),
+                        self.device_farm.session_max_duration_ms.into(),
+                    ),
+                    ("idle_timeout_ms".to_string(), self.device_farm.idle_timeout_ms.into()),
+                    (
+                        "health_poll_interval_ms".to_string(),
+                        self.device_farm.health_poll_interval_ms.into(),
+                    ),
+                    ("debug".to_string(), self.device_farm.debug.into()),
+                ]))
+                .into(),
+            );
+        }
         if let Some(url) = &self.url {
             cache.insert("url".to_string(), url.to_string().into());
         }
@@ -142,7 +185,17 @@ impl config::Source for Config {
             self.noise_suppression.to_string().into(),
         );
         cache.insert("transport".to_string(), self.transport.to_string().into());
-        cache.insert("resolution".to_string(), self.resolution.to_string().into());
+        cache.insert(
+            "video_constraint_publish_webcam".to_string(),
+            self.video_constraint_publish_webcam.to_string().into(),
+        );
+        cache.insert(
+            "video_constraint_subscribe".to_string(),
+            self.video_constraint_subscribe.to_string().into(),
+        );
+        if let Some(value) = self.video_max_concurrent_tracks {
+            cache.insert("video_max_concurrent_tracks".to_string(), (value as i64).into());
+        }
         cache.insert("blur".to_string(), self.blur.into());
         if let Some(value) = self.fake_media_selected {
             cache.insert("fake_media_selected".to_string(), (value as u64).into());
@@ -344,5 +397,81 @@ cloudflare:
         assert_eq!(config.cloudflare.selector_timeout_ms, 10_000);
         assert!(config.cloudflare.debug);
         assert_eq!(config.cloudflare.health_poll_interval_ms, 2_000);
+    }
+
+    #[test]
+    fn parses_aws_device_farm_backend_and_nested_device_farm_config() {
+        let config: Config = config::Config::builder()
+            .add_source(Config::default())
+            .add_source(config::File::from_str(
+                r#"
+backend: aws-device-farm
+device_farm:
+  project_arn: arn:aws:devicefarm:us-west-2:123456789012:testgrid-project:abc
+  region: us-west-2
+  url_expires_seconds: 300
+  session_max_duration_ms: 1800000
+  idle_timeout_ms: 180000
+  health_poll_interval_ms: 30000
+  debug: true
+"#,
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .expect("failed to build config")
+            .try_deserialize()
+            .expect("failed to deserialize config");
+
+        assert_eq!(config.backend, ParticipantBackendKind::AwsDeviceFarm);
+        assert_eq!(
+            config.device_farm.project_arn,
+            "arn:aws:devicefarm:us-west-2:123456789012:testgrid-project:abc"
+        );
+        assert_eq!(config.device_farm.region, "us-west-2");
+        assert!(config.device_farm.debug);
+    }
+
+    #[test]
+    fn default_device_farm_config_omits_unused_timeouts() {
+        let defaults = include_str!("default-config.yaml");
+        let device_farm = defaults
+            .split_once("device_farm:\n")
+            .and_then(|(_, rest)| rest.split_once("\naudio_enabled:"))
+            .map(|(device_farm, _)| device_farm)
+            .expect("default config should contain a device_farm section");
+
+        assert!(!device_farm.contains("navigation_timeout_ms"));
+        assert!(!device_farm.contains("selector_timeout_ms"));
+    }
+
+    #[test]
+    fn parses_new_video_constraint_settings() {
+        let config: Config = config::Config::builder()
+            .add_source(Config::default())
+            .add_source(config::File::from_str(
+                r#"
+video_constraint_publish_webcam: 480p
+video_constraint_subscribe: 720p
+video_max_concurrent_tracks: 2
+"#,
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .expect("failed to build config")
+            .try_deserialize()
+            .expect("failed to deserialize config");
+
+        assert_eq!(config.video_constraint_publish_webcam, VideoConstraint::P480);
+        assert_eq!(config.video_constraint_subscribe, VideoConstraint::P720);
+        assert_eq!(config.video_max_concurrent_tracks, Some(2));
+    }
+
+    #[test]
+    fn default_video_max_concurrent_tracks_is_unlimited() {
+        let config = Config::default();
+
+        assert_eq!(config.video_constraint_publish_webcam, VideoConstraint::None);
+        assert_eq!(config.video_constraint_subscribe, VideoConstraint::None);
+        assert_eq!(config.video_max_concurrent_tracks, None);
     }
 }

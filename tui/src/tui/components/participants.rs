@@ -16,7 +16,8 @@ use client_simulator_browser::participant::ParticipantStore;
 use client_simulator_config::{
     Config,
     NoiseSuppression,
-    WebcamResolution,
+    VideoConstraint,
+    VideoMaxConcurrentTracksPreset,
 };
 use color_eyre::Result;
 use crossterm::event::KeyCode;
@@ -49,7 +50,17 @@ pub(crate) enum ParticipantsAction {
     MoveUp,
     MoveDown,
     StartSelectNoiseSuppression,
-    StartSelectResolution,
+    StartSelectVideoSetting,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Display, strum::EnumIter, strum::EnumString)]
+enum VideoSetting {
+    #[strum(to_string = "Outgoing constraint")]
+    PublishWebcam,
+    #[strum(to_string = "Incoming constraint")]
+    Subscribe,
+    #[strum(to_string = "Track limit")]
+    MaxTracks,
 }
 
 #[derive(Debug)]
@@ -61,7 +72,10 @@ pub struct Participants {
     table_state: TableState,
     keymap: Keymap,
     noise_suppression_list: Option<EnumListInput<NoiseSuppression>>,
-    resolution_list: Option<EnumListInput<WebcamResolution>>,
+    video_setting_menu: Option<EnumListInput<VideoSetting>>,
+    video_constraint_publish_webcam_list: Option<EnumListInput<VideoConstraint>>,
+    video_constraint_subscribe_list: Option<EnumListInput<VideoConstraint>>,
+    video_max_concurrent_tracks_list: Option<EnumListInput<VideoMaxConcurrentTracksPreset>>,
 }
 
 impl Participants {
@@ -74,7 +88,10 @@ impl Participants {
             table_state: TableState::default(),
             keymap: Keymap::default(),
             noise_suppression_list: None,
-            resolution_list: None,
+            video_setting_menu: None,
+            video_constraint_publish_webcam_list: None,
+            video_constraint_subscribe_list: None,
+            video_max_concurrent_tracks_list: None,
         }
     }
 
@@ -198,14 +215,12 @@ impl Component for Participants {
                     }
                     return Ok(None);
                 }
-                ParticipantsAction::StartSelectResolution => {
-                    if let Some(selected) = self.selected.as_ref().and_then(|s| self.participants.get(s)) {
-                        self.resolution_list = Some(EnumListInput::new(
-                            "Camera resolution",
-                            WebcamResolution::iter(),
-                            selected.state.borrow().webcam_resolution,
-                        ));
-                    }
+                ParticipantsAction::StartSelectVideoSetting => {
+                    self.video_setting_menu = Some(EnumListInput::new(
+                        "Video constraints",
+                        VideoSetting::iter(),
+                        VideoSetting::PublishWebcam,
+                    ));
                     return Ok(None);
                 }
             },
@@ -237,23 +252,112 @@ impl Component for Participants {
             }
         }
 
-        if let Some(mut list) = self.resolution_list.take() {
+        if let Some(mut list) = self.video_setting_menu.take() {
+            match key.code {
+                KeyCode::Enter => {
+                    if let Ok(value) = list.finish() {
+                        if let Some(selected) = self.selected.as_ref().and_then(|s| self.participants.get(s)) {
+                            let state = selected.state.borrow();
+                            match value {
+                                VideoSetting::PublishWebcam => {
+                                    self.video_constraint_publish_webcam_list = Some(EnumListInput::new(
+                                        "Outgoing webcam video constraint",
+                                        VideoConstraint::iter(),
+                                        state.video_constraint_publish_webcam,
+                                    ));
+                                }
+                                VideoSetting::Subscribe => {
+                                    self.video_constraint_subscribe_list = Some(EnumListInput::new(
+                                        "Incoming video constraint",
+                                        VideoConstraint::iter(),
+                                        state.video_constraint_subscribe,
+                                    ));
+                                }
+                                VideoSetting::MaxTracks => {
+                                    self.video_max_concurrent_tracks_list = Some(EnumListInput::new(
+                                        "Max concurrent webcam tracks",
+                                        VideoMaxConcurrentTracksPreset::iter(),
+                                        VideoMaxConcurrentTracksPreset::from_option(state.video_max_concurrent_tracks),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    return Ok(None);
+                }
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::Participants)));
+                }
+                _ => {}
+            }
+            let handled = list.handle_key_event(key);
+            self.video_setting_menu = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
+        if let Some(mut list) = self.video_constraint_publish_webcam_list.take() {
             match key.code {
                 KeyCode::Enter => {
                     if let Ok(value) = list.finish() {
                         if let Some(participant) = self.selected.as_ref().and_then(|s| self.participants.get(s)) {
-                            participant.set_webcam_resolutions(value);
+                            participant.set_video_constraint_publish_webcam(value);
                         }
                     }
                     return Ok(Some(Action::Activate(ActivateAction::Participants)));
                 }
                 KeyCode::Esc => {
-                    return Ok(Some(Action::Activate(ActivateAction::BrowserStart)));
+                    return Ok(Some(Action::Activate(ActivateAction::Participants)));
                 }
                 _ => {}
             }
             let handled = list.handle_key_event(key);
-            self.resolution_list = Some(list);
+            self.video_constraint_publish_webcam_list = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
+        if let Some(mut list) = self.video_constraint_subscribe_list.take() {
+            match key.code {
+                KeyCode::Enter => {
+                    if let Ok(value) = list.finish() {
+                        if let Some(participant) = self.selected.as_ref().and_then(|s| self.participants.get(s)) {
+                            participant.set_video_constraint_subscribe(value);
+                        }
+                    }
+                    return Ok(Some(Action::Activate(ActivateAction::Participants)));
+                }
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::Participants)));
+                }
+                _ => {}
+            }
+            let handled = list.handle_key_event(key);
+            self.video_constraint_subscribe_list = Some(list);
+            if handled {
+                return Ok(None);
+            }
+        }
+
+        if let Some(mut list) = self.video_max_concurrent_tracks_list.take() {
+            match key.code {
+                KeyCode::Enter => {
+                    if let Ok(value) = list.finish() {
+                        if let Some(participant) = self.selected.as_ref().and_then(|s| self.participants.get(s)) {
+                            participant.set_video_max_concurrent_tracks(value.to_option());
+                        }
+                    }
+                    return Ok(Some(Action::Activate(ActivateAction::Participants)));
+                }
+                KeyCode::Esc => {
+                    return Ok(Some(Action::Activate(ActivateAction::Participants)));
+                }
+                _ => {}
+            }
+            let handled = list.handle_key_event(key);
+            self.video_max_concurrent_tracks_list = Some(list);
             if handled {
                 return Ok(None);
             }
@@ -326,7 +430,7 @@ impl Component for Participants {
             )),
 
             (KeyCode::Char('r'), Some(_)) => {
-                Some(Action::ParticipantsAction(ParticipantsAction::StartSelectResolution))
+                Some(Action::ParticipantsAction(ParticipantsAction::StartSelectVideoSetting))
             }
 
             (KeyCode::Char('b'), Some(selected)) => {
@@ -351,7 +455,7 @@ impl Component for Participants {
         let [_, _, area] = header_and_two_main_areas(area)?;
 
         let help = if self.selected.is_some() {
-            " <del> to shutdown, <j>oin, <l>eave, <m>ute, <v>ideo, <s>creenshare, auto <g>ain, <n>oise suppression, <r>esolutions, <b>lur "
+            " <del> to shutdown, <j>oin, <l>eave, <m>ute, <v>ideo, <s>creenshare, auto <g>ain, <n>oise suppression, <r> video constraints, <b>lur "
         } else {
             ""
         };
@@ -382,7 +486,7 @@ impl Component for Participants {
             "Autogain",
             "Noise Suppression",
             "Transport",
-            "Resolution",
+            "Video constraints",
             "Blur",
         ];
 
@@ -411,7 +515,13 @@ impl Component for Participants {
                 let auto_gain_control = format_bool(state.auto_gain_control);
                 let noise_suppression = state.noise_suppression.to_string();
                 let transport_mode = state.transport_mode.to_string();
-                let resolution = state.webcam_resolution.to_string();
+                let publish = state.video_constraint_publish_webcam.to_string();
+                let subscribe = state.video_constraint_subscribe.to_string();
+                let tracks = state
+                    .video_max_concurrent_tracks
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "∞".to_string());
+                let video_constraints = format!("out:{publish} in:{subscribe} t:{tracks}");
                 let background_blur = format_bool(state.background_blur);
                 let cells = vec![
                     Cell::from(name),
@@ -424,7 +534,7 @@ impl Component for Participants {
                     Cell::from(auto_gain_control),
                     Cell::from(noise_suppression),
                     Cell::from(transport_mode),
-                    Cell::from(resolution),
+                    Cell::from(video_constraints),
                     Cell::from(background_blur),
                 ];
                 let style = if Some(&participant.name) == self.selected.as_ref() {
@@ -447,18 +557,18 @@ impl Component for Participants {
                     .title_bottom(Line::from(help).centered()),
             )
             .widths([
-                Constraint::Percentage(10), // Name
-                Constraint::Percentage(8),  // Created
-                Constraint::Percentage(7),  // Running
-                Constraint::Percentage(7),  // Joined
-                Constraint::Percentage(7),  // Muted
+                Constraint::Percentage(9),  // Name
+                Constraint::Percentage(7),  // Created
+                Constraint::Percentage(6),  // Running
+                Constraint::Percentage(6),  // Joined
+                Constraint::Percentage(6),  // Muted
                 Constraint::Percentage(7),  // Video active
-                Constraint::Percentage(9),  // Screenshare active
-                Constraint::Percentage(8),  // Auto gain
-                Constraint::Percentage(12), // Noise suppression
-                Constraint::Percentage(8),  // Transport mode
-                Constraint::Percentage(8),  // Resolution
-                Constraint::Percentage(9),  // Blur
+                Constraint::Percentage(8),  // Screenshare active
+                Constraint::Percentage(7),  // Auto gain
+                Constraint::Percentage(11), // Noise suppression
+                Constraint::Percentage(7),  // Transport mode
+                Constraint::Percentage(18), // Video constraints
+                Constraint::Percentage(8),  // Blur
             ])
             .column_spacing(1);
 
@@ -468,7 +578,16 @@ impl Component for Participants {
         if let Some(list) = &mut self.noise_suppression_list {
             list.draw(frame, area)?;
         }
-        if let Some(list) = &mut self.resolution_list {
+        if let Some(list) = &mut self.video_setting_menu {
+            list.draw(frame, area)?;
+        }
+        if let Some(list) = &mut self.video_constraint_publish_webcam_list {
+            list.draw(frame, area)?;
+        }
+        if let Some(list) = &mut self.video_constraint_subscribe_list {
+            list.draw(frame, area)?;
+        }
+        if let Some(list) = &mut self.video_max_concurrent_tracks_list {
             list.draw(frame, area)?;
         }
 

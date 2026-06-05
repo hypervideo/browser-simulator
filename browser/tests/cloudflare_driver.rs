@@ -9,7 +9,7 @@ use client_simulator_config::{
     CloudflareConfig,
     Config,
     ParticipantBackendKind,
-    WebcamResolution,
+    VideoConstraint,
 };
 use serde_json::{
     json,
@@ -50,7 +50,7 @@ async fn cloudflare_runtime_updates_public_participant_state_from_worker_command
             json!({
                 "ok": true,
                 "sessionId": "cf-runtime-commands",
-                "state": worker_state_json(false, false, false, "p720"),
+                "state": worker_state_json(false, false, false, "720p"),
                 "log": [],
             }),
         ),
@@ -59,7 +59,7 @@ async fn cloudflare_runtime_updates_public_participant_state_from_worker_command
             json!({
                 "ok": true,
                 "sessionId": "cf-runtime-commands",
-                "state": worker_state_json(true, false, false, "p720"),
+                "state": worker_state_json(true, false, false, "720p"),
                 "log": [],
             }),
         ),
@@ -68,7 +68,7 @@ async fn cloudflare_runtime_updates_public_participant_state_from_worker_command
             json!({
                 "ok": true,
                 "sessionId": "cf-runtime-commands",
-                "state": worker_state_json(true, true, false, "p720"),
+                "state": worker_state_json(true, true, false, "720p"),
                 "log": [],
             }),
         ),
@@ -77,7 +77,7 @@ async fn cloudflare_runtime_updates_public_participant_state_from_worker_command
             json!({
                 "ok": true,
                 "sessionId": "cf-runtime-commands",
-                "state": worker_state_json(true, true, true, "p720"),
+                "state": worker_state_json(true, true, true, "720p"),
                 "log": [],
             }),
         ),
@@ -86,7 +86,7 @@ async fn cloudflare_runtime_updates_public_participant_state_from_worker_command
             json!({
                 "ok": true,
                 "sessionId": "cf-runtime-commands",
-                "state": worker_state_json(false, true, true, "p720"),
+                "state": worker_state_json(false, true, true, "720p"),
                 "log": [],
             }),
         ),
@@ -109,7 +109,7 @@ async fn cloudflare_runtime_updates_public_participant_state_from_worker_command
     let state = participant.state.clone();
 
     let started = wait_for_state(&state, |current| {
-        current.running && !current.joined && current.webcam_resolution == WebcamResolution::P720
+        current.running && !current.joined && current.video_constraint_publish_webcam == VideoConstraint::P720
     })
     .await;
     assert!(started.running);
@@ -157,7 +157,7 @@ async fn cloudflare_runtime_survives_command_failures_and_can_still_close() {
             json!({
                 "ok": true,
                 "sessionId": "cf-runtime-errors",
-                "state": worker_state_json(false, false, false, "p720"),
+                "state": worker_state_json(false, false, false, "720p"),
                 "log": [],
             }),
         ),
@@ -187,7 +187,7 @@ async fn cloudflare_runtime_survives_command_failures_and_can_still_close() {
     let state = participant.state.clone();
 
     wait_for_state(&state, |current| {
-        current.running && !current.joined && current.webcam_resolution == WebcamResolution::P720
+        current.running && !current.joined && current.video_constraint_publish_webcam == VideoConstraint::P720
     })
     .await;
 
@@ -218,7 +218,7 @@ async fn cloudflare_runtime_marks_participant_stopped_when_worker_state_poll_fai
             json!({
                 "ok": true,
                 "sessionId": "cf-runtime-terminated",
-                "state": worker_state_json(true, false, false, "p720"),
+                "state": worker_state_json(true, false, false, "720p"),
                 "log": [],
             }),
         ),
@@ -240,7 +240,7 @@ async fn cloudflare_runtime_marks_participant_stopped_when_worker_state_poll_fai
     let state = participant.state.clone();
 
     wait_for_state(&state, |current| {
-        current.running && current.joined && current.webcam_resolution == WebcamResolution::P720
+        current.running && current.joined && current.video_constraint_publish_webcam == VideoConstraint::P720
     })
     .await;
     wait_for_state(&state, |current| !current.running).await;
@@ -277,7 +277,9 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
                     "autoGainControl": true,
                     "noiseSuppression": "ai-coustics-rook-s-48khz",
                     "transportMode": "webrtc",
-                    "webcamResolution": "p1080",
+                    "videoConstraintPublishWebcam": "1080p",
+                    "videoConstraintSubscribe": "none",
+                    "videoMaxConcurrentTracks": null,
                     "backgroundBlur": false,
                 },
                 "log": [],
@@ -288,7 +290,7 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
             json!({
                 "ok": true,
                 "sessionId": "cf-runtime-core",
-                "state": worker_state_json(false, false, false, "p720"),
+                "state": worker_state_json(false, false, false, "720p"),
                 "log": [],
             }),
         ),
@@ -314,7 +316,7 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
         current.running
             && current.joined
             && current.video_activated
-            && current.webcam_resolution == WebcamResolution::P1080
+            && current.video_constraint_publish_webcam == VideoConstraint::P1080
     })
     .await;
     assert!(started.running);
@@ -370,7 +372,7 @@ fn cloudflare_config(session_url: &str, base_url: &str, health_poll_interval_ms:
     config
 }
 
-fn worker_state_json(joined: bool, muted: bool, video_activated: bool, webcam_resolution: &str) -> Value {
+fn worker_state_json(joined: bool, muted: bool, video_activated: bool, video_constraint_publish_webcam: &str) -> Value {
     json!({
         "running": true,
         "joined": joined,
@@ -380,7 +382,9 @@ fn worker_state_json(joined: bool, muted: bool, video_activated: bool, webcam_re
         "autoGainControl": true,
         "noiseSuppression": "none",
         "transportMode": "webrtc",
-        "webcamResolution": webcam_resolution,
+        "videoConstraintPublishWebcam": video_constraint_publish_webcam,
+        "videoConstraintSubscribe": "none",
+        "videoMaxConcurrentTracks": null,
         "backgroundBlur": false,
     })
 }

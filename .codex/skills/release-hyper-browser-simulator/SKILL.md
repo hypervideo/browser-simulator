@@ -18,6 +18,7 @@ Use this skill to prepare, publish, or verify releases of the Rust workspace in 
 - Generated release workflow: `.github/workflows/release.yml`.
 - Local release helpers: `justfile`.
 - User install docs: `README.md`.
+- Cloudflare worker API schema: `cloudflare-browser-simulator` git submodule, using `cli/openapi/cloudflare-browser-simulator.json`.
 
 Before making changes, check `git status --short --branch` and work with any existing dirty files without reverting unrelated user edits.
 
@@ -30,7 +31,15 @@ Homebrew:
 - Release artifacts are hosted on GitHub.
 - Formulae are pushed to `hypervideo/homebrew-tap`.
 - CI needs the `HOMEBREW_TAP_TOKEN` secret on `hypervideo/browser-simulator`.
+- CI and release checkouts need the `CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN` secret on `hypervideo/browser-simulator`; it must be a read-only token that can fetch this public repo and the private `hypervideo/cloudflare-browser-simulator` submodule.
 - Prerelease tags do not publish to Homebrew unless `publish-prereleases` is enabled.
+
+Cloudflare worker submodule:
+
+- The worker deploys from its own repository. Do not deploy the worker from this repo's release flow.
+- The simulator release source must pin a worker submodule commit that is reachable from GitHub, not only from a local sibling checkout.
+- If the submodule pointer references a worker commit that is not pushed yet, push that worker commit first. Use a non-`main` branch if deployment should not happen; the worker repo deploy workflow deploys from `main`.
+- To consume a newer worker API, update and commit the worker repo's generated `cli/openapi/cloudflare-browser-simulator.json`, then update the submodule pointer here and make any Rust client compatibility fixes.
 
 Nix:
 
@@ -48,6 +57,8 @@ Nix:
 git fetch --tags origin
 git tag --sort=-v:refname | head
 gh release list --repo hypervideo/browser-simulator --limit 10
+git submodule update --init --recursive
+git submodule status --recursive
 ```
 
 2. Choose the next SemVer version, using a `v` prefix only for the git tag.
@@ -58,7 +69,18 @@ gh release list --repo hypervideo/browser-simulator --limit 10
 - `nix/packages.nix`: `version = "X.Y.Z";`.
 - `Cargo.lock`: refresh local package versions after the `Cargo.toml` bump.
 
-4. Validate before tagging:
+4. Confirm submodule release readiness:
+
+```sh
+git -C cloudflare-browser-simulator status --short --branch
+git -C cloudflare-browser-simulator rev-parse HEAD
+git -C cloudflare-browser-simulator fetch origin --tags
+git -C cloudflare-browser-simulator branch -r --contains HEAD
+```
+
+The submodule should be clean and its commit must be contained by an `origin/*` ref before tagging. If no remote branch or tag is printed, push the worker commit first.
+
+5. Validate before tagging:
 
 ```sh
 just fmt
@@ -95,6 +117,8 @@ Check the workflow and release:
 gh run list --repo hypervideo/browser-simulator --workflow Release --limit 10
 gh release view vX.Y.Z --repo hypervideo/browser-simulator
 ```
+
+If release checkout fails while fetching `cloudflare-browser-simulator`, confirm `CLOUDFLARE_BROWSER_SIMULATOR_READ_TOKEN` exists and can read the private worker repo, and confirm the pinned submodule commit has been pushed.
 
 Check the Homebrew tap formula:
 

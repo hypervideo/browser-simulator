@@ -3,3 +3,4 @@ target/
 tmp/
 hyper_session_cookies.json
 /.direnv/
+/.env

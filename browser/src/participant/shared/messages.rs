@@ -1,10 +1,10 @@
 use client_simulator_config::{
     NoiseSuppression,
-    WebcamResolution,
+    VideoConstraint,
 };
-use derive_more::Display;
+use std::fmt;
 
-#[derive(Clone, Display, serde::Serialize, serde::Deserialize, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub enum ParticipantMessage {
     Join,
     Leave,
@@ -14,8 +14,16 @@ pub enum ParticipantMessage {
     ToggleScreenshare,
     ToggleAutoGainControl,
     SetNoiseSuppression(NoiseSuppression),
-    SetWebcamResolutions(WebcamResolution),
+    SetVideoConstraintPublishWebcam(VideoConstraint),
+    SetVideoConstraintSubscribe(VideoConstraint),
+    SetVideoMaxConcurrentTracks(Option<usize>),
     ToggleBackgroundBlur,
+}
+
+impl fmt::Display for ParticipantMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
