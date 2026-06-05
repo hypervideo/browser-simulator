@@ -58,6 +58,11 @@ pub use shared::{
     ParticipantStore,
 };
 
+#[cfg(not(test))]
+const PARTICIPANT_CLOSE_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const PARTICIPANT_CLOSE_PROGRESS_INTERVAL: Duration = Duration::from_millis(10);
+
 /// Handle to a participant session managed by the participant runtime.
 #[derive(Debug, Clone)]
 pub struct Participant {
@@ -343,13 +348,24 @@ impl Participant {
         }
 
         if self.sender.send(ParticipantMessage::Close).is_ok() {
-            match timeout(Duration::from_secs(10), self.state.wait_for(|state| !state.running)).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(err)) => {
-                    error!(participant = %self.name, "Failed to wait for participant to close: {err}");
-                }
-                Err(_) => {
-                    warn!(participant = %self.name, "Timed out waiting for participant to close");
+            // The timeout is only a progress heartbeat. Returning while the
+            // participant task is still running lets the TUI exit and drop
+            // driver state during Tokio shutdown.
+            loop {
+                match timeout(
+                    PARTICIPANT_CLOSE_PROGRESS_INTERVAL,
+                    self.state.wait_for(|state| !state.running),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => break,
+                    Ok(Err(err)) => {
+                        error!(participant = %self.name, "Failed to wait for participant to close: {err}");
+                        break;
+                    }
+                    Err(_) => {
+                        warn!(participant = %self.name, "Still waiting for participant to close");
+                    }
                 }
             }
         } else {
@@ -460,7 +476,13 @@ mod tests {
             Mutex,
         },
     };
-    use tokio::sync::mpsc::unbounded_channel;
+    use tokio::{
+        sync::{
+            mpsc::unbounded_channel,
+            oneshot,
+        },
+        time::sleep,
+    };
 
     struct RecordingCloseDriver {
         commands: Arc<Mutex<Vec<ParticipantMessage>>>,
@@ -545,5 +567,89 @@ mod tests {
 
         assert_eq!(close_count.load(Ordering::SeqCst), 1);
         assert!(commands.lock().unwrap().is_empty());
+    }
+
+    struct BlockingCloseDriver {
+        close_rx: Option<oneshot::Receiver<()>>,
+    }
+
+    impl ParticipantDriverSession for BlockingCloseDriver {
+        fn participant_name(&self) -> &str {
+            "sim-user"
+        }
+
+        fn start(&mut self) -> BoxFuture<'_, Result<()>> {
+            async move { Ok(()) }.boxed()
+        }
+
+        fn handle_command(&mut self, _message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
+            async move { Ok(()) }.boxed()
+        }
+
+        fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
+            async move {
+                Ok(ParticipantState {
+                    username: "sim-user".to_string(),
+                    running: true,
+                    joined: true,
+                    ..Default::default()
+                })
+            }
+            .boxed()
+        }
+
+        fn close(&mut self) -> BoxFuture<'_, Result<()>> {
+            let close_rx = self.close_rx.take().expect("close should be called once");
+            async move {
+                let _ = close_rx.await;
+                Ok(())
+            }
+            .boxed()
+        }
+
+        fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
+            async move { pending::<DriverTermination>().await }.boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn close_keeps_waiting_after_progress_timeout_until_driver_stops() {
+        let (command_tx, command_rx) = unbounded_channel();
+        let (log_tx, _log_rx) = unbounded_channel();
+        let (close_tx, close_rx) = oneshot::channel();
+        let (state, task_guard) = spawn_session(
+            "sim-user".to_string(),
+            command_rx,
+            log_tx,
+            BlockingCloseDriver {
+                close_rx: Some(close_rx),
+            },
+        );
+
+        let participant = Participant {
+            name: "sim-user".to_string(),
+            created: Utc::now(),
+            state,
+            _participant_task_guard: task_guard,
+            sender: command_tx,
+            close_strategy: CloseStrategy::DriverCloseOnly,
+        };
+
+        participant
+            .state
+            .clone()
+            .wait_for(|state| state.running && state.joined)
+            .await
+            .unwrap();
+
+        let state = participant.state.clone();
+        let close_task = tokio::spawn(participant.close());
+
+        sleep(PARTICIPANT_CLOSE_PROGRESS_INTERVAL * 2).await;
+        assert!(!close_task.is_finished());
+
+        close_tx.send(()).unwrap();
+        timeout(Duration::from_secs(1), close_task).await.unwrap().unwrap();
+        assert!(!state.borrow().running);
     }
 }

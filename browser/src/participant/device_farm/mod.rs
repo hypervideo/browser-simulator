@@ -80,7 +80,10 @@ use tokio::{
         watch,
     },
     task::JoinHandle,
-    time::MissedTickBehavior,
+    time::{
+        timeout,
+        MissedTickBehavior,
+    },
 };
 #[allow(unused_imports)]
 pub(crate) use webdriver_driver::WebDriverDriver;
@@ -89,6 +92,7 @@ const DEVICE_FARM_MAX_DURATION_MIN_SECS: u64 = 180;
 const DEVICE_FARM_MAX_DURATION_MAX_SECS: u64 = 2400;
 const DEVICE_FARM_IDLE_TIMEOUT_MIN_SECS: u64 = 30;
 const DEVICE_FARM_IDLE_TIMEOUT_MAX_SECS: u64 = 900;
+const DEVICE_FARM_FRONTEND_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
@@ -327,24 +331,52 @@ impl DeviceFarmSession {
     async fn close_inner(&mut self) -> Result<()> {
         self.stop_max_duration_poller().await;
 
-        if let Some(mut automation) = self.automation.take() {
-            let joined = automation
-                .refresh_state()
-                .await
-                .map(|state| state.joined)
-                .unwrap_or(false);
-            if joined {
-                if let Err(err) = automation.leave().await {
-                    self.log_message("error", format!("Failed leaving space while closing: {err}"));
+        let mut automation = self.automation.take();
+        let driver = self.webdriver.take();
+
+        // Close has two levels: leave the meeting if the frontend still looks
+        // joined, then always tear down the Selenium session. Do not refresh
+        // state here; remote missing-selector calls can block shutdown long
+        // enough to prevent the explicit WebDriver quit below.
+        if self.cached_state.joined {
+            if let Some(automation) = automation.as_mut() {
+                match timeout(DEVICE_FARM_FRONTEND_CLOSE_TIMEOUT, automation.leave()).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => {
+                        self.log_message("error", format!("Failed leaving space while closing: {err}"));
+                    }
+                    Err(_) => {
+                        self.log_message(
+                            "warn",
+                            "Timed out leaving space while closing; closing WebDriver session",
+                        );
+                    }
                 }
             }
         }
 
-        if let Some(driver) = self.webdriver.take() {
+        if let Some(driver) = driver {
+            // Keep automation alive until after quit. It owns another
+            // WebDriver clone, and a successful quit marks the shared
+            // SessionHandle so dropping that clone will not run thirtyfour's
+            // synchronous Drop cleanup.
+            let driver_for_leak = driver.clone();
             if let Err(err) = driver.quit().await {
                 self.log_message("error", format!("Failed closing WebDriver session: {err}"));
+                // Explicit DELETE /session failed. Without this, thirtyfour
+                // will try a blocking Drop cleanup later; during Tokio runtime
+                // shutdown that fallback can panic because it schedules work on
+                // a closing executor. leak() only suppresses thirtyfour's Drop
+                // cleanup; it does not leak Rust memory. The remote AWS session
+                // may remain until its idle/max-duration timeout, which is
+                // preferable to crashing after explicit cleanup already failed.
+                if let Err(leak_err) = driver_for_leak.leak() {
+                    debug!(participant = %self.participant_name(), "Could not suppress WebDriver drop cleanup after quit failure: {leak_err}");
+                }
             }
         }
+
+        drop(automation);
 
         self.cached_state.running = false;
         self.cached_state.joined = false;
@@ -479,6 +511,14 @@ impl ParticipantDriverSession for DeviceFarmSession {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::{
+        atomic::{
+            AtomicBool,
+            Ordering,
+        },
+        Arc,
+    };
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn capabilities_clamp_aws_duration_ranges() {
@@ -498,5 +538,99 @@ mod tests {
             ..DeviceFarmConfig::default()
         };
         DeviceFarmSession::build_capabilities(&config).unwrap()
+    }
+
+    #[tokio::test]
+    async fn close_uses_cached_state_instead_of_refreshing_frontend_before_leave() {
+        let refreshed = Arc::new(AtomicBool::new(false));
+        let left = Arc::new(AtomicBool::new(false));
+        let (termination_tx, termination_rx) = watch::channel(None);
+        let (sender, _receiver) = unbounded_channel();
+
+        let mut session = DeviceFarmSession {
+            launch_spec: launch_spec(),
+            launch_options: DeviceFarmLaunchOptions {
+                headless: true,
+                fake_media: FakeMedia::default(),
+            },
+            config: DeviceFarmConfig::default(),
+            sender,
+            api: Arc::new(UnusedTestGridApi),
+            auth: None,
+            automation: Some(Box::new(RecordingAutomation {
+                refreshed: Arc::clone(&refreshed),
+                left: Arc::clone(&left),
+            })),
+            webdriver: None,
+            cached_state: ParticipantState {
+                running: true,
+                joined: true,
+                screenshare_activated: true,
+                ..Default::default()
+            },
+            termination_tx,
+            termination_rx,
+            poller_shutdown_tx: None,
+            poller_task: None,
+        };
+
+        session.close_inner().await.unwrap();
+
+        assert!(!refreshed.load(Ordering::SeqCst));
+        assert!(left.load(Ordering::SeqCst));
+        assert!(!session.cached_state.running);
+        assert!(!session.cached_state.joined);
+        assert!(!session.cached_state.screenshare_activated);
+    }
+
+    fn launch_spec() -> ParticipantLaunchSpec {
+        let config = client_simulator_config::Config {
+            url: Some("https://example.com/m/demo".parse().unwrap()),
+            ..Default::default()
+        };
+        let participant_config = client_simulator_config::ParticipantConfig::new(&config, Some("sim-user")).unwrap();
+        ParticipantLaunchSpec::from(participant_config)
+    }
+
+    struct RecordingAutomation {
+        refreshed: Arc<AtomicBool>,
+        left: Arc<AtomicBool>,
+    }
+
+    impl FrontendAutomation for RecordingAutomation {
+        fn join(&mut self) -> BoxFuture<'_, Result<()>> {
+            async { Ok(()) }.boxed()
+        }
+
+        fn leave(&mut self) -> BoxFuture<'_, Result<()>> {
+            async move {
+                self.left.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+            .boxed()
+        }
+
+        fn handle_command(&mut self, _message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
+            async { Ok(()) }.boxed()
+        }
+
+        fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
+            async move {
+                self.refreshed.store(true, Ordering::SeqCst);
+                Ok(ParticipantState {
+                    joined: true,
+                    ..Default::default()
+                })
+            }
+            .boxed()
+        }
+    }
+
+    struct UnusedTestGridApi;
+
+    impl TestGridApi for UnusedTestGridApi {
+        fn create_test_grid_url(&self, _project_arn: &str, _expires_seconds: u64) -> BoxFuture<'_, Result<String>> {
+            async { unreachable!("close test should not request a Device Farm URL") }.boxed()
+        }
     }
 }
