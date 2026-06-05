@@ -11,14 +11,16 @@ use client_simulator_config::{
 };
 use eyre::{
     bail,
-    Context as _,
     Result,
 };
 use futures::{
     future::BoxFuture,
     FutureExt as _,
 };
-use std::env::VarError;
+use std::{
+    env::VarError,
+    error::Error,
+};
 
 type DeviceFarmCredentials = aws_sdk_devicefarm::config::Credentials;
 
@@ -79,6 +81,18 @@ mod tests {
         assert_eq!(credentials.access_key_id(), "access-key");
         assert_eq!(credentials.secret_access_key(), "secret-key");
     }
+
+    #[test]
+    fn aws_device_farm_error_mentions_setup_auth_for_credential_errors() {
+        let error = aws_device_farm_error(
+            "CreateTestGridUrl failed",
+            std::io::Error::other("CredentialsNotLoaded"),
+        );
+        let error = format!("{error:?}");
+
+        assert!(error.contains("aws setup-auth"));
+        assert!(error.contains(DEVICE_FARM_AWS_PROFILE));
+    }
 }
 
 /// Real implementation backed by `aws-sdk-devicefarm`.
@@ -130,14 +144,40 @@ fn device_farm_env_credentials_from_vars(
         ))),
         (Err(VarError::NotPresent), Err(VarError::NotPresent)) => Ok(None),
         (Ok(_), Err(VarError::NotPresent)) => {
-            bail!("{DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV} is not set while {DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV} is set")
+            bail!(
+                "{}. {}",
+                format_args!(
+                    "{DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV} is not set while {DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV} is set"
+                ),
+                credential_setup_hint()
+            )
         }
         (Err(VarError::NotPresent), Ok(_)) => {
-            bail!("{DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV} is not set while {DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV} is set")
+            bail!(
+                "{}. {}",
+                format_args!(
+                    "{DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV} is not set while {DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV} is set"
+                ),
+                credential_setup_hint()
+            )
         }
         (Err(error), _) => bail!("{DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV} could not be read: {error}"),
         (_, Err(error)) => bail!("{DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV} could not be read: {error}"),
     }
+}
+
+fn aws_device_farm_error(operation: &'static str, error: impl Error + Send + Sync + 'static) -> eyre::Report {
+    let is_credential_error = format!("{error:?} {error}").to_ascii_lowercase().contains("credential");
+    let error = eyre::Report::new(error).wrap_err(operation);
+    if is_credential_error {
+        error.wrap_err(credential_setup_hint())
+    } else {
+        error
+    }
+}
+
+fn credential_setup_hint() -> String {
+    format!("Run `hyper-client-simulator aws setup-auth` to configure the `{DEVICE_FARM_AWS_PROFILE}` AWS profile")
 }
 
 impl TestGridApi for AwsTestGrid {
@@ -152,7 +192,7 @@ impl TestGridApi for AwsTestGrid {
                 .expires_in_seconds(expires_seconds as i32)
                 .send()
                 .await
-                .context("CreateTestGridUrl failed")?;
+                .map_err(|error| aws_device_farm_error("CreateTestGridUrl failed", error))?;
             output
                 .url()
                 .map(str::to_owned)
@@ -176,7 +216,7 @@ impl TestGridApi for AwsTestGrid {
             let mut pages = builder.into_paginator().send();
             let mut sessions = Vec::new();
             while let Some(page) = pages.next().await {
-                let page = page.context("ListTestGridSessions failed")?;
+                let page = page.map_err(|error| aws_device_farm_error("ListTestGridSessions failed", error))?;
                 sessions.extend(page.test_grid_sessions().iter().cloned());
             }
             Ok(sessions)
@@ -200,7 +240,7 @@ impl TestGridApi for AwsTestGrid {
                 .session_id(session_id)
                 .send()
                 .await
-                .context("GetTestGridSession failed")?;
+                .map_err(|error| aws_device_farm_error("GetTestGridSession failed", error))?;
             Ok(output.test_grid_session().cloned())
         }
         .boxed()
