@@ -67,6 +67,7 @@ pub mod shared;
 pub use shared::{
     ParticipantState,
     ParticipantStore,
+    ParticipantWarning,
 };
 
 #[cfg(not(test))]

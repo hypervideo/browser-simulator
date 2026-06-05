@@ -109,11 +109,13 @@ pub async fn run(args: AwsArgs, filter: EnvFilter) -> Result<()> {
     }
 
     let api = AwsTestGrid::new(&config.device_farm.region);
-    match args.command {
+    let result = match args.command {
         AwsCommand::SetupAuth => unreachable!("setup-auth returns before loading AWS config"),
         AwsCommand::ListSessions(args) => list_sessions(&api, &config.device_farm.project_arn, args).await,
         AwsCommand::CloseSessions(args) => close_sessions(&api, &config, args).await,
-    }
+    };
+
+    result.map_err(device_farm::wrap_device_farm_credential_error)
 }
 
 fn setup_auth() -> Result<()> {
@@ -309,6 +311,7 @@ async fn close_sessions(api: &AwsTestGrid, config: &Config, args: CloseSessionsA
             Ok(DeviceFarmCloseResult::Closed) => println!("closed {session_id}"),
             Ok(DeviceFarmCloseResult::AlreadyClosed) => println!("already closed {session_id}"),
             Err(err) => {
+                let err = device_farm::wrap_device_farm_credential_error(err);
                 println!("failed {session_id}: {err}");
                 failures.push(format!("{session_id}: {err}"));
             }

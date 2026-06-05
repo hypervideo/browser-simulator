@@ -56,6 +56,7 @@ impl ParticipantDriverSession for RemoteStubSession {
             self.state = ParticipantState {
                 username: self.launch_spec.username.clone(),
                 running: true,
+                warning: None,
                 joined: true,
                 muted: !self.launch_spec.settings.audio_enabled,
                 video_activated: self.launch_spec.settings.video_enabled,

@@ -54,6 +54,9 @@ use std::{
     time::Duration,
 };
 pub use test_grid::{
+    device_farm_credential_warning_for_error,
+    is_device_farm_credential_error,
+    wrap_device_farm_credential_error,
     AwsTestGrid,
     TestGridApi,
 };
@@ -493,6 +496,10 @@ impl ParticipantDriverSession for DeviceFarmSession {
 
     fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
         self.wait_for_termination_inner().boxed()
+    }
+
+    fn start_error_warning(&self, err: &Report) -> Option<crate::participant::ParticipantWarning> {
+        test_grid::device_farm_credential_warning_for_error(err)
     }
 
     fn state_refresh_interval(&self) -> Option<Duration> {

@@ -4,6 +4,7 @@ use super::{
         ParticipantMessage,
     },
     ParticipantState,
+    ParticipantWarning,
 };
 use eyre::{
     Report,
@@ -54,6 +55,10 @@ pub(in crate::participant) trait ParticipantDriverSession: Send {
     fn close(&mut self) -> BoxFuture<'_, Result<()>>;
     fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination>;
 
+    fn start_error_warning(&self, _err: &Report) -> Option<ParticipantWarning> {
+        None
+    }
+
     fn state_refresh_interval(&self) -> Option<Duration> {
         None
     }
@@ -98,11 +103,23 @@ where
     };
 
     if let Err(err) = start_result {
+        let warning = driver.start_error_warning(&err);
+        if let Some(warning) = warning.clone() {
+            state.send_modify(|current| {
+                current.warning = Some(warning.clone());
+            });
+            log_runtime_message(
+                &sender,
+                "warn",
+                driver.participant_name(),
+                format!("{}: {}", warning.title, warning.message),
+            );
+        }
         log_runtime_message(
             &sender,
             "error",
             driver.participant_name(),
-            format!("Failed joining the session when starting the browser: {err}"),
+            start_error_message(&err, warning.as_ref()),
         );
         if let Err(close_err) = driver.close().await {
             log_runtime_message(
@@ -258,6 +275,16 @@ where
     Ok(())
 }
 
+fn start_error_message(err: &Report, warning: Option<&ParticipantWarning>) -> String {
+    match warning {
+        Some(warning) => format!(
+            "Failed joining the session when starting the browser: {}",
+            warning.message
+        ),
+        None => format!("Failed joining the session when starting the browser: {err}"),
+    }
+}
+
 /// Refresh the shared participant state from the backend and publish it to watchers.
 async fn sync_state<D>(
     driver: &mut D,
@@ -333,6 +360,7 @@ mod tests {
     use crate::participant::shared::{
         messages::ParticipantMessage,
         ParticipantState,
+        ParticipantWarning,
     };
     use eyre::Result;
     use futures::{
@@ -623,5 +651,82 @@ mod tests {
         assert_eq!(close_count.load(Ordering::SeqCst), 1);
         assert!(!state_rx.borrow().running);
         assert!(!state_rx.borrow().joined);
+    }
+
+    #[tokio::test]
+    async fn runtime_surfaces_start_error_warning_in_state_and_logs() {
+        struct FailingStartDriver {
+            close_count: Arc<AtomicUsize>,
+        }
+
+        impl ParticipantDriverSession for FailingStartDriver {
+            fn participant_name(&self) -> &str {
+                "sim-user"
+            }
+
+            fn start(&mut self) -> BoxFuture<'_, Result<()>> {
+                async move { Err(eyre::eyre!("credentials not loaded")) }.boxed()
+            }
+
+            fn handle_command(&mut self, _message: ParticipantMessage) -> BoxFuture<'_, Result<()>> {
+                async move { Ok(()) }.boxed()
+            }
+
+            fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>> {
+                async move { Ok(ParticipantState::default()) }.boxed()
+            }
+
+            fn close(&mut self) -> BoxFuture<'_, Result<()>> {
+                async move {
+                    self.close_count.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+                .boxed()
+            }
+
+            fn wait_for_termination(&mut self) -> BoxFuture<'_, DriverTermination> {
+                async move { pending::<DriverTermination>().await }.boxed()
+            }
+
+            fn start_error_warning(&self, _err: &eyre::Report) -> Option<ParticipantWarning> {
+                Some(ParticipantWarning::new("AWS auth", "Run setup-auth"))
+            }
+        }
+
+        let (_message_tx, message_rx) = unbounded_channel();
+        let (log_tx, mut log_rx) = unbounded_channel();
+        let (state_tx, state_rx) = watch::channel(ParticipantState::default());
+        let close_count = Arc::new(AtomicUsize::new(0));
+
+        run_participant_runtime(
+            message_rx,
+            log_tx,
+            state_tx,
+            FailingStartDriver {
+                close_count: Arc::clone(&close_count),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(close_count.load(Ordering::SeqCst), 1);
+        assert!(!state_rx.borrow().running);
+        assert_eq!(
+            state_rx
+                .borrow()
+                .warning
+                .as_ref()
+                .map(|warning| warning.message.as_str()),
+            Some("Run setup-auth")
+        );
+
+        let logs = std::iter::from_fn(|| log_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(logs
+            .iter()
+            .any(|message| message.level == "warn" && message.message.contains("Run setup-auth")));
+        assert!(logs
+            .iter()
+            .any(|message| message.level == "error" && message.message.contains("Run setup-auth")));
     }
 }

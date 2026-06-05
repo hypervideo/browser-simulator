@@ -17,7 +17,10 @@ use crate::tui::keybindings::{
     KeyBindings,
     Keymap,
 };
-use client_simulator_browser::participant::ParticipantStore;
+use client_simulator_browser::participant::{
+    ParticipantStore,
+    ParticipantWarning,
+};
 use client_simulator_config::{
     Config,
     TuiArgs,
@@ -28,11 +31,36 @@ use crossterm::event::{
     KeyEvent,
     KeyModifiers,
 };
-use ratatui::prelude::Rect;
+use ratatui::{
+    layout::{
+        Alignment,
+        Constraint,
+        Direction,
+        Layout,
+    },
+    prelude::Rect,
+    style::{
+        Color,
+        Modifier,
+        Style,
+    },
+    text::{
+        Line,
+        Span,
+    },
+    widgets::{
+        Block,
+        Borders,
+        Clear,
+        Paragraph,
+        Wrap,
+    },
+};
 use serde::{
     Deserialize,
     Serialize,
 };
+use std::collections::HashSet;
 use tokio::sync::mpsc;
 
 pub struct App {
@@ -45,6 +73,8 @@ pub struct App {
     shutdown_in_progress: bool,
     last_tick_key_events: Vec<KeyEvent>,
     global_keymap: Option<Keymap>,
+    warning_modal: Option<WarningModal>,
+    seen_warning_keys: HashSet<String>,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -53,6 +83,13 @@ pub enum FocusedTopLevelComponent {
     BrowserStart,
     Logs,
     Participants,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WarningModal {
+    participant: String,
+    title: String,
+    message: String,
 }
 
 type ActionSender = mpsc::UnboundedSender<Action>;
@@ -78,6 +115,8 @@ impl App {
             shutdown_in_progress: false,
             last_tick_key_events: Vec::new(),
             global_keymap: keybindings.get(&FocusedTopLevelComponent::BrowserStart).cloned(),
+            warning_modal: None,
+            seen_warning_keys: HashSet::new(),
             config,
             keybindings,
         })
@@ -150,6 +189,13 @@ impl App {
     fn handle_key_event(&mut self, key: KeyEvent, action_tx: ActionSender) -> Result<()> {
         if let Some(action) = quit_action_for_key_state(&key, self.shutdown_in_progress) {
             action_tx.send(action)?;
+            return Ok(());
+        }
+
+        if self.warning_modal.is_some() {
+            if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
+                self.warning_modal = None;
+            }
             return Ok(());
         }
 
@@ -245,6 +291,7 @@ impl App {
     }
 
     fn render(&mut self, tui: &mut Tui) -> Result<()> {
+        self.poll_warning_modal();
         tui.draw(|frame| {
             // Set uniform background and foreground colors
             frame.render_widget(
@@ -259,8 +306,20 @@ impl App {
                     }
                 }
             }
+
+            if let Some(modal) = &self.warning_modal {
+                render_warning_modal(frame, frame.area(), modal);
+            }
         })?;
         Ok(())
+    }
+
+    fn poll_warning_modal(&mut self) {
+        if self.warning_modal.is_some() {
+            return;
+        }
+
+        self.warning_modal = next_unseen_warning(self.participants_store.warnings(), &mut self.seen_warning_keys);
     }
 }
 
@@ -277,15 +336,106 @@ fn quit_action_for_key_state(key: &KeyEvent, shutdown_in_progress: bool) -> Opti
     }
 }
 
+fn next_unseen_warning(
+    warnings: Vec<(String, ParticipantWarning)>,
+    seen_warning_keys: &mut HashSet<String>,
+) -> Option<WarningModal> {
+    warnings.into_iter().find_map(|(participant, warning)| {
+        let key = warning_key(&participant, &warning);
+        if !seen_warning_keys.insert(key) {
+            return None;
+        }
+
+        Some(WarningModal {
+            participant,
+            title: warning.title,
+            message: warning.message,
+        })
+    })
+}
+
+fn warning_key(participant: &str, warning: &ParticipantWarning) -> String {
+    format!("{participant}\n{}\n{}", warning.title, warning.message)
+}
+
+fn render_warning_modal(frame: &mut ratatui::Frame<'_>, area: Rect, modal: &WarningModal) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let width = popup_axis_length(area.width, 4, 24, 82);
+    let height = popup_axis_length(area.height, 2, 7, 10);
+    let popup = centered_rect(width, height, area);
+    let block = Block::default()
+        .title("Warning")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().fg(Color::White).bg(Color::Black));
+    let text = vec![
+        Line::from(Span::styled(
+            modal.title.clone(),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("Participant: {}", modal.participant),
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(modal.message.clone()),
+        Line::from(""),
+        Line::from(Span::styled("Enter/Esc to dismiss", Style::default().fg(Color::Gray))),
+    ];
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(block)
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true }),
+        popup,
+    );
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(area.height.saturating_sub(height) / 2),
+            Constraint::Length(height),
+            Constraint::Min(0),
+        ])
+        .split(area);
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(area.width.saturating_sub(width) / 2),
+            Constraint::Length(width),
+            Constraint::Min(0),
+        ])
+        .split(vertical[1]);
+
+    horizontal[1]
+}
+
+fn popup_axis_length(available: u16, padding: u16, min: u16, max: u16) -> u16 {
+    let padded = available.saturating_sub(padding).min(max);
+    padded.max(min.min(available))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::quit_action_for_key_state;
+    use super::{
+        next_unseen_warning,
+        quit_action_for_key_state,
+    };
     use crate::tui::action::Action;
+    use client_simulator_browser::participant::ParticipantWarning;
     use crossterm::event::{
         KeyCode,
         KeyEvent,
         KeyModifiers,
     };
+    use std::collections::HashSet;
 
     #[test]
     fn first_ctrl_c_requests_graceful_shutdown() {
@@ -299,5 +449,18 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
 
         assert_eq!(quit_action_for_key_state(&key, true), Some(Action::ForceQuit));
+    }
+
+    #[test]
+    fn next_unseen_warning_returns_each_warning_once() {
+        let warning = ParticipantWarning::new("AWS Device Farm credentials", "Run setup-auth");
+        let mut seen = HashSet::new();
+
+        let modal = next_unseen_warning(vec![("sim-user".to_string(), warning.clone())], &mut seen)
+            .expect("first warning should be shown");
+
+        assert_eq!(modal.participant, "sim-user");
+        assert_eq!(modal.title, "AWS Device Farm credentials");
+        assert!(next_unseen_warning(vec![("sim-user".to_string(), warning)], &mut seen).is_none());
     }
 }

@@ -4,10 +4,26 @@ use client_simulator_config::{
     VideoConstraint,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ParticipantWarning {
+    pub title: String,
+    pub message: String,
+}
+
+impl ParticipantWarning {
+    pub fn new(title: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            message: message.into(),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ParticipantState {
     pub username: String,
     pub running: bool,
+    pub warning: Option<ParticipantWarning>,
     pub joined: bool,
     pub muted: bool,
     pub video_activated: bool,

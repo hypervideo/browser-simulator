@@ -1,3 +1,4 @@
+use crate::participant::shared::ParticipantWarning;
 use aws_sdk_devicefarm::types::{
     TestGridSession,
     TestGridSessionStatus,
@@ -20,6 +21,7 @@ use futures::{
 use std::{
     env::VarError,
     error::Error,
+    fmt,
 };
 
 type DeviceFarmCredentials = aws_sdk_devicefarm::config::Credentials;
@@ -88,10 +90,44 @@ mod tests {
             "CreateTestGridUrl failed",
             std::io::Error::other("CredentialsNotLoaded"),
         );
-        let error = format!("{error:?}");
 
-        assert!(error.contains("aws setup-auth"));
-        assert!(error.contains(DEVICE_FARM_AWS_PROFILE));
+        assert!(error.to_string().contains("aws setup-auth"));
+        assert!(error.to_string().contains(DEVICE_FARM_AWS_PROFILE));
+    }
+
+    #[test]
+    fn aws_device_farm_error_detects_profile_source_credential_errors() {
+        let error = aws_device_farm_error(
+            "CreateTestGridUrl failed",
+            std::io::Error::other(
+                "ProfileFile provider could not be built: profile `hyper-client-simulator` was not defined: \
+                 could not find source profile hyper-client-simulator referenced from the root profile",
+            ),
+        );
+
+        assert!(error.to_string().contains("aws setup-auth"));
+    }
+
+    #[test]
+    fn aws_device_farm_error_leaves_non_credential_errors_specific() {
+        let error = aws_device_farm_error(
+            "CreateTestGridUrl failed",
+            std::io::Error::other("project ARN does not exist"),
+        );
+
+        assert_eq!(error.to_string(), "CreateTestGridUrl failed");
+    }
+
+    #[test]
+    fn device_farm_credential_warning_is_available_for_wrapped_reports() {
+        let error = aws_device_farm_error(
+            "ListTestGridSessions failed",
+            std::io::Error::other("CredentialsNotLoaded"),
+        );
+        let warning = device_farm_credential_warning_for_error(&error).expect("credential warning");
+
+        assert_eq!(warning.title, "AWS Device Farm credentials");
+        assert!(warning.message.contains("aws setup-auth"));
     }
 }
 
@@ -166,11 +202,47 @@ fn device_farm_env_credentials_from_vars(
     }
 }
 
+pub fn device_farm_credential_warning_for_error(
+    error: &(impl fmt::Debug + fmt::Display),
+) -> Option<ParticipantWarning> {
+    is_device_farm_credential_error(error).then(device_farm_credential_warning)
+}
+
+pub fn device_farm_credential_warning() -> ParticipantWarning {
+    ParticipantWarning::new("AWS Device Farm credentials", device_farm_auth_setup_message())
+}
+
+pub fn wrap_device_farm_credential_error(error: eyre::Report) -> eyre::Report {
+    if is_device_farm_credential_error(&error) {
+        error.wrap_err(device_farm_auth_setup_message())
+    } else {
+        error
+    }
+}
+
+pub fn is_device_farm_credential_error(error: &(impl fmt::Debug + fmt::Display)) -> bool {
+    let text = format!("{error:?} {error}").to_ascii_lowercase();
+    AWS_CREDENTIAL_ERROR_MARKERS.iter().any(|marker| text.contains(marker))
+}
+
+const AWS_CREDENTIAL_ERROR_MARKERS: &[&str] = &[
+    "credential",
+    "credentialsnotloaded",
+    "credentials not loaded",
+    "failed to load credentials",
+    "provider failed to provide credentials",
+    "credentials provider",
+    "profilefile provider",
+    "source profile",
+    "profile `hyper-client-simulator` was not defined",
+    "no credentials",
+];
+
 fn aws_device_farm_error(operation: &'static str, error: impl Error + Send + Sync + 'static) -> eyre::Report {
-    let is_credential_error = format!("{error:?} {error}").to_ascii_lowercase().contains("credential");
+    let is_credential_error = is_device_farm_credential_error(&error);
     let error = eyre::Report::new(error).wrap_err(operation);
     if is_credential_error {
-        error.wrap_err(credential_setup_hint())
+        error.wrap_err(format!("{operation}: {}", device_farm_auth_setup_message()))
     } else {
         error
     }
@@ -178,6 +250,15 @@ fn aws_device_farm_error(operation: &'static str, error: impl Error + Send + Syn
 
 fn credential_setup_hint() -> String {
     format!("Run `hyper-client-simulator aws setup-auth` to configure the `{DEVICE_FARM_AWS_PROFILE}` AWS profile")
+}
+
+fn device_farm_auth_setup_message() -> String {
+    format!(
+        "AWS Device Farm credentials are not configured. {} or set `{}` and `{}`.",
+        credential_setup_hint(),
+        DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV,
+        DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV
+    )
 }
 
 impl TestGridApi for AwsTestGrid {

@@ -14,5 +14,8 @@ pub(in crate::participant) use spec::{
     ParticipantSettings,
     ResolvedFrontendKind,
 };
-pub use state::ParticipantState;
+pub use state::{
+    ParticipantState,
+    ParticipantWarning,
+};
 pub use store::ParticipantStore;

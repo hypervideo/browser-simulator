@@ -3,7 +3,10 @@ use crate::{
         HyperSessionCookieManger,
         HyperSessionCookieStash,
     },
-    participant::Participant,
+    participant::{
+        Participant,
+        ParticipantWarning,
+    },
 };
 use client_simulator_config::{
     Config,
@@ -98,6 +101,15 @@ impl ParticipantStore {
 
     pub fn values(&self) -> Vec<Participant> {
         self.sorted().collect()
+    }
+
+    pub fn warnings(&self) -> Vec<(String, ParticipantWarning)> {
+        self.sorted()
+            .filter_map(|participant| {
+                let warning = participant.state.borrow().warning.clone()?;
+                Some((participant.name, warning))
+            })
+            .collect()
     }
 
     pub fn add(&self, participant: Participant) {

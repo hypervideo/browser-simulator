@@ -1,4 +1,8 @@
 use clap::Args;
+use client_simulator_browser::participant::{
+    ParticipantStore,
+    ParticipantWarning,
+};
 use client_simulator_config::{
     Config,
     NoiseSuppression,
@@ -92,17 +96,21 @@ pub async fn run(args: HeadlessArgs, filter: EnvFilter) -> Result<i32> {
     apply_cli_overrides(&mut global_config, &args);
 
     let participant_configs = build_participant_configs(global_config.clone(), &args.participants)?;
-    let store = client_simulator_browser::participant::ParticipantStore::new(global_config.data_dir());
+    let store = ParticipantStore::new(global_config.data_dir());
 
     spawn_participants_or_shutdown(&store, &participant_configs).await?;
 
-    Ok(wait_for_exit(store).await)
+    let exit_code = wait_for_exit(store.clone()).await;
+    if exit_code == 0 {
+        if let Some((participant, warning)) = store.warnings().into_iter().next() {
+            return Err(eyre::eyre!("{}", participant_warning_error(&participant, &warning)));
+        }
+    }
+
+    Ok(exit_code)
 }
 
-async fn spawn_participants_or_shutdown(
-    store: &client_simulator_browser::participant::ParticipantStore,
-    participant_configs: &[Config],
-) -> Result<()> {
+async fn spawn_participants_or_shutdown(store: &ParticipantStore, participant_configs: &[Config]) -> Result<()> {
     for config in participant_configs {
         if let Err(err) = store.spawn(config).context("Failed to spawn participant") {
             store.shutdown_all().await;
@@ -226,7 +234,14 @@ fn init_logging(filter: EnvFilter) -> Result<()> {
     Ok(())
 }
 
-async fn wait_for_exit(store: client_simulator_browser::participant::ParticipantStore) -> i32 {
+fn participant_warning_error(participant: &str, warning: &ParticipantWarning) -> String {
+    format!(
+        "{} for participant `{}`: {}",
+        warning.title, participant, warning.message
+    )
+}
+
+async fn wait_for_exit(store: ParticipantStore) -> i32 {
     wait_for_exit_with(
         wait_for_all_stopped(&store),
         wait_for_ctrl_c(),
@@ -268,7 +283,7 @@ async fn wait_for_ctrl_c() {
     }
 }
 
-async fn wait_for_all_stopped(store: &client_simulator_browser::participant::ParticipantStore) {
+async fn wait_for_all_stopped(store: &ParticipantStore) {
     let states = store
         .values()
         .into_iter()
@@ -466,6 +481,19 @@ mod tests {
 
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].backend, ParticipantBackendKind::RemoteStub);
+    }
+
+    #[test]
+    fn participant_warning_error_mentions_participant_and_setup_hint() {
+        let warning = ParticipantWarning::new(
+            "AWS Device Farm credentials",
+            "Run `hyper-client-simulator aws setup-auth`",
+        );
+        let message = participant_warning_error("aws-user", &warning);
+
+        assert!(message.contains("AWS Device Farm credentials"));
+        assert!(message.contains("aws-user"));
+        assert!(message.contains("aws setup-auth"));
     }
 
     #[tokio::test]

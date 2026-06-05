@@ -602,6 +602,7 @@ fn map_state(state: &types::ParticipantState) -> ParticipantState {
     ParticipantState {
         username: String::new(),
         running: state.running,
+        warning: None,
         joined: state.joined,
         muted: state.muted,
         video_activated: state.video_activated,
@@ -1635,6 +1636,7 @@ mod tests {
         ParticipantState {
             username: String::new(),
             running: true,
+            warning: None,
             joined,
             muted,
             video_activated,
