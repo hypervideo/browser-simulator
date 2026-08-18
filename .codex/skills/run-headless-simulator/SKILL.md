@@ -7,7 +7,7 @@ description: Run hyper-client-simulator participants from the CLI without the TU
 
 ## Overview
 
-Use the `headless` subcommand when an agent or script needs to run simulator participants without the interactive TUI. In the repo, prefer the development command through Cargo; for an installed release, call the binary directly.
+Use the `headless` subcommand when an agent or script needs to run simulator participants without the interactive TUI. In the repo, prefer the development command through Cargo. For an installed release, call the binary directly.
 
 ```sh
 cargo run -- headless [OPTIONS]
@@ -49,11 +49,11 @@ cargo run -- headless \
 ## Configuration Model
 
 - Global CLI flags apply to the base config loaded by the simulator.
-- If no `--participant` values are passed, `headless` starts one participant from the effective global config.
-- Each repeated `--participant` JSON value clones the effective global config and applies only that participant's overrides.
-- CLI overrides and participant JSON overrides are in-memory only; `headless` does not persist them back to the config file.
+- If the command receives no `--participant` values, `headless` starts one participant from the effective global config.
+- Each repeated `--participant` JSON value clones the effective global config and applies only the overrides for that participant.
+- CLI overrides and participant JSON overrides are in-memory only. `headless` does not persist them back to the config file.
 - Logs print through normal tracing output rather than the TUI logger.
-- First `Ctrl-C` requests shutdown and waits for participants to stop; a second `Ctrl-C` exits with code `130`.
+- First `Ctrl-C` requests shutdown and waits for participants to stop. A second `Ctrl-C` exits with code `130`.
 
 ## Options
 
@@ -139,7 +139,7 @@ Noise suppression values:
 - `ai-coustics-rook-s-48khz`
 - `ai-coustics-rook-l-48khz`
 
-Use an integer for `--video-max-concurrent-tracks` or JSON `video_max_concurrent_tracks`. In participant JSON, `null` is treated as absent and therefore inherits the global value; it does not clear a global track limit.
+Use an integer for `--video-max-concurrent-tracks` or JSON `video_max_concurrent_tracks`. In participant JSON, `null` means absent, so the participant inherits the global value. It does not clear a global track limit.
 
 ## Agent Workflow
 
