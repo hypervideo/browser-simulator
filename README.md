@@ -24,6 +24,17 @@ brew upgrade hyper-client-simulator
 The Homebrew package installs the simulator binary only. Chrome or Chromium must
 still be installed locally on the Mac where you run it.
 
+## Run with Nix
+
+Run the simulator directly from the repository without cloning it:
+
+```sh
+nix run 'git+https://github.com/hypervideo/browser-simulator.git?submodules=1' -- tui
+```
+
+Set `submodules=1` because the build uses files from a Git submodule. The shorter
+`github:hypervideo/browser-simulator` flake reference does not fetch submodules.
+
 ## Development
 
 This repository uses `hypervideo/cloudflare-browser-simulator` as a Git submodule
