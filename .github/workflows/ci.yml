@@ -16,6 +16,9 @@ concurrency:
 jobs:
   audit:
     name: Audit
+    permissions:
+      checks: write
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
