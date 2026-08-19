@@ -3,7 +3,7 @@ use serde::{
     Serialize,
 };
 
-const DEFAULT_BASE_URL: &str = "https://cloudflare-browser-simulator.hyper-video.workers.dev";
+const DEFAULT_BASE_URL: &str = "https://staging-cloudflare-browser-simulator.hyper-development.workers.dev";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CloudflareConfig {

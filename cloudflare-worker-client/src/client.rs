@@ -23,7 +23,7 @@ use std::time::Duration;
 use url::Url;
 
 pub const LOCAL_WORKER_URL: &str = "http://127.0.0.1:8787";
-pub const DEPLOYED_WORKER_URL: &str = "https://cloudflare-browser-simulator.hyper-video.workers.dev";
+pub const DEPLOYED_WORKER_URL: &str = "https://staging-cloudflare-browser-simulator.hyper-development.workers.dev";
 
 #[derive(Clone)]
 pub struct CloudflareWorkerClient {
