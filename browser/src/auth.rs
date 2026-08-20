@@ -43,6 +43,9 @@ impl HyperSessionCookieManger {
         let domain = domain.to_string();
         let mut available_cookies = self.available_cookies.lock().unwrap();
         let available_cookies = available_cookies.entry(domain.clone()).or_default();
+        // A cookie can expire while it sits in the queue. Never hand out an expired one; the caller fetches
+        // a fresh cookie instead.
+        available_cookies.retain(|cookie| !cookie.is_expired());
         available_cookies
             .pop_front()
             .map(|cookie| BorrowedCookie::new(domain, cookie, self.clone()))
@@ -157,7 +160,8 @@ impl HyperSessionCookieStash {
     /// Load the cookies from the simulator data directory.
     fn load(file: impl AsRef<Path>) -> Self {
         let file = file.as_ref();
-        file.exists()
+        let mut stash: Self = file
+            .exists()
             .then(|| {
                 std::fs::File::open(file)
                     .ok()
@@ -173,7 +177,15 @@ impl HyperSessionCookieStash {
                     stash_file: file.to_path_buf(),
                     cookies: Default::default(),
                 }
-            })
+            });
+
+        // Drop expired cookies here so the next `save` does not write them back and the stash does not grow
+        // with dead entries.
+        for cookies in stash.cookies.values_mut() {
+            cookies.retain(|cookie| !cookie.is_expired());
+        }
+
+        stash
     }
 
     /// Load the cookies from the given directory.
@@ -236,7 +248,6 @@ impl HyperSessionCookie {
         }
     }
 
-    #[expect(unused)]
     pub(crate) fn is_expired(&self) -> bool {
         Utc::now() > self.expires_at
     }
@@ -350,5 +361,86 @@ impl HyperSessionCookie {
             .build()
             .map_err(|e| eyre::eyre!(e))
             .context("failed to build cookie")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{
+        SystemTime,
+        UNIX_EPOCH,
+    };
+
+    /// A whitelisted domain so that `save` keeps the cookies.
+    const DOMAIN: &str = "https://staging.hyper.video/";
+
+    fn cookie(username: &str, expires_in: chrono::Duration) -> HyperSessionCookie {
+        HyperSessionCookie {
+            domain: DOMAIN.to_string(),
+            created_at: Utc::now(),
+            expires_at: Utc::now() + expires_in,
+            username: username.to_string(),
+            cookie: format!("{username}-session"),
+        }
+    }
+
+    fn stash_with(stash_file: PathBuf, cookies: Vec<HyperSessionCookie>) -> HyperSessionCookieStash {
+        HyperSessionCookieStash {
+            stash_file,
+            cookies: HashMap::from([(DOMAIN.to_string(), cookies)]),
+        }
+    }
+
+    fn unique_temp_dir() -> PathBuf {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("hyper-browser-simulator-auth-{nonce}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn give_cookie_returns_none_when_only_expired_cookies_exist() {
+        let stash = stash_with(
+            "unused.json".into(),
+            vec![cookie("expired", -chrono::Duration::hours(1))],
+        );
+        let manager = HyperSessionCookieManger::from(stash);
+
+        assert!(manager.give_cookie(DOMAIN).is_none());
+    }
+
+    #[test]
+    fn give_cookie_skips_expired_cookies_and_returns_the_next_valid_one() {
+        let stash = stash_with(
+            "unused.json".into(),
+            vec![
+                cookie("expired", -chrono::Duration::hours(1)),
+                cookie("valid", chrono::Duration::hours(1)),
+            ],
+        );
+        let manager = HyperSessionCookieManger::from(stash);
+
+        let borrowed = manager.give_cookie(DOMAIN).expect("the valid cookie");
+        assert_eq!(borrowed.username(), "valid");
+    }
+
+    #[test]
+    fn load_drops_expired_cookies() {
+        let stash_file = unique_temp_dir().join("hyper_session_cookies.json");
+        stash_with(
+            stash_file.clone(),
+            vec![
+                cookie("expired", -chrono::Duration::hours(1)),
+                cookie("valid", chrono::Duration::hours(1)),
+            ],
+        )
+        .save()
+        .unwrap();
+
+        let loaded = HyperSessionCookieStash::load(&stash_file);
+
+        let usernames: Vec<_> = loaded.cookies[DOMAIN].iter().map(|c| c.username.as_str()).collect();
+        assert_eq!(usernames, ["valid"]);
     }
 }
