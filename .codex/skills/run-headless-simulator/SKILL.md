@@ -62,6 +62,7 @@ Global CLI option names use kebab-case:
 - `--url URL`
 - `--backend BACKEND`
 - `--headless true|false`
+- `--browser-logs true|false` (default: `true`)
 - `--audio-enabled true|false`
 - `--video-enabled true|false`
 - `--screenshare-enabled true|false`
@@ -79,6 +80,7 @@ Participant JSON field names use snake_case:
 - `url`
 - `backend`
 - `headless`
+- `browser_logs`
 - `audio_enabled`
 - `video_enabled`
 - `screenshare_enabled`
@@ -141,10 +143,43 @@ Noise suppression values:
 
 Use an integer for `--video-max-concurrent-tracks` or JSON `video_max_concurrent_tracks`. In participant JSON, `null` means absent, so the participant inherits the global value. It does not clear a global track limit.
 
+## Browser Logs
+
+Headless runs collect browser logs by default. Set `--browser-logs false` to
+disable collection for every participant. Set `"browser_logs": false` in the
+JSON for one participant to disable collection only for that participant.
+
+Each browser backend captures the logs available through its browser control
+protocol:
+
+- `local` captures `console.*` calls, uncaught exceptions, unhandled
+  rejections, and browser entries such as failed requests, CORS errors,
+  security warnings, and deprecations.
+- `aws-device-farm` captures ChromeDriver browser logs, including console
+  calls, JavaScript exceptions, and network or security entries.
+- `cloudflare` captures page console calls and uncaught page errors through
+  Playwright in the worker.
+- `remote-stub` does not run a browser and has no browser logs.
+
+Every browser message includes the participant span before the `browser`
+tracing target and text. The `source` field is `console`, `exception`, or
+`browser`:
+
+```text
+INFO participant{name=local-fox-3}: browser: transport connected source=console
+```
+
+The default `info` filter hides `console.debug` and similar debug messages. Pass
+`--logging debug` before the `headless` subcommand to show them. Use
+`RUST_LOG=info,browser=warn` to keep browser warnings and errors only. Use
+`RUST_LOG=info,browser=off` to hide browser lines without stopping collection,
+or use `--browser-logs false` to stop collection.
+
 ## Agent Workflow
 
-1. Prefer `remote-stub` for a fast smoke test when browser automation is not the thing under test.
-2. Use `local` for real Chromium-driven joining, and confirm the target Hyper frontend exposes the media settings used by video constraints.
-3. Put common settings in global CLI flags, then use repeated `--participant` JSON for per-participant differences.
-4. Keep JSON compact and quote it with single quotes in shell commands.
-5. Check `cargo run -- headless --help` or `hyper-client-simulator headless --help` if the command rejects a flag.
+1. When a browser participant fails to join or loses media, read its `browser:` lines first.
+2. Prefer `remote-stub` for a fast smoke test when browser automation is not the thing under test.
+3. Use `local` for real Chromium-driven joining, and confirm the target Hyper frontend exposes the media settings used by video constraints.
+4. Put common settings in global CLI flags, then use repeated `--participant` JSON for per-participant differences.
+5. Keep JSON compact and quote it with single quotes in shell commands.
+6. Check `cargo run -- headless --help` or `hyper-client-simulator headless --help` if the command rejects a flag.
