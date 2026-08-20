@@ -12,6 +12,12 @@ use crate::{
             FrontendKindBuilder,
         },
         shared::{
+            browser_log::{
+                browser_level,
+                console_level,
+                BrowserLogEntry,
+                BrowserLogSource,
+            },
             messages::{
                 ParticipantLogMessage,
                 ParticipantMessage,
@@ -24,10 +30,21 @@ use crate::{
 };
 use chromiumoxide::{
     browser,
-    cdp::browser_protocol::target::{
-        CreateTargetParams,
-        EventDetachedFromTarget,
+    cdp::{
+        browser_protocol::{
+            log::EventEntryAdded,
+            target::{
+                CreateTargetParams,
+                EventDetachedFromTarget,
+            },
+        },
+        js_protocol::runtime::{
+            EventConsoleApiCalled,
+            EventExceptionThrown,
+            RemoteObject,
+        },
     },
+    listeners::EventStream,
     Browser,
     Handler,
     Page,
@@ -78,6 +95,7 @@ pub(crate) struct LocalChromiumSession {
     browser: Option<Browser>,
     page: Option<Page>,
     browser_event_task: Option<JoinHandle<()>>,
+    browser_log_task: Option<JoinHandle<()>>,
     detached_target_task: Option<JoinHandle<()>>,
     termination_tx: watch::Sender<Option<DriverTermination>>,
     termination_rx: watch::Receiver<Option<DriverTermination>>,
@@ -103,6 +121,7 @@ impl LocalChromiumSession {
             browser: None,
             page: None,
             browser_event_task: None,
+            browser_log_task: None,
             detached_target_task: None,
             termination_tx,
             termination_rx,
@@ -124,6 +143,11 @@ impl LocalChromiumSession {
             Arc::clone(&self.closing),
         );
         let page = create_page_retry(&self.launch_spec, &mut browser).await?;
+        let browser_log_streams = if self.browser_config.app_config.browser_logs {
+            Some(open_browser_log_streams(&page).await?)
+        } else {
+            None
+        };
         let detached_target_task = drive_detached_target_events(
             &self.launch_spec.username,
             &mut browser,
@@ -144,10 +168,13 @@ impl LocalChromiumSession {
             auth,
         )
         .await?;
+        let browser_log_task =
+            browser_log_streams.map(|streams| drive_browser_logs(&self.launch_spec.username, streams));
 
         self.browser = Some(browser);
         self.page = Some(page);
         self.browser_event_task = Some(browser_event_task);
+        self.browser_log_task = browser_log_task;
         self.detached_target_task = Some(detached_target_task);
         self.automation = Some(automation);
 
@@ -195,6 +222,10 @@ impl LocalChromiumSession {
                     self.log_message("error", format!("Failed leaving space while closing browser: {err}"));
                 }
             }
+        }
+
+        if let Some(handle) = self.browser_log_task.take() {
+            handle.abort();
         }
 
         self.page = None;
@@ -257,6 +288,9 @@ impl LocalChromiumSession {
         self.closing.store(true, Ordering::SeqCst);
 
         if let Some(handle) = self.detached_target_task.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.browser_log_task.take() {
             handle.abort();
         }
 
@@ -414,6 +448,133 @@ fn is_executable_file(path: &Path) -> bool {
 
 fn log_local_message(participant_name: &str, level: &str, message: impl ToString) {
     ParticipantLogMessage::new(level, participant_name, message).write();
+}
+
+type BrowserLogStreams = (
+    EventStream<EventConsoleApiCalled>,
+    EventStream<EventExceptionThrown>,
+    EventStream<EventEntryAdded>,
+);
+
+async fn open_browser_log_streams(page: &Page) -> Result<BrowserLogStreams> {
+    let console = page
+        .event_listener::<EventConsoleApiCalled>()
+        .await
+        .context("failed to listen for browser console messages")?;
+    let exceptions = page
+        .event_listener::<EventExceptionThrown>()
+        .await
+        .context("failed to listen for browser exceptions")?;
+    let browser = page
+        .event_listener::<EventEntryAdded>()
+        .await
+        .context("failed to listen for browser log entries")?;
+
+    Ok((console, exceptions, browser))
+}
+
+fn drive_browser_logs(name: &str, streams: BrowserLogStreams) -> JoinHandle<()> {
+    let participant_name = name.to_string();
+    let (mut console, mut exceptions, mut browser) = streams;
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                event = console.next() => {
+                    let Some(event) = event else { break };
+                    console_log_entry(&participant_name, event.as_ref()).emit();
+                }
+                event = exceptions.next() => {
+                    let Some(event) = event else { break };
+                    exception_log_entry(&participant_name, event.as_ref()).emit();
+                }
+                event = browser.next() => {
+                    let Some(event) = event else { break };
+                    browser_log_entry(&participant_name, event.as_ref()).emit();
+                }
+            }
+        }
+    })
+}
+
+fn console_log_entry(participant: &str, event: &EventConsoleApiCalled) -> BrowserLogEntry {
+    let mut text = event
+        .args
+        .iter()
+        .filter_map(remote_object_text)
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if let Some(frame) = event.stack_trace.as_ref().and_then(|stack| stack.call_frames.first()) {
+        if !frame.url.is_empty() {
+            text.push_str(&format!(" @ {}:{}", frame.url, frame.line_number));
+        }
+    }
+
+    BrowserLogEntry::new(
+        participant,
+        BrowserLogSource::Console,
+        console_level(event.r#type.as_ref()),
+        text,
+    )
+}
+
+fn remote_object_text(object: &RemoteObject) -> Option<String> {
+    object
+        .value
+        .as_ref()
+        .and_then(|value| match value {
+            serde_json::Value::String(value) => Some(value.clone()),
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                Some(value.to_string())
+            }
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => None,
+        })
+        .or_else(|| object.description.clone())
+        .or_else(|| {
+            object
+                .unserializable_value
+                .as_ref()
+                .map(|value| value.as_ref().to_string())
+        })
+}
+
+fn exception_log_entry(participant: &str, event: &EventExceptionThrown) -> BrowserLogEntry {
+    let details = &event.exception_details;
+    let mut text = details.text.clone();
+
+    if let Some(description) = details
+        .exception
+        .as_ref()
+        .and_then(|exception| exception.description.as_deref())
+    {
+        if !description.is_empty() && description != text {
+            text.push('\n');
+            text.push_str(description);
+        }
+    }
+
+    BrowserLogEntry::new(participant, BrowserLogSource::Exception, tracing::Level::ERROR, text)
+}
+
+fn browser_log_entry(participant: &str, event: &EventEntryAdded) -> BrowserLogEntry {
+    let entry = &event.entry;
+    let mut text = entry.text.clone();
+
+    if let Some(url) = entry.url.as_deref().filter(|url| !url.is_empty()) {
+        text.push_str(" @ ");
+        text.push_str(url);
+    }
+    text.push_str(" [");
+    text.push_str(entry.source.as_ref());
+    text.push(']');
+
+    BrowserLogEntry::new(
+        participant,
+        BrowserLogSource::Browser,
+        browser_level(entry.level.as_ref()),
+        text,
+    )
 }
 
 async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Handler)> {
@@ -607,6 +768,97 @@ mod tests {
             }
             other => panic!("expected Network.requestWillBeSentExtraInfo, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn maps_console_events_to_browser_logs() {
+        let event: EventConsoleApiCalled = serde_json::from_value(serde_json::json!({
+            "type": "warning",
+            "args": [
+                { "type": "string", "value": "ICE state" },
+                { "type": "number", "value": 3 },
+                {
+                    "type": "object",
+                    "value": { "ignored": true },
+                    "description": "Object {connected: false}"
+                },
+                { "type": "bigint", "unserializableValue": "42n" }
+            ],
+            "executionContextId": 1,
+            "timestamp": 1.0,
+            "stackTrace": {
+                "callFrames": [{
+                    "functionName": "updateIceState",
+                    "scriptId": "1",
+                    "url": "https://example.com/app.js",
+                    "lineNumber": 41,
+                    "columnNumber": 2
+                }]
+            }
+        }))
+        .expect("console event fixture");
+
+        let entry = console_log_entry("local-fox-3", &event);
+
+        assert_eq!(entry.participant, "local-fox-3");
+        assert_eq!(entry.source, BrowserLogSource::Console);
+        assert_eq!(entry.level, tracing::Level::WARN);
+        assert_eq!(
+            entry.text,
+            "ICE state 3 Object {connected: false} 42n @ https://example.com/app.js:41"
+        );
+    }
+
+    #[test]
+    fn maps_exception_events_to_browser_logs() {
+        let event: EventExceptionThrown = serde_json::from_value(serde_json::json!({
+            "timestamp": 2.0,
+            "exceptionDetails": {
+                "exceptionId": 7,
+                "text": "Uncaught (in promise)",
+                "lineNumber": 10,
+                "columnNumber": 4,
+                "exception": {
+                    "type": "object",
+                    "subtype": "error",
+                    "className": "TypeError",
+                    "description": "TypeError: track is undefined\n    at join (app.js:11:5)"
+                }
+            }
+        }))
+        .expect("exception event fixture");
+
+        let entry = exception_log_entry("local-fox-3", &event);
+
+        assert_eq!(entry.source, BrowserLogSource::Exception);
+        assert_eq!(entry.level, tracing::Level::ERROR);
+        assert_eq!(
+            entry.text,
+            "Uncaught (in promise)\nTypeError: track is undefined\n    at join (app.js:11:5)"
+        );
+    }
+
+    #[test]
+    fn maps_browser_events_to_browser_logs() {
+        let event: EventEntryAdded = serde_json::from_value(serde_json::json!({
+            "entry": {
+                "source": "network",
+                "level": "error",
+                "text": "Failed to load resource: 404",
+                "timestamp": 3.0,
+                "url": "https://example.com/missing.js"
+            }
+        }))
+        .expect("browser event fixture");
+
+        let entry = browser_log_entry("local-fox-3", &event);
+
+        assert_eq!(entry.source, BrowserLogSource::Browser);
+        assert_eq!(entry.level, tracing::Level::ERROR);
+        assert_eq!(
+            entry.text,
+            "Failed to load resource: 404 @ https://example.com/missing.js [network]"
+        );
     }
 }
 

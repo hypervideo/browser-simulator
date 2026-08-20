@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 pub(in crate::participant) mod browser_log;
 pub mod messages;
 mod runtime;
