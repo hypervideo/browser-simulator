@@ -15,6 +15,12 @@ use crate::{
             FrontendKindBuilder,
         },
         shared::{
+            browser_log::{
+                browser_level,
+                emit_browser_log_batch,
+                BrowserLogEntry,
+                BrowserLogSource,
+            },
             messages::{
                 ParticipantLogMessage,
                 ParticipantMessage,
@@ -49,6 +55,7 @@ use futures::{
     future::BoxFuture,
     FutureExt as _,
 };
+use http::Method;
 use std::{
     sync::Arc,
     time::Duration,
@@ -61,7 +68,13 @@ pub use test_grid::{
     TestGridApi,
 };
 use thirtyfour::{
-    common::config::WebDriverConfig,
+    common::{
+        command::{
+            Command,
+            ExtensionCommand,
+        },
+        config::WebDriverConfig,
+    },
     prelude::{
         WebDriverError,
         WebDriverResult,
@@ -96,10 +109,53 @@ const DEVICE_FARM_IDLE_TIMEOUT_MIN_SECS: u64 = 30;
 const DEVICE_FARM_IDLE_TIMEOUT_MAX_SECS: u64 = 900;
 const DEVICE_FARM_FRONTEND_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[derive(Debug)]
+struct GetBrowserLogs(&'static str);
+
+impl ExtensionCommand for GetBrowserLogs {
+    fn parameters_json(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({ "type": "browser" }))
+    }
+
+    fn method(&self) -> Method {
+        Method::POST
+    }
+
+    fn endpoint(&self) -> Arc<str> {
+        Arc::from(self.0)
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WebDriverBrowserLogEntry {
+    level: String,
+    message: String,
+    #[serde(default)]
+    source: String,
+}
+
+fn map_webdriver_browser_log(participant: &str, entry: WebDriverBrowserLogEntry) -> BrowserLogEntry {
+    let source = match entry.source.as_str() {
+        "console-api" => BrowserLogSource::Console,
+        "javascript" => BrowserLogSource::Exception,
+        _ => BrowserLogSource::Browser,
+    };
+    BrowserLogEntry::new(participant, source, browser_level(&entry.level), entry.message)
+}
+
+fn emit_webdriver_browser_logs(participant: &str, entries: Vec<WebDriverBrowserLogEntry>) {
+    let entries = entries
+        .into_iter()
+        .map(|entry| map_webdriver_browser_log(participant, entry))
+        .collect();
+    emit_browser_log_batch(participant, entries);
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct DeviceFarmLaunchOptions {
     headless: bool,
+    browser_logs: bool,
     fake_media: FakeMedia,
 }
 
@@ -107,6 +163,7 @@ impl From<&client_simulator_config::Config> for DeviceFarmLaunchOptions {
     fn from(config: &client_simulator_config::Config) -> Self {
         Self {
             headless: config.headless,
+            browser_logs: config.browser_logs,
             fake_media: config.fake_media(),
         }
     }
@@ -173,7 +230,7 @@ impl DeviceFarmSession {
         }
     }
 
-    fn build_capabilities(config: &DeviceFarmConfig) -> Result<ChromeCapabilities> {
+    fn build_capabilities(config: &DeviceFarmConfig, browser_logs: bool) -> Result<ChromeCapabilities> {
         let mut caps = DesiredCapabilities::chrome();
         // Synthetic fake media only. Device Farm has no access to local fake-media files.
         caps.add_arg("--use-fake-ui-for-media-stream")?;
@@ -194,14 +251,17 @@ impl DeviceFarmSession {
                 DEVICE_FARM_IDLE_TIMEOUT_MAX_SECS,
             )),
         );
+        if browser_logs {
+            caps.insert_base_capability("goog:loggingPrefs".to_string(), serde_json::json!({ "browser": "ALL" }));
+        }
         Ok(caps)
     }
 
-    async fn connect(api: Arc<dyn TestGridApi>, config: DeviceFarmConfig) -> Result<WebDriver> {
+    async fn connect(api: Arc<dyn TestGridApi>, config: DeviceFarmConfig, browser_logs: bool) -> Result<WebDriver> {
         let url = api
             .create_test_grid_url(&config.project_arn, config.url_expires_seconds)
             .await?;
-        let caps = Self::build_capabilities(&config)?;
+        let caps = Self::build_capabilities(&config, browser_logs)?;
         let endpoint_url: url::Url = url
             .parse()
             .context("Device Farm returned an invalid Selenium endpoint URL")?;
@@ -230,7 +290,12 @@ impl DeviceFarmSession {
                 self.config.project_arn
             ),
         );
-        let driver = Self::connect(Arc::clone(&self.api), self.config.clone()).await?;
+        let driver = Self::connect(
+            Arc::clone(&self.api),
+            self.config.clone(),
+            self.launch_options.browser_logs,
+        )
+        .await?;
         self.webdriver = Some(driver.clone());
         let webdriver_driver = WebDriverDriver::new(driver);
 
@@ -350,6 +415,13 @@ impl DeviceFarmSession {
         }
 
         if let Some(driver) = driver {
+            if self.launch_options.browser_logs {
+                let participant = self.participant_name().to_string();
+                if let Err(err) = Self::drain_browser_logs(&driver, &participant).await {
+                    self.log_message("warn", format!("Failed draining final browser logs: {err}"));
+                }
+            }
+
             // Keep automation alive until after quit. It owns another
             // WebDriver clone, and a successful quit marks the shared
             // SessionHandle so dropping that clone will not run thirtyfour's
@@ -379,11 +451,35 @@ impl DeviceFarmSession {
         Ok(())
     }
 
-    async fn ping_webdriver(driver: WebDriver) -> Result<()> {
+    async fn ping_webdriver(driver: &WebDriver) -> Result<()> {
         driver
             .current_url()
             .await
             .context("Device Farm WebDriver session is not responsive")?;
+        Ok(())
+    }
+
+    async fn fetch_browser_logs(driver: &WebDriver, endpoint: &'static str) -> Result<Vec<WebDriverBrowserLogEntry>> {
+        driver
+            .handle
+            .cmd(Command::ExtensionCommand(Box::new(GetBrowserLogs(endpoint))))
+            .await
+            .with_context(|| format!("failed to fetch Device Farm browser logs from {endpoint}"))?
+            .value::<Vec<WebDriverBrowserLogEntry>>()
+            .with_context(|| format!("failed to decode Device Farm browser logs from {endpoint}"))
+    }
+
+    async fn drain_browser_logs(driver: &WebDriver, participant: &str) -> Result<()> {
+        let entries = match Self::fetch_browser_logs(driver, "/se/log").await {
+            Ok(entries) => entries,
+            Err(se_log_error) => match Self::fetch_browser_logs(driver, "/log").await {
+                Ok(entries) => entries,
+                Err(legacy_error) => {
+                    bail!("failed to fetch Device Farm browser logs; /se/log: {se_log_error:#}; /log: {legacy_error:#}")
+                }
+            },
+        };
+        emit_webdriver_browser_logs(participant, entries);
         Ok(())
     }
 
@@ -472,7 +568,11 @@ impl ParticipantDriverSession for DeviceFarmSession {
                 .as_ref()
                 .context("Device Farm WebDriver session not started")?
                 .clone();
-            Self::ping_webdriver(driver).await?;
+            Self::ping_webdriver(&driver).await?;
+            if self.launch_options.browser_logs {
+                let participant = self.participant_name().to_string();
+                Self::drain_browser_logs(&driver, &participant).await?;
+            }
             let automation = self.automation.as_mut().context("Device Farm automation not started")?;
             let state = automation.refresh_state().await?;
             self.cached_state = state.clone();
@@ -528,13 +628,54 @@ mod tests {
         assert_eq!(low_max_high_idle._get("aws:idleTimeoutSecs"), Some(&json!(900)));
     }
 
+    #[test]
+    fn browser_logging_capability_follows_launch_option() {
+        let config = DeviceFarmConfig::default();
+        let enabled = DeviceFarmSession::build_capabilities(&config, true).unwrap();
+        let disabled = DeviceFarmSession::build_capabilities(&config, false).unwrap();
+
+        assert_eq!(enabled._get("goog:loggingPrefs"), Some(&json!({ "browser": "ALL" })));
+        assert_eq!(disabled._get("goog:loggingPrefs"), None);
+    }
+
+    #[test]
+    fn maps_webdriver_browser_log_entries() {
+        let cases = [
+            ("console-api", "INFO", BrowserLogSource::Console, tracing::Level::INFO),
+            (
+                "javascript",
+                "SEVERE",
+                BrowserLogSource::Exception,
+                tracing::Level::ERROR,
+            ),
+            ("network", "WARNING", BrowserLogSource::Browser, tracing::Level::WARN),
+            ("rendering", "DEBUG", BrowserLogSource::Browser, tracing::Level::DEBUG),
+        ];
+
+        for (source, level, expected_source, expected_level) in cases {
+            let mapped = map_webdriver_browser_log(
+                "aws-owl-7",
+                WebDriverBrowserLogEntry {
+                    level: level.to_string(),
+                    message: "native browser message".to_string(),
+                    source: source.to_string(),
+                },
+            );
+
+            assert_eq!(mapped.participant, "aws-owl-7");
+            assert_eq!(mapped.source, expected_source);
+            assert_eq!(mapped.level, expected_level);
+            assert_eq!(mapped.text, "native browser message");
+        }
+    }
+
     fn capabilities_for_duration(session_max_duration_ms: u64, idle_timeout_ms: u64) -> ChromeCapabilities {
         let config = DeviceFarmConfig {
             session_max_duration_ms,
             idle_timeout_ms,
             ..DeviceFarmConfig::default()
         };
-        DeviceFarmSession::build_capabilities(&config).unwrap()
+        DeviceFarmSession::build_capabilities(&config, false).unwrap()
     }
 
     #[tokio::test]
@@ -547,6 +688,7 @@ mod tests {
             launch_spec: launch_spec(),
             launch_options: DeviceFarmLaunchOptions {
                 headless: true,
+                browser_logs: false,
                 fake_media: FakeMedia::default(),
             },
             config: DeviceFarmConfig::default(),

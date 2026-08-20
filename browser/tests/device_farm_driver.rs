@@ -32,6 +32,10 @@ use serde_json::{
 };
 use std::{
     fs,
+    io::{
+        Result as IoResult,
+        Write,
+    },
     path::PathBuf,
     sync::{
         Arc,
@@ -90,6 +94,89 @@ async fn device_farm_session_creates_url_connects_joins_and_closes() {
 }
 
 #[tokio::test]
+async fn device_farm_session_requests_and_emits_browser_logs() {
+    let logs = CapturedLogs::new();
+    let (base_url, requests, server) = spawn_webdriver_mock().await;
+    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let mut config = device_farm_config();
+    config.browser_logs = true;
+    let participant =
+        Participant::spawn_device_farm_with_api(&config, cookie_manager, Arc::new(TestGridStub { url: base_url }))
+            .expect("device farm participant should spawn");
+    let participant_name = participant.name.clone();
+    let state = participant.state.clone();
+
+    wait_for_state(&state, |current| current.running && current.joined).await;
+    participant.close().await;
+    server.abort();
+
+    let requests = requests.lock().unwrap().clone();
+    let new_session = requests
+        .iter()
+        .find(|request| request.method == "POST" && request.path == "/session")
+        .expect("new session request");
+    assert_eq!(
+        request_json(new_session)["capabilities"]["alwaysMatch"]["goog:loggingPrefs"],
+        json!({ "browser": "ALL" })
+    );
+
+    let log_requests = requests
+        .iter()
+        .filter(|request| request.method == "POST" && request.path == "/session/df-1/se/log")
+        .collect::<Vec<_>>();
+    assert!(log_requests.len() >= 2, "expected refresh and close drains");
+    assert!(log_requests
+        .iter()
+        .all(|request| request_json(request) == json!({ "type": "browser" })));
+
+    let output = logs.output();
+    assert!(output.contains(&format!("participant{{name={participant_name}}}: browser:")));
+    assert!(output.contains("console-api message source=console"));
+    assert!(output.contains("uncaught exception source=exception"));
+    assert!(output.contains("failed request source=browser"));
+}
+
+#[tokio::test]
+async fn device_farm_session_falls_back_to_legacy_browser_log_endpoint() {
+    let logs = CapturedLogs::new();
+    let (base_url, requests, server) = spawn_webdriver_mock_with_options(WebDriverMockOptions {
+        reject_se_log: true,
+        ..Default::default()
+    })
+    .await;
+    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let mut config = device_farm_config();
+    config.browser_logs = true;
+    let participant =
+        Participant::spawn_device_farm_with_api(&config, cookie_manager, Arc::new(TestGridStub { url: base_url }))
+            .expect("device farm participant should spawn");
+    let state = participant.state.clone();
+
+    wait_for_state(&state, |current| current.running && current.joined).await;
+    participant.close().await;
+    server.abort();
+
+    let requests = requests.lock().unwrap().clone();
+    let log_requests = requests
+        .iter()
+        .filter(|request| {
+            request.method == "POST" && matches!(request.path.as_str(), "/session/df-1/se/log" | "/session/df-1/log")
+        })
+        .collect::<Vec<_>>();
+    assert!(log_requests
+        .windows(2)
+        .any(|requests| { requests[0].path == "/session/df-1/se/log" && requests[1].path == "/session/df-1/log" }));
+    assert!(log_requests
+        .iter()
+        .all(|request| request_json(request) == json!({ "type": "browser" })));
+
+    let output = logs.output();
+    assert!(output.contains("console-api message source=console"));
+    assert!(output.contains("uncaught exception source=exception"));
+    assert!(output.contains("failed request source=browser"));
+}
+
+#[tokio::test]
 async fn device_farm_session_preserves_signed_test_grid_url_path_and_query() {
     let signature = "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=test-signature";
     let (base_url, requests, server) = spawn_webdriver_mock_with_options(WebDriverMockOptions {
@@ -99,8 +186,10 @@ async fn device_farm_session_preserves_signed_test_grid_url_path_and_query() {
     })
     .await;
     let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let mut config = device_farm_config();
+    config.browser_logs = true;
     let participant = Participant::spawn_device_farm_with_api(
-        &device_farm_config(),
+        &config,
         cookie_manager,
         Arc::new(TestGridStub {
             url: format!("{base_url}/signed-grid/wd/hub?{signature}"),
@@ -120,6 +209,9 @@ async fn device_farm_session_preserves_signed_test_grid_url_path_and_query() {
     assert!(requests
         .iter()
         .all(|request| { request.path.starts_with("/signed-grid/wd/hub/") && request.path.contains(signature) }));
+    assert!(requests.iter().any(|request| {
+        request.method == "POST" && request.path == format!("/signed-grid/wd/hub/session/df-1/se/log?{signature}")
+    }));
 }
 
 #[tokio::test]
@@ -328,11 +420,52 @@ struct CapturedRequest {
     body: String,
 }
 
+struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedBuffer {
+    fn write(&mut self, buffer: &[u8]) -> IoResult<usize> {
+        self.0.lock().unwrap().extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> IoResult<()> {
+        Ok(())
+    }
+}
+
+struct CapturedLogs {
+    output: Arc<Mutex<Vec<u8>>>,
+    _guard: tracing::subscriber::DefaultGuard,
+}
+
+impl CapturedLogs {
+    fn new() -> Self {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer_output = Arc::clone(&output);
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || SharedBuffer(Arc::clone(&writer_output)))
+            .finish();
+
+        Self {
+            output,
+            _guard: tracing::subscriber::set_default(subscriber),
+        }
+    }
+
+    fn output(&self) -> String {
+        let output = self.output.lock().unwrap().clone();
+        String::from_utf8(output).unwrap()
+    }
+}
+
 #[derive(Debug, Default)]
 struct WebDriverState {
     joined: bool,
     current_url_requests: usize,
     media_attribute_reads: usize,
+    browser_log_requests: usize,
 }
 
 #[derive(Debug, Default)]
@@ -341,6 +474,7 @@ struct WebDriverMockOptions {
     required_query: Option<String>,
     media_change_after_attribute_reads: Option<usize>,
     fail_current_url_after: Option<usize>,
+    reject_se_log: bool,
 }
 
 async fn spawn_webdriver_mock() -> (String, Arc<Mutex<Vec<CapturedRequest>>>, tokio::task::JoinHandle<()>) {
@@ -393,12 +527,46 @@ fn webdriver_response(
         ),
         ("POST", "/session/df-1/url") => MockResponse::json(200, json!({ "value": null })),
         ("GET", "/session/df-1/url") => current_url_response(state, options),
+        ("POST", "/session/df-1/se/log") if options.reject_se_log => unknown_command(),
+        ("POST", "/session/df-1/se/log") | ("POST", "/session/df-1/log") => browser_log_response(state),
         ("DELETE", "/session/df-1") => MockResponse::json(200, json!({ "value": null })),
         ("POST", "/session/df-1/element") => element_response(request, state),
         _ if path.starts_with("/session/df-1/element/") => element_command_response(&path, state, options),
         _ if path == "/session/df-1/execute/sync" => MockResponse::json(200, json!({ "value": null })),
         _ => MockResponse::json(200, json!({ "value": null })),
     }
+}
+
+fn browser_log_response(state: &Arc<Mutex<WebDriverState>>) -> MockResponse {
+    let mut state = state.lock().unwrap();
+    state.browser_log_requests += 1;
+
+    let entries = if state.browser_log_requests == 1 {
+        json!([
+            {
+                "level": "INFO",
+                "message": "console-api message",
+                "source": "console-api",
+                "timestamp": 1_776_000_000_000_f64
+            },
+            {
+                "level": "SEVERE",
+                "message": "uncaught exception",
+                "source": "javascript",
+                "timestamp": 1_776_000_000_001_f64
+            },
+            {
+                "level": "WARNING",
+                "message": "failed request",
+                "source": "network",
+                "timestamp": 1_776_000_000_002_f64
+            }
+        ])
+    } else {
+        json!([])
+    };
+
+    MockResponse::json(200, json!({ "value": entries }))
 }
 
 fn current_url_response(state: &Arc<Mutex<WebDriverState>>, options: &WebDriverMockOptions) -> MockResponse {
@@ -544,6 +712,19 @@ fn no_such_element() -> MockResponse {
             "value": {
                 "error": "no such element",
                 "message": "no such element",
+                "stacktrace": ""
+            }
+        }),
+    )
+}
+
+fn unknown_command() -> MockResponse {
+    MockResponse::json(
+        404,
+        json!({
+            "value": {
+                "error": "unknown command",
+                "message": "unsupported command",
                 "stacktrace": ""
             }
         }),
