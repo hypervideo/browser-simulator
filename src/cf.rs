@@ -207,6 +207,9 @@ fn format_sessions(worker: &str, summary: &SessionSummary, sessions: &[Session],
                 lines.push(format!("  Connected for: {}", format_age(connected_at, now)));
             }
         }
+        if let Some(dashboard_url) = &session.dashboard_url {
+            lines.push(format!("  Browser preview: {dashboard_url}"));
+        }
     }
 
     lines.join("\n") + "\n"
@@ -506,6 +509,10 @@ mod tests {
             Session {
                 connection_id: Some("conn-1".to_owned()),
                 connection_start_time: Some(connected_at),
+                dashboard_url: Some(
+                    "https://dash.cloudflare.com/account-123/workers/browser-run/live/session-1/target/target-1"
+                        .to_owned(),
+                ),
                 is_active: true,
                 session_id: "session-1".to_owned(),
                 start_time: started,
@@ -513,6 +520,7 @@ mod tests {
             Session {
                 connection_id: None,
                 connection_start_time: None,
+                dashboard_url: None,
                 is_active: false,
                 session_id: "session-2".to_owned(),
                 start_time: started,
@@ -534,6 +542,12 @@ mod tests {
         assert!(output.contains("  Active slot:  yes\n"), "{output}");
         assert!(output.contains("  Connection:   conn-1\n"), "{output}");
         assert!(output.contains("  Connected for: 1m 5s\n"), "{output}");
+        assert!(
+            output.contains(
+                "  Browser preview: https://dash.cloudflare.com/account-123/workers/browser-run/live/session-1/target/target-1\n"
+            ),
+            "{output}"
+        );
         assert!(output.contains("- session-2\n"), "{output}");
         assert!(output.contains("  State:        idle\n"), "{output}");
         assert!(output.contains("  Active slot:  no\n"), "{output}");
