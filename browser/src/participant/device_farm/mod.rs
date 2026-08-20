@@ -78,7 +78,6 @@ use thirtyfour::{
 };
 use tokio::{
     sync::{
-        mpsc::UnboundedSender,
         oneshot,
         watch,
     },
@@ -118,7 +117,6 @@ pub(super) struct DeviceFarmSession {
     launch_spec: ParticipantLaunchSpec,
     launch_options: DeviceFarmLaunchOptions,
     config: DeviceFarmConfig,
-    sender: UnboundedSender<ParticipantLogMessage>,
     api: Arc<dyn TestGridApi>,
     auth: Option<FrontendAuth>,
     automation: Option<Box<dyn FrontendAutomation>>,
@@ -137,7 +135,6 @@ impl DeviceFarmSession {
         launch_spec: ParticipantLaunchSpec,
         launch_options: DeviceFarmLaunchOptions,
         config: DeviceFarmConfig,
-        sender: UnboundedSender<ParticipantLogMessage>,
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
         api: Arc<dyn TestGridApi>,
@@ -152,7 +149,6 @@ impl DeviceFarmSession {
             launch_spec,
             launch_options,
             config,
-            sender,
             api,
             auth: Some(auth),
             automation: None,
@@ -165,11 +161,7 @@ impl DeviceFarmSession {
     }
 
     fn log_message(&self, level: &str, message: impl ToString) {
-        let log_message = ParticipantLogMessage::new(level, &self.launch_spec.username, message);
-        log_message.write();
-        if let Err(err) = self.sender.send(log_message) {
-            trace!(participant = %self.launch_spec.username, "Failed to send device farm log message: {err}");
-        }
+        ParticipantLogMessage::new(level, &self.launch_spec.username, message).write();
     }
 
     fn log_backend_limitations(&self) {
@@ -246,7 +238,6 @@ impl DeviceFarmSession {
         let context = FrontendContext {
             launch_spec: self.launch_spec.clone(),
             driver: Box::new(webdriver_driver),
-            sender: self.sender.clone(),
         };
         let mut automation = FrontendKindBuilder::build(context, auth).await?;
 
@@ -525,7 +516,6 @@ mod tests {
         },
         Arc,
     };
-    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn capabilities_clamp_aws_duration_ranges() {
@@ -552,7 +542,6 @@ mod tests {
         let refreshed = Arc::new(AtomicBool::new(false));
         let left = Arc::new(AtomicBool::new(false));
         let (termination_tx, termination_rx) = watch::channel(None);
-        let (sender, _receiver) = unbounded_channel();
 
         let mut session = DeviceFarmSession {
             launch_spec: launch_spec(),
@@ -561,7 +550,6 @@ mod tests {
                 fake_media: FakeMedia::default(),
             },
             config: DeviceFarmConfig::default(),
-            sender,
             api: Arc::new(UnusedTestGridApi),
             auth: None,
             automation: Some(Box::new(RecordingAutomation {

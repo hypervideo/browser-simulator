@@ -6,10 +6,7 @@ use crate::participant::{
     local::session::LocalChromiumSession,
     remote_stub::RemoteStubSession,
     shared::{
-        messages::{
-            ParticipantLogMessage,
-            ParticipantMessage,
-        },
+        messages::ParticipantMessage,
         run_participant_runtime,
         ParticipantDriverSession,
         ParticipantLaunchSpec,
@@ -137,8 +134,13 @@ impl ParticipantTaskControl {
 
 impl Participant {
     pub fn spawn_with_app_config(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
-        let (participant, _) = Self::spawn_with_app_config_and_receiver(config, cookie_manager)?;
-        Ok(participant)
+        let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
+        let base_url = session_url.origin().unicode_serialization();
+        let cookie = cookie_manager.give_cookie(&base_url);
+        let name = cookie.as_ref().map(BorrowedCookie::username);
+        let participant_config = ParticipantConfig::new(config, name)?;
+        debug!("Participant config: {:#?}", participant_config);
+        Self::with_participant_config(participant_config, cookie, cookie_manager)
     }
 
     pub fn spawn(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
@@ -150,49 +152,31 @@ impl Participant {
         }
     }
 
-    pub fn spawn_with_app_config_and_receiver(
-        config: &Config,
-        cookie_manager: HyperSessionCookieManger,
-    ) -> Result<(Self, UnboundedReceiver<ParticipantLogMessage>)> {
-        let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
-        let base_url = session_url.origin().unicode_serialization();
-        let cookie = cookie_manager.give_cookie(&base_url);
-        let name = cookie.as_ref().map(BorrowedCookie::username);
-        let participant_config = ParticipantConfig::new(config, name)?;
-        debug!("Participant config: {:#?}", participant_config);
-        Self::with_participant_config(participant_config, cookie, cookie_manager)
-    }
-
     pub fn with_participant_config(
         participant_config: ParticipantConfig,
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
-    ) -> Result<(Self, UnboundedReceiver<ParticipantLogMessage>)> {
+    ) -> Result<Self> {
         let launch_spec = ParticipantLaunchSpec::from(participant_config.clone());
         let browser_config = client_simulator_config::BrowserConfig::from(&participant_config);
         let name = launch_spec.username.clone();
 
         let (sender_tx, receiver_tx) = unbounded_channel::<ParticipantMessage>();
-        let (sender_rx, receiver_rx) = unbounded_channel::<ParticipantLogMessage>();
 
         let (state_receiver, task_guard) = spawn_session(
             name.clone(),
             receiver_tx,
-            sender_rx.clone(),
-            LocalChromiumSession::new(launch_spec, browser_config, sender_rx.clone(), cookie, cookie_manager),
+            LocalChromiumSession::new(launch_spec, browser_config, cookie, cookie_manager),
         );
 
-        Ok((
-            Self {
-                name,
-                created: chrono::Utc::now(),
-                state: state_receiver,
-                participant_task: task_guard,
-                sender: sender_tx,
-                close_strategy: CloseStrategy::DriverCloseOnly,
-            },
-            receiver_rx,
-        ))
+        Ok(Self {
+            name,
+            created: chrono::Utc::now(),
+            state: state_receiver,
+            participant_task: task_guard,
+            sender: sender_tx,
+            close_strategy: CloseStrategy::DriverCloseOnly,
+        })
     }
 
     pub fn spawn_remote_stub(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
@@ -205,13 +189,7 @@ impl Participant {
         let name = launch_spec.username.clone();
 
         let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
-        let (log_sender, _log_receiver) = unbounded_channel::<ParticipantLogMessage>();
-        let (state_receiver, task_guard) = spawn_session(
-            name.clone(),
-            receiver,
-            log_sender.clone(),
-            RemoteStubSession::new(launch_spec, log_sender),
-        );
+        let (state_receiver, task_guard) = spawn_session(name.clone(), receiver, RemoteStubSession::new(launch_spec));
 
         Ok(Self {
             name,
@@ -236,16 +214,13 @@ impl Participant {
         let name = launch_spec.username.clone();
 
         let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
-        let (log_sender, _log_receiver) = unbounded_channel::<ParticipantLogMessage>();
         let (state_receiver, task_guard) = spawn_session(
             name.clone(),
             receiver,
-            log_sender.clone(),
             cloudflare::CloudflareSession::new(
                 launch_spec,
                 cloudflare::CloudflareLaunchOptions::from(config),
                 config.cloudflare.clone(),
-                log_sender,
                 cookie,
                 cookie_manager,
             ),
@@ -295,17 +270,14 @@ impl Participant {
         let launch_options = DeviceFarmLaunchOptions::from(config);
 
         let (sender, receiver) = unbounded_channel::<ParticipantMessage>();
-        let (log_sender, _log_receiver) = unbounded_channel::<ParticipantLogMessage>();
 
         let (state_receiver, task_guard) = spawn_session(
             name.clone(),
             receiver,
-            log_sender.clone(),
             DeviceFarmSession::new(
                 launch_spec,
                 launch_options,
                 device_farm_config,
-                log_sender,
                 cookie,
                 cookie_manager,
                 api,
@@ -326,7 +298,6 @@ impl Participant {
 fn spawn_session<S>(
     name: String,
     receiver: UnboundedReceiver<ParticipantMessage>,
-    log_sender: UnboundedSender<ParticipantLogMessage>,
     session: S,
 ) -> (watch::Receiver<ParticipantState>, ParticipantTaskControl)
 where
@@ -336,27 +307,15 @@ where
     let task_token = task_cancellation_token.clone();
     let task_cancellation_guard = task_cancellation_token.clone().drop_guard();
     let (state_sender, state_receiver) = watch::channel(Default::default());
-    let task_sender_for_task = log_sender.clone();
 
     let handle = tokio::task::spawn(async move {
-        let result =
-            run_participant_runtime(receiver, log_sender.clone(), state_sender, session, task_token.clone()).await;
+        let result = run_participant_runtime(receiver, state_sender, session, task_token.clone()).await;
 
         if let Err(err) = result {
             error!(participant = %name, "Failed to create participant: {err}");
-            let _ = task_sender_for_task.send(ParticipantLogMessage::new(
-                "error",
-                &name,
-                format!("Failed to create participant: {err}"),
-            ));
         }
 
         debug!(participant = %name, "Participant task canceled");
-        let _ = task_sender_for_task.send(ParticipantLogMessage::new(
-            "debug",
-            &name,
-            format!("Participant {name} has been closed"),
-        ));
     });
 
     (
@@ -594,13 +553,11 @@ mod tests {
     #[tokio::test]
     async fn close_uses_driver_close_without_sending_leave_first() {
         let (command_tx, command_rx) = unbounded_channel();
-        let (log_tx, _log_rx) = unbounded_channel();
         let commands = Arc::new(Mutex::new(Vec::new()));
         let close_count = Arc::new(AtomicUsize::new(0));
         let (state, task_guard) = spawn_session(
             "sim-user".to_string(),
             command_rx,
-            log_tx,
             RecordingCloseDriver {
                 commands: Arc::clone(&commands),
                 close_count: Arc::clone(&close_count),
@@ -675,12 +632,10 @@ mod tests {
     #[tokio::test]
     async fn close_keeps_waiting_after_progress_timeout_until_driver_stops() {
         let (command_tx, command_rx) = unbounded_channel();
-        let (log_tx, _log_rx) = unbounded_channel();
         let (close_tx, close_rx) = oneshot::channel();
         let (state, task_guard) = spawn_session(
             "sim-user".to_string(),
             command_rx,
-            log_tx,
             BlockingCloseDriver {
                 close_rx: Some(close_rx),
             },
@@ -794,14 +749,12 @@ mod tests {
     #[tokio::test]
     async fn close_does_not_cancel_start_after_running_state_is_published() {
         let (command_tx, command_rx) = unbounded_channel();
-        let (log_tx, _log_rx) = unbounded_channel();
         let (start_tx, start_rx) = oneshot::channel();
         let start_cancel_count = Arc::new(AtomicUsize::new(0));
         let close_count = Arc::new(AtomicUsize::new(0));
         let (state, task_guard) = spawn_session(
             "sim-user".to_string(),
             command_rx,
-            log_tx,
             BlockingStartDriver {
                 start_rx: Some(start_rx),
                 start_cancel_count: Arc::clone(&start_cancel_count),
@@ -883,12 +836,10 @@ mod tests {
     #[tokio::test]
     async fn close_cleans_up_participant_before_running_state_is_published() {
         let (command_tx, command_rx) = unbounded_channel();
-        let (log_tx, _log_rx) = unbounded_channel();
         let close_count = Arc::new(AtomicUsize::new(0));
         let (state, task_guard) = spawn_session(
             "sim-user".to_string(),
             command_rx,
-            log_tx,
             PendingStartDriver {
                 close_count: Arc::clone(&close_count),
             },

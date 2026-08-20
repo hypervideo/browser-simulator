@@ -59,14 +59,11 @@ impl ParticipantInnerLite {
             .await
             .context("failed to wait for navigation response")?;
 
-        debug!(participant = %self.participant_name(), "Navigated to page");
-        self.context.send_log_message("debug", "Navigated to page");
+        self.context.log_message("debug", "Navigated to page");
 
         match self.wait_for_entry_point(Duration::from_secs(30)).await? {
             LiteEntryPoint::InCall => {
-                debug!(participant = %self.participant_name(), "Lite session is already in-call");
-                self.context
-                    .send_log_message("debug", "Lite session is already in-call");
+                self.context.log_message("debug", "Lite session is already in-call");
             }
             LiteEntryPoint::Lobby => {
                 self.prepare_lobby().await?;
@@ -77,8 +74,7 @@ impl ParticipantInnerLite {
                     .await
                     .context("failed to click join button")?;
 
-                debug!(participant = %self.participant_name(), "Clicked on the join button");
-                self.context.send_log_message("debug", "Clicked on the join button");
+                self.context.log_message("debug", "Clicked on the join button");
             }
         }
 
@@ -88,16 +84,11 @@ impl ParticipantInnerLite {
             .await
             .context("We haven't joined the space, cannot find the leave button")?;
 
-        info!(participant = %self.participant_name(), "Joined the space");
-        self.context.send_log_message("info", "Joined the space");
+        self.context.log_message("info", "Joined the space");
 
         if let Err(err) = self.apply_all_settings().await {
-            error!(
-                participant = %self.participant_name(),
-                "Failed to apply settings after joining: {err}"
-            );
             self.context
-                .send_log_message("error", format!("Failed to apply settings after joining: {err}"));
+                .log_message("error", format!("Failed to apply settings after joining: {err}"));
         }
 
         Ok(())
@@ -135,8 +126,7 @@ impl ParticipantInnerLite {
                 .await
                 .context("failed to insert Lite display name")?;
 
-            debug!(participant = %self.participant_name(), "Set the Lite display name");
-            self.context.send_log_message(
+            self.context.log_message(
                 "debug",
                 format!("Set the Lite display name to {}", self.context.launch_spec.username),
             );
@@ -192,9 +182,7 @@ impl ParticipantInnerLite {
                     .click(lite::LEAVE_CONFIRM_BUTTON)
                     .await
                     .context("Could not confirm leaving the Lite meeting")?;
-                debug!(participant = %self.participant_name(), "Confirmed the Lite leave dialog");
-                self.context
-                    .send_log_message("debug", "Confirmed the Lite leave dialog");
+                self.context.log_message("debug", "Confirmed the Lite leave dialog");
             }
             Err(err) => {
                 debug!(
@@ -204,8 +192,7 @@ impl ParticipantInnerLite {
             }
         }
 
-        info!(participant = %self.participant_name(), "Left the space");
-        self.context.send_log_message("info", "Left the space");
+        self.context.log_message("info", "Left the space");
         Ok(())
     }
 
@@ -215,8 +202,7 @@ impl ParticipantInnerLite {
             .click(lite::MUTE_BUTTON)
             .await
             .context("Could not click on the toggle audio button")?;
-        info!(participant = %self.participant_name(), "Toggled audio");
-        self.context.send_log_message("info", "Toggled audio");
+        self.context.log_message("info", "Toggled audio");
         Ok(())
     }
 
@@ -226,8 +212,7 @@ impl ParticipantInnerLite {
             .click(lite::VIDEO_BUTTON)
             .await
             .context("Could not click on the toggle camera button")?;
-        info!(participant = %self.participant_name(), "Toggled camera");
-        self.context.send_log_message("info", "Toggled camera");
+        self.context.log_message("info", "Toggled camera");
         Ok(())
     }
 
@@ -237,8 +222,7 @@ impl ParticipantInnerLite {
             .click(lite::SCREEN_SHARE_BUTTON)
             .await
             .context("Could not click on the toggle screen share button")?;
-        info!(participant = %self.participant_name(), "Toggled screen share");
-        self.context.send_log_message("info", "Toggled screen share");
+        self.context.log_message("info", "Toggled screen share");
         tokio::time::sleep(Duration::from_secs(1)).await;
         Ok(())
     }
@@ -316,12 +300,8 @@ impl ParticipantInnerLite {
     }
 
     fn log_unsupported(&self, feature: &str) {
-        debug!(
-            participant = %self.participant_name(),
-            "{feature} changes not supported in lite frontend"
-        );
         self.context
-            .send_log_message("debug", format!("{feature} changes not supported in lite frontend"));
+            .log_message("debug", format!("{feature} changes not supported in lite frontend"));
     }
 
     async fn audio_enabled(&self) -> Result<Option<bool>> {

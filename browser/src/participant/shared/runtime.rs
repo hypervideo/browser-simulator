@@ -1,8 +1,5 @@
 use super::{
-    messages::{
-        ParticipantLogMessage,
-        ParticipantMessage,
-    },
+    messages::ParticipantMessage,
     ParticipantState,
     ParticipantWarning,
 };
@@ -17,10 +14,7 @@ use std::{
 };
 use tokio::{
     sync::{
-        mpsc::{
-            UnboundedReceiver,
-            UnboundedSender,
-        },
+        mpsc::UnboundedReceiver,
         watch,
     },
     time::{
@@ -71,7 +65,6 @@ pub(in crate::participant) trait ParticipantDriverSession: Send {
 /// Drive one participant session by translating runtime messages into backend operations.
 pub(in crate::participant) async fn run_participant_runtime<D>(
     mut receiver: UnboundedReceiver<ParticipantMessage>,
-    sender: UnboundedSender<ParticipantLogMessage>,
     state: watch::Sender<ParticipantState>,
     mut driver: D,
     cancellation_token: CancellationToken,
@@ -89,9 +82,7 @@ where
 
         _ = cancellation_token.cancelled() => {
             if let Err(err) = driver.close().await {
-                log_runtime_message(
-                    &sender,
-                    "error",
+                log_runtime_message("error",
                     driver.participant_name(),
                     format!("Failed closing participant after task cancellation: {err}"),
                 );
@@ -109,21 +100,18 @@ where
                 current.warning = Some(warning.clone());
             });
             log_runtime_message(
-                &sender,
                 "warn",
                 driver.participant_name(),
                 format!("{}: {}", warning.title, warning.message),
             );
         }
         log_runtime_message(
-            &sender,
             "error",
             driver.participant_name(),
             start_error_message(&err, warning.as_ref()),
         );
         if let Err(close_err) = driver.close().await {
             log_runtime_message(
-                &sender,
                 "error",
                 driver.participant_name(),
                 format!("Failed to clean up participant after start failure: {close_err}"),
@@ -133,12 +121,11 @@ where
         return Ok(());
     }
 
-    if let Some(termination) = sync_state(&mut driver, &state, &sender).await {
+    if let Some(termination) = sync_state(&mut driver, &state).await {
         let participant_name = driver.participant_name().to_string();
-        log_runtime_message(&sender, termination.level, &participant_name, termination.message);
+        log_runtime_message(termination.level, &participant_name, termination.message);
         if let Err(err) = driver.close().await {
             log_runtime_message(
-                &sender,
                 "error",
                 &participant_name,
                 format!("Failed closing participant after state refresh failure: {err}"),
@@ -184,10 +171,9 @@ where
         match event {
             RuntimeEvent::Terminated(termination) => {
                 let participant_name = driver.participant_name().to_string();
-                log_runtime_message(&sender, termination.level, &participant_name, termination.message);
+                log_runtime_message(termination.level, &participant_name, termination.message);
                 if let Err(err) = driver.close().await {
                     log_runtime_message(
-                        &sender,
                         "error",
                         &participant_name,
                         format!("Failed closing participant after backend termination: {err}"),
@@ -198,7 +184,6 @@ where
             RuntimeEvent::Cancelled => {
                 if let Err(err) = driver.close().await {
                     log_runtime_message(
-                        &sender,
                         "error",
                         driver.participant_name(),
                         format!("Failed closing participant after task cancellation: {err}"),
@@ -209,7 +194,6 @@ where
             RuntimeEvent::ChannelClosed => {
                 if let Err(err) = driver.close().await {
                     log_runtime_message(
-                        &sender,
                         "error",
                         driver.participant_name(),
                         format!("Failed closing participant after channel closed: {err}"),
@@ -218,12 +202,11 @@ where
                 break;
             }
             RuntimeEvent::RefreshState => {
-                if let Some(termination) = sync_state(&mut driver, &state, &sender).await {
+                if let Some(termination) = sync_state(&mut driver, &state).await {
                     let participant_name = driver.participant_name().to_string();
-                    log_runtime_message(&sender, termination.level, &participant_name, termination.message);
+                    log_runtime_message(termination.level, &participant_name, termination.message);
                     if let Err(err) = driver.close().await {
                         log_runtime_message(
-                            &sender,
                             "error",
                             &participant_name,
                             format!("Failed closing participant after state refresh failure: {err}"),
@@ -235,7 +218,6 @@ where
             RuntimeEvent::Command(ParticipantMessage::Close) => {
                 if let Err(err) = driver.close().await {
                     log_runtime_message(
-                        &sender,
                         "error",
                         driver.participant_name(),
                         format!("Failed closing participant: {err}"),
@@ -246,19 +228,17 @@ where
             RuntimeEvent::Command(message) => {
                 if let Err(err) = driver.handle_command(message.clone()).await {
                     log_runtime_message(
-                        &sender,
                         "error",
                         driver.participant_name(),
                         format!("Running action {message} failed with error: {err}."),
                     );
                 }
 
-                if let Some(termination) = sync_state(&mut driver, &state, &sender).await {
+                if let Some(termination) = sync_state(&mut driver, &state).await {
                     let participant_name = driver.participant_name().to_string();
-                    log_runtime_message(&sender, termination.level, &participant_name, termination.message);
+                    log_runtime_message(termination.level, &participant_name, termination.message);
                     if let Err(err) = driver.close().await {
                         log_runtime_message(
-                            &sender,
                             "error",
                             &participant_name,
                             format!("Failed closing participant after state refresh failure: {err}"),
@@ -286,11 +266,7 @@ fn start_error_message(err: &Report, warning: Option<&ParticipantWarning>) -> St
 }
 
 /// Refresh the shared participant state from the backend and publish it to watchers.
-async fn sync_state<D>(
-    driver: &mut D,
-    state: &watch::Sender<ParticipantState>,
-    sender: &UnboundedSender<ParticipantLogMessage>,
-) -> Option<DriverTermination>
+async fn sync_state<D>(driver: &mut D, state: &watch::Sender<ParticipantState>) -> Option<DriverTermination>
 where
     D: ParticipantDriverSession,
 {
@@ -307,7 +283,6 @@ where
             let termination = driver.state_refresh_error_termination(&err);
             if termination.is_none() {
                 log_runtime_message(
-                    sender,
                     "error",
                     driver.participant_name(),
                     format!("Failed refreshing participant state: {err}"),
@@ -327,13 +302,8 @@ fn mark_stopped(state: &watch::Sender<ParticipantState>) {
     });
 }
 
-/// Log a runtime message through tracing and forward it to the participant log channel.
-fn log_runtime_message(
-    sender: &UnboundedSender<ParticipantLogMessage>,
-    level: &str,
-    participant_name: &str,
-    message: impl Into<String>,
-) {
+/// Log a runtime message through tracing.
+fn log_runtime_message(level: &str, participant_name: &str, message: impl Into<String>) {
     let message = message.into();
     match level {
         "trace" => trace!(participant = %participant_name, "{message}"),
@@ -342,10 +312,6 @@ fn log_runtime_message(
         "warn" => warn!(participant = %participant_name, "{message}"),
         "error" => error!(participant = %participant_name, "{message}"),
         _ => warn!(participant = %participant_name, level, "{message}"),
-    }
-
-    if let Err(err) = sender.send(ParticipantLogMessage::new(level, participant_name, &message)) {
-        trace!(participant = %participant_name, "Failed to send log message: {err}");
     }
 }
 
@@ -474,12 +440,10 @@ mod tests {
     #[tokio::test]
     async fn runtime_refreshes_state_after_commands() {
         let (message_tx, message_rx) = unbounded_channel();
-        let (log_tx, _log_rx) = unbounded_channel();
         let (state_tx, state_rx) = watch::channel(ParticipantState::default());
 
         let runtime = tokio::spawn(run_participant_runtime(
             message_rx,
-            log_tx,
             state_tx,
             FakeDriver::new("sim-user"),
             CancellationToken::new(),
@@ -560,13 +524,11 @@ mod tests {
         }
 
         let (_message_tx, message_rx) = unbounded_channel();
-        let (log_tx, _log_rx) = unbounded_channel();
         let (state_tx, state_rx) = watch::channel(ParticipantState::default());
         let close_count = Arc::new(AtomicUsize::new(0));
 
         run_participant_runtime(
             message_rx,
-            log_tx,
             state_tx,
             TerminatingDriver {
                 close_count: Arc::clone(&close_count),
@@ -628,14 +590,12 @@ mod tests {
         }
 
         let (_message_tx, message_rx) = unbounded_channel();
-        let (log_tx, _log_rx) = unbounded_channel();
         let (state_tx, state_rx) = watch::channel(ParticipantState::default());
         let cancellation_token = CancellationToken::new();
         let close_count = Arc::new(AtomicUsize::new(0));
 
         let runtime = tokio::spawn(run_participant_runtime(
             message_rx,
-            log_tx,
             state_tx,
             CancelAwareDriver {
                 close_count: Arc::clone(&close_count),
@@ -654,7 +614,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_surfaces_start_error_warning_in_state_and_logs() {
+    async fn runtime_surfaces_start_error_warning_in_state() {
         struct FailingStartDriver {
             close_count: Arc<AtomicUsize>,
         }
@@ -694,13 +654,11 @@ mod tests {
         }
 
         let (_message_tx, message_rx) = unbounded_channel();
-        let (log_tx, mut log_rx) = unbounded_channel();
         let (state_tx, state_rx) = watch::channel(ParticipantState::default());
         let close_count = Arc::new(AtomicUsize::new(0));
 
         run_participant_runtime(
             message_rx,
-            log_tx,
             state_tx,
             FailingStartDriver {
                 close_count: Arc::clone(&close_count),
@@ -720,13 +678,5 @@ mod tests {
                 .map(|warning| warning.message.as_str()),
             Some("Run setup-auth")
         );
-
-        let logs = std::iter::from_fn(|| log_rx.try_recv().ok()).collect::<Vec<_>>();
-        assert!(logs
-            .iter()
-            .any(|message| message.level == "warn" && message.message.contains("Run setup-auth")));
-        assert!(logs
-            .iter()
-            .any(|message| message.level == "error" && message.message.contains("Run setup-auth")));
     }
 }

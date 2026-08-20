@@ -71,9 +71,8 @@ impl ParticipantInner {
             .await
             .context("failed to set cookie")?;
 
-        debug!(participant = %self.participant_name(), "Set cookie");
         self.context
-            .send_log_message("debug", format!("Set cookie for domain {domain}"));
+            .log_message("debug", format!("Set cookie for domain {domain}"));
 
         Ok(())
     }
@@ -91,8 +90,7 @@ impl ParticipantInner {
             .await
             .context("failed to wait for navigation response")?;
 
-        debug!(participant = %self.participant_name(), "Navigated to page");
-        self.context.send_log_message("debug", "Navigated to page");
+        self.context.log_message("debug", "Navigated to page");
 
         self.context
             .driver
@@ -105,8 +103,7 @@ impl ParticipantInner {
             .await
             .context("failed to insert name")?;
 
-        debug!(participant = %self.participant_name(), "Set the name of the participant");
-        self.context.send_log_message(
+        self.context.log_message(
             "debug",
             format!(
                 "Set the name of the participant to {}",
@@ -132,8 +129,7 @@ impl ParticipantInner {
             .await
             .context("failed to click join button")?;
 
-        debug!(participant = %self.participant_name(), "Clicked on the join button");
-        self.context.send_log_message("debug", "Clicked on the join button");
+        self.context.log_message("debug", "Clicked on the join button");
 
         self.context
             .driver
@@ -141,8 +137,7 @@ impl ParticipantInner {
             .await
             .context("We haven't joined the space, cannot find the leave button")?;
 
-        info!(participant = %self.participant_name(), "Joined the space");
-        self.context.send_log_message("info", "Joined the space");
+        self.context.log_message("info", "Joined the space");
 
         Ok(())
     }
@@ -195,8 +190,7 @@ impl ParticipantInner {
             .await
             .context("Could not click on the leave space button")?;
 
-        info!(participant = %self.participant_name(), "Left the space");
-        self.context.send_log_message("info", "Left the space");
+        self.context.log_message("info", "Left the space");
 
         Ok(())
     }
@@ -208,8 +202,7 @@ impl ParticipantInner {
             .await
             .context("Could not click on the toggle audio button")?;
 
-        info!(participant = %self.participant_name(), "Toggled audio");
-        self.context.send_log_message("info", "Toggled audio");
+        self.context.log_message("info", "Toggled audio");
 
         Ok(())
     }
@@ -221,8 +214,7 @@ impl ParticipantInner {
             .await
             .context("Could not click on the toggle camera button")?;
 
-        info!(participant = %self.participant_name(), "Toggled camera");
-        self.context.send_log_message("info", "Toggled camera");
+        self.context.log_message("info", "Toggled camera");
 
         Ok(())
     }
@@ -258,12 +250,8 @@ impl ParticipantInner {
     }
 
     async fn set_noise_suppression_inner(&self, value: NoiseSuppression) -> Result<()> {
-        info!(
-            participant = %self.participant_name(),
-            "Changing noise suppression to {value}"
-        );
         self.context
-            .send_log_message("info", format!("Changing noise suppression to {value}"));
+            .log_message("info", format!("Changing noise suppression to {value}"));
 
         set_noise_suppression(self.context.driver.as_ref(), value)
             .await

@@ -65,10 +65,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::{
-        mpsc::UnboundedSender,
-        watch,
-    },
+    sync::watch,
     task::JoinHandle,
     time::timeout,
 };
@@ -76,7 +73,6 @@ use tokio::{
 pub(crate) struct LocalChromiumSession {
     launch_spec: ParticipantLaunchSpec,
     browser_config: BrowserConfig,
-    sender: UnboundedSender<ParticipantLogMessage>,
     frontend_builder: Option<FrontendAuth>,
     automation: Option<Box<dyn FrontendAutomation>>,
     browser: Option<Browser>,
@@ -92,7 +88,6 @@ impl LocalChromiumSession {
     pub(crate) fn new(
         launch_spec: ParticipantLaunchSpec,
         browser_config: BrowserConfig,
-        sender: UnboundedSender<ParticipantLogMessage>,
         auth: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
     ) -> Self {
@@ -103,7 +98,6 @@ impl LocalChromiumSession {
         Self {
             launch_spec,
             browser_config,
-            sender,
             frontend_builder: Some(frontend_builder),
             automation: None,
             browser: None,
@@ -117,7 +111,7 @@ impl LocalChromiumSession {
     }
 
     fn log_message(&self, level: &str, message: impl ToString) {
-        log_local_message(&self.sender, &self.launch_spec.username, level, message);
+        log_local_message(&self.launch_spec.username, level, message);
     }
 
     async fn start_inner(&mut self) -> Result<()> {
@@ -146,7 +140,6 @@ impl LocalChromiumSession {
             FrontendContext {
                 launch_spec: self.launch_spec.clone(),
                 driver: Box::new(ChromiumDriver::new(page.clone())),
-                sender: self.sender.clone(),
             },
             auth,
         )
@@ -207,14 +200,12 @@ impl LocalChromiumSession {
         self.page = None;
 
         if let Some(browser) = self.browser.as_mut() {
-            let sender = self.sender.clone();
             let participant_name = self.launch_spec.username.clone();
 
             match timeout(BROWSER_CLOSE_COMMAND_TIMEOUT, browser.close()).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(err)) => {
                     log_local_message(
-                        &sender,
                         &participant_name,
                         "debug",
                         format!("Browser close command failed during shutdown: {err}"),
@@ -222,7 +213,6 @@ impl LocalChromiumSession {
                 }
                 Err(_) => {
                     log_local_message(
-                        &sender,
                         &participant_name,
                         "debug",
                         "Timed out waiting for browser close command response, waiting for browser process exit",
@@ -234,7 +224,6 @@ impl LocalChromiumSession {
                 Ok(Ok(_)) => {}
                 Ok(Err(err)) => {
                     log_local_message(
-                        &sender,
                         &participant_name,
                         "error",
                         format!("Failed waiting for browser process to exit: {err}"),
@@ -243,7 +232,6 @@ impl LocalChromiumSession {
                 }
                 Err(_) => {
                     log_local_message(
-                        &sender,
                         &participant_name,
                         "warn",
                         "Timed out waiting for browser process to exit, killing browser",
@@ -424,20 +412,8 @@ fn is_executable_file(path: &Path) -> bool {
     }
 }
 
-fn log_local_message(
-    sender: &UnboundedSender<ParticipantLogMessage>,
-    participant_name: &str,
-    level: &str,
-    message: impl ToString,
-) {
-    let log_message = ParticipantLogMessage::new(level, participant_name, message);
-    log_message.write();
-    if let Err(err) = sender.send(log_message) {
-        trace!(
-            participant = %participant_name,
-            "Failed to send local driver log message: {err}"
-        );
-    }
+fn log_local_message(participant_name: &str, level: &str, message: impl ToString) {
+    ParticipantLogMessage::new(level, participant_name, message).write();
 }
 
 async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Handler)> {

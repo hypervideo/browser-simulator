@@ -43,7 +43,6 @@ use std::{
 };
 use tokio::{
     sync::{
-        mpsc::UnboundedSender,
         oneshot,
         watch,
     },
@@ -78,7 +77,6 @@ pub(super) struct CloudflareSession {
     launch_spec: ParticipantLaunchSpec,
     launch_options: CloudflareLaunchOptions,
     cloudflare_config: CloudflareConfig,
-    sender: UnboundedSender<ParticipantLogMessage>,
     auth: CloudflareAuth,
     session_id: Option<String>,
     cached_state: Arc<Mutex<ParticipantState>>,
@@ -88,30 +86,13 @@ pub(super) struct CloudflareSession {
     poller_task: Option<JoinHandle<()>>,
 }
 
-fn emit_log_message(
-    sender: &UnboundedSender<ParticipantLogMessage>,
-    participant_name: &str,
-    level: &str,
-    message: impl ToString,
-) {
-    let log_message = ParticipantLogMessage::new(level, participant_name, message);
-    log_message.write();
-    if let Err(err) = sender.send(log_message) {
-        trace!(
-            participant = %participant_name,
-            "Failed to send cloudflare driver log message: {err}"
-        );
-    }
+fn emit_log_message(participant_name: &str, level: &str, message: impl ToString) {
+    ParticipantLogMessage::new(level, participant_name, message).write();
 }
 
-fn forward_worker_entries(
-    sender: &UnboundedSender<ParticipantLogMessage>,
-    participant_name: &str,
-    entries: &[types::AutomationLogEntry],
-) {
+fn forward_worker_entries(participant_name: &str, entries: &[types::AutomationLogEntry]) {
     for entry in entries {
         emit_log_message(
-            sender,
             participant_name,
             "debug",
             format!("worker {} {}", entry.at.to_rfc3339(), entry.step),
@@ -128,7 +109,6 @@ impl CloudflareSession {
         launch_spec: ParticipantLaunchSpec,
         launch_options: CloudflareLaunchOptions,
         cloudflare_config: CloudflareConfig,
-        sender: UnboundedSender<ParticipantLogMessage>,
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
     ) -> Self {
@@ -136,7 +116,6 @@ impl CloudflareSession {
             launch_spec,
             launch_options,
             cloudflare_config,
-            sender,
             cookie,
             cookie_manager,
             true,
@@ -147,7 +126,6 @@ impl CloudflareSession {
         launch_spec: ParticipantLaunchSpec,
         launch_options: CloudflareLaunchOptions,
         cloudflare_config: CloudflareConfig,
-        sender: UnboundedSender<ParticipantLogMessage>,
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
         _track_spawn: bool,
@@ -176,7 +154,6 @@ impl CloudflareSession {
             launch_spec,
             launch_options,
             cloudflare_config,
-            sender,
             auth,
             session_id: None,
             termination_tx,
@@ -191,7 +168,6 @@ impl CloudflareSession {
         launch_spec: ParticipantLaunchSpec,
         launch_options: CloudflareLaunchOptions,
         cloudflare_config: CloudflareConfig,
-        sender: UnboundedSender<ParticipantLogMessage>,
         cookie: Option<BorrowedCookie>,
         cookie_manager: HyperSessionCookieManger,
     ) -> Self {
@@ -199,7 +175,6 @@ impl CloudflareSession {
             launch_spec,
             launch_options,
             cloudflare_config,
-            sender,
             cookie,
             cookie_manager,
             false,
@@ -207,7 +182,7 @@ impl CloudflareSession {
     }
 
     fn log_message(&self, level: &str, message: impl ToString) {
-        emit_log_message(&self.sender, &self.launch_spec.username, level, message);
+        emit_log_message(&self.launch_spec.username, level, message);
     }
 
     fn worker_client(&self) -> Result<CloudflareWorkerClient> {
@@ -219,7 +194,7 @@ impl CloudflareSession {
     }
 
     fn log_worker_entries(&self, entries: &[types::AutomationLogEntry]) {
-        forward_worker_entries(&self.sender, &self.launch_spec.username, entries);
+        forward_worker_entries(&self.launch_spec.username, entries);
     }
 
     fn log_backend_limitations(&self) {
@@ -370,7 +345,6 @@ impl CloudflareSession {
         let poll_interval = self.effective_health_poll_interval();
         let cached_state = Arc::clone(&self.cached_state);
         let participant_name = self.launch_spec.username.clone();
-        let sender = self.sender.clone();
         let termination_tx = self.termination_tx.clone();
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
@@ -385,7 +359,7 @@ impl CloudflareSession {
                     _ = interval.tick() => {
                         match client.keep_alive_session(&session_id).await {
                             Ok(response) => {
-                                forward_worker_entries(&sender, &participant_name, &response.log);
+                                forward_worker_entries(&participant_name, &response.log);
 
                                 store_cached_state(&cached_state, &response.state);
 
@@ -885,6 +859,10 @@ mod tests {
     use std::{
         collections::VecDeque,
         fs,
+        io::{
+            Result as IoResult,
+            Write,
+        },
         path::PathBuf,
         sync::{
             Arc,
@@ -902,7 +880,6 @@ mod tests {
             AsyncWriteExt as _,
         },
         net::TcpListener,
-        sync::mpsc::unbounded_channel,
     };
     use url::Url;
 
@@ -912,6 +889,44 @@ mod tests {
         path: String,
         headers: Vec<(String, String)>,
         body: String,
+    }
+
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buffer: &[u8]) -> IoResult<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> IoResult<()> {
+            Ok(())
+        }
+    }
+
+    struct CapturedLogs {
+        output: Arc<Mutex<Vec<u8>>>,
+        _guard: tracing::subscriber::DefaultGuard,
+    }
+
+    impl CapturedLogs {
+        fn new() -> Self {
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let writer_output = Arc::clone(&output);
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_writer(move || SharedBuffer(Arc::clone(&writer_output)))
+                .finish();
+
+            Self {
+                output,
+                _guard: tracing::subscriber::set_default(subscriber),
+            }
+        }
+
+        fn output(&self) -> String {
+            String::from_utf8(self.output.lock().unwrap().clone()).unwrap()
+        }
     }
 
     #[tokio::test]
@@ -966,7 +981,6 @@ mod tests {
         ]);
         let (base_url, requests, server) = spawn_http_server(responses).await;
         let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
-        let (log_sender, _log_receiver) = unbounded_channel();
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperCore, &format!("{base_url}/room/demo")),
             launch_options(false, FakeMedia::None),
@@ -979,7 +993,6 @@ mod tests {
                 debug: true,
                 health_poll_interval_ms: 5_000,
             },
-            log_sender,
             None,
             cookie_manager,
         );
@@ -1085,7 +1098,6 @@ mod tests {
         ]);
         let (base_url, _requests, server) = spawn_http_server(responses).await;
         let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
-        let (log_sender, _log_receiver) = unbounded_channel();
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
             launch_options(false, FakeMedia::None),
@@ -1098,7 +1110,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 60_000,
             },
-            log_sender,
             None,
             cookie_manager,
         );
@@ -1217,7 +1228,6 @@ mod tests {
         ]);
         let (base_url, requests, server) = spawn_http_server(responses).await;
         let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
-        let (log_sender, _log_receiver) = unbounded_channel();
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
             launch_options(false, FakeMedia::None),
@@ -1230,7 +1240,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 60_000,
             },
-            log_sender,
             None,
             cookie_manager,
         );
@@ -1394,6 +1403,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_normalizes_webtransport_to_webrtc_for_cloudflare() {
+        let captured_logs = CapturedLogs::new();
         let responses = VecDeque::from(vec![
             MockResponse::json(
                 200,
@@ -1415,7 +1425,6 @@ mod tests {
         ]);
         let (base_url, requests, server) = spawn_http_server(responses).await;
         let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
-        let (log_sender, mut log_receiver) = unbounded_channel();
         let mut spec = launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo"));
         spec.settings.transport = TransportMode::WebTransport;
         let mut session = CloudflareSession::new_for_test(
@@ -1430,7 +1439,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 60_000,
             },
-            log_sender,
             None,
             cookie_manager,
         );
@@ -1451,14 +1459,14 @@ mod tests {
             json!("webrtc")
         );
 
-        let logs = drain_log_messages(&mut log_receiver);
-        assert!(logs.iter().any(|message| {
-            message.contains("only supports WebRTC transport") && message.contains("normalizing configured")
-        }));
+        let logs = captured_logs.output();
+        assert!(logs.contains("only supports WebRTC transport"));
+        assert!(logs.contains("normalizing configured"));
     }
 
     #[tokio::test]
     async fn start_logs_ignored_headless_and_fake_media_settings_for_cloudflare() {
+        let captured_logs = CapturedLogs::new();
         let responses = VecDeque::from(vec![
             MockResponse::json(
                 200,
@@ -1480,7 +1488,6 @@ mod tests {
         ]);
         let (base_url, _requests, server) = spawn_http_server(responses).await;
         let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
-        let (log_sender, mut log_receiver) = unbounded_channel();
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
             launch_options(
@@ -1496,7 +1503,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 60_000,
             },
-            log_sender,
             None,
             cookie_manager,
         );
@@ -1505,12 +1511,10 @@ mod tests {
         session.close().await.unwrap();
         server.abort();
 
-        let logs = drain_log_messages(&mut log_receiver);
-        assert!(logs.iter().any(|message| message.contains("ignores headless=false")));
-        assert!(logs.iter().any(|message| {
-            message.contains("ignores local fake media source")
-                && message.contains("https://example.com/fake-media.mp4")
-        }));
+        let logs = captured_logs.output();
+        assert!(logs.contains("ignores headless=false"));
+        assert!(logs.contains("ignores local fake media source"));
+        assert!(logs.contains("https://example.com/fake-media.mp4"));
     }
 
     #[tokio::test]
@@ -1537,7 +1541,6 @@ mod tests {
         ]);
         let (base_url, requests, server) = spawn_http_server(responses).await;
         let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
-        let (log_sender, _log_receiver) = unbounded_channel();
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
             launch_options(false, FakeMedia::None),
@@ -1550,7 +1553,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 5,
             },
-            log_sender,
             None,
             cookie_manager,
         );
@@ -1668,18 +1670,6 @@ mod tests {
         assert_eq!(actual.video_max_concurrent_tracks, expected.video_max_concurrent_tracks);
         assert_eq!(actual.background_blur, expected.background_blur);
         assert_eq!(actual.screenshare_activated, expected.screenshare_activated);
-    }
-
-    fn drain_log_messages(
-        log_receiver: &mut tokio::sync::mpsc::UnboundedReceiver<
-            crate::participant::shared::messages::ParticipantLogMessage,
-        >,
-    ) -> Vec<String> {
-        let mut messages = Vec::new();
-        while let Ok(message) = log_receiver.try_recv() {
-            messages.push(message.message);
-        }
-        messages
     }
 
     async fn spawn_http_server(

@@ -14,35 +14,25 @@ use futures::{
     FutureExt as _,
 };
 use std::future::pending;
-use tokio::sync::mpsc::UnboundedSender;
 
 pub(super) struct RemoteStubSession {
     launch_spec: ParticipantLaunchSpec,
-    sender: UnboundedSender<ParticipantLogMessage>,
     state: ParticipantState,
 }
 
 impl RemoteStubSession {
-    pub(super) fn new(launch_spec: ParticipantLaunchSpec, sender: UnboundedSender<ParticipantLogMessage>) -> Self {
+    pub(super) fn new(launch_spec: ParticipantLaunchSpec) -> Self {
         Self {
             state: ParticipantState {
                 username: launch_spec.username.clone(),
                 ..Default::default()
             },
             launch_spec,
-            sender,
         }
     }
 
     fn log_message(&self, level: &str, message: impl ToString) {
-        let log_message = ParticipantLogMessage::new(level, &self.launch_spec.username, message);
-        log_message.write();
-        if let Err(err) = self.sender.send(log_message) {
-            trace!(
-                participant = %self.launch_spec.username,
-                "Failed to send remote stub log message: {err}"
-            );
-        }
+        ParticipantLogMessage::new(level, &self.launch_spec.username, message).write();
     }
 }
 

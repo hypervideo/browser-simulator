@@ -9,7 +9,6 @@ use super::super::shared::{
 use eyre::Result;
 use futures::future::BoxFuture;
 use std::time::Duration;
-use tokio::sync::mpsc::UnboundedSender;
 
 /// Driver-agnostic browser operations used by the Hyper frontend automation.
 ///
@@ -40,7 +39,6 @@ pub(in crate::participant) trait BrowserDriver: Send + Sync {
 pub(in crate::participant) struct FrontendContext {
     pub(in crate::participant) launch_spec: ParticipantLaunchSpec,
     pub(in crate::participant) driver: Box<dyn BrowserDriver>,
-    pub(in crate::participant) sender: UnboundedSender<ParticipantLogMessage>,
 }
 
 impl std::fmt::Debug for FrontendContext {
@@ -56,12 +54,8 @@ impl FrontendContext {
         &self.launch_spec.username
     }
 
-    pub(in crate::participant) fn send_log_message(&self, level: &str, message: impl ToString) {
-        let log_message = ParticipantLogMessage::new(level, self.participant_name(), message);
-        log_message.write();
-        if let Err(err) = self.sender.send(log_message) {
-            trace!(participant = %self.participant_name(), "Failed to send log message: {err}");
-        }
+    pub(in crate::participant) fn log_message(&self, level: &str, message: impl ToString) {
+        ParticipantLogMessage::new(level, self.participant_name(), message).write();
     }
 }
 
@@ -98,7 +92,6 @@ mod tests {
             Mutex,
         },
     };
-    use tokio::sync::mpsc::unbounded_channel;
     use url::Url;
 
     struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
@@ -116,7 +109,6 @@ mod tests {
 
     #[test]
     fn frontend_log_messages_are_written_to_tracing() {
-        let (sender, _receiver) = unbounded_channel();
         let context = FrontendContext {
             launch_spec: ParticipantLaunchSpec::from(ParticipantConfig {
                 username: "sim-user".to_string(),
@@ -124,7 +116,6 @@ mod tests {
                 app_config: Config::default(),
             }),
             driver: Box::new(RecordingDriver::default()),
-            sender,
         };
         let output = Arc::new(Mutex::new(Vec::new()));
         let writer_output = Arc::clone(&output);
@@ -134,7 +125,7 @@ mod tests {
             .finish();
 
         tracing::subscriber::with_default(subscriber, || {
-            context.send_log_message("info", "Joined the space");
+            context.log_message("info", "Joined the space");
         });
 
         let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();

@@ -26,31 +26,30 @@ impl fmt::Display for ParticipantMessage {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ParticipantLogMessage {
-    pub username: String,
-    pub level: String,
-    pub message: String,
+pub(in crate::participant) struct ParticipantLogMessage {
+    participant: String,
+    level: String,
+    message: String,
 }
 
 impl ParticipantLogMessage {
-    pub fn new(level: &str, username: &str, message: impl ToString) -> Self {
+    pub(in crate::participant) fn new(level: &str, participant: &str, message: impl ToString) -> Self {
         Self {
-            username: username.to_string(),
+            participant: participant.to_string(),
             level: level.to_string(),
             message: message.to_string(),
         }
     }
 
-    pub fn write(&self) {
+    pub(in crate::participant) fn write(&self) {
         match self.level.as_str() {
-            "trace" => trace!(self.username, "{}", self.message),
-            "debug" => debug!(self.username, "{}", self.message),
-            "info" => info!(self.username, "{}", self.message),
-            "warn" => warn!(self.username, "{}", self.message),
-            "error" => error!(self.username, "{}", self.message),
+            "trace" => trace!(participant = %self.participant, "{}", self.message),
+            "debug" => debug!(participant = %self.participant, "{}", self.message),
+            "info" => info!(participant = %self.participant, "{}", self.message),
+            "warn" => warn!(participant = %self.participant, "{}", self.message),
+            "error" => error!(participant = %self.participant, "{}", self.message),
             _ => warn!(
-                self.username,
+                participant = %self.participant,
                 "Received unexpected log level {} with message: {}", self.level, self.message
             ),
         }
