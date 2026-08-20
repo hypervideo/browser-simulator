@@ -72,6 +72,8 @@ pub struct Config {
     pub fake_media_sources: Vec<FakeMediaWithDescription>,
     #[serde(default)]
     pub headless: bool,
+    #[serde(default)]
+    pub browser_logs: bool,
     #[serde(default, skip_serializing_if = "ParticipantBackendKind::is_local")]
     pub backend: ParticipantBackendKind,
     #[serde(default, skip_serializing_if = "CloudflareConfig::is_default")]
@@ -181,6 +183,7 @@ impl config::Source for Config {
             cache.insert("url".to_string(), url.to_string().into());
         }
         cache.insert("headless".to_string(), (self.headless).into());
+        cache.insert("browser_logs".to_string(), self.browser_logs.into());
         cache.insert("audio_enabled".to_string(), self.audio_enabled.into());
         cache.insert("video_enabled".to_string(), self.video_enabled.into());
         cache.insert("screenshare_enabled".to_string(), self.screenshare_enabled.into());
@@ -478,5 +481,18 @@ video_max_concurrent_tracks: 2
         assert_eq!(config.video_constraint_publish_webcam, VideoConstraint::None);
         assert_eq!(config.video_constraint_subscribe, VideoConstraint::None);
         assert_eq!(config.video_max_concurrent_tracks, None);
+    }
+
+    #[test]
+    fn browser_logs_are_off_by_default() {
+        assert!(!Config::default().browser_logs);
+    }
+
+    #[test]
+    fn old_config_without_browser_logs_still_loads() {
+        let yaml = include_str!("default-config.yaml").replace("browser_logs: false\n", "");
+        let config: Config = yaml_serde::from_str(&yaml).expect("old config should load");
+
+        assert!(!config.browser_logs);
     }
 }

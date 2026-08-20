@@ -24,6 +24,7 @@ fake_media_sources:
   - description: 'Steve Jobs + British radio (Audio)'
     fake_media: 'https://audio-samples.hyper.video/steve-jobs-british-radio-bg-50.mp3'
 headless: false
+browser_logs: false
 backend: local
 cloudflare:
   base_url: https://staging-cloudflare-browser-simulator.hyper-development.workers.dev

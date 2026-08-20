@@ -37,6 +37,9 @@ pub struct HeadlessArgs {
     #[clap(long = "headless", value_parser = clap::builder::BoolishValueParser::new())]
     pub headless: Option<bool>,
 
+    #[clap(long = "browser-logs", value_parser = clap::builder::BoolishValueParser::new())]
+    pub browser_logs: Option<bool>,
+
     #[clap(long = "audio-enabled", value_parser = clap::builder::BoolishValueParser::new())]
     pub audio_enabled: Option<bool>,
 
@@ -77,6 +80,7 @@ struct ParticipantOverride {
     url: Option<url::Url>,
     backend: Option<ParticipantBackendKind>,
     headless: Option<bool>,
+    browser_logs: Option<bool>,
     audio_enabled: Option<bool>,
     video_enabled: Option<bool>,
     screenshare_enabled: Option<bool>,
@@ -122,6 +126,8 @@ async fn spawn_participants_or_shutdown(store: &ParticipantStore, participant_co
 }
 
 fn apply_cli_overrides(config: &mut Config, args: &HeadlessArgs) {
+    config.browser_logs = args.browser_logs.unwrap_or(true);
+
     if let Some(url) = &args.url {
         config.url = Some(url.clone());
     }
@@ -172,6 +178,9 @@ fn apply_participant_override(mut config: Config, override_: ParticipantOverride
     }
     if let Some(headless) = override_.headless {
         config.headless = headless;
+    }
+    if let Some(browser_logs) = override_.browser_logs {
+        config.browser_logs = browser_logs;
     }
     if let Some(audio_enabled) = override_.audio_enabled {
         config.audio_enabled = audio_enabled;
@@ -372,11 +381,42 @@ mod tests {
 
     #[test]
     fn cli_bool_options_accept_explicit_false() {
-        let cli = TestHeadlessCli::parse_from(["headless", "--headless", "false", "--audio-enabled", "false"]);
+        let cli = TestHeadlessCli::parse_from([
+            "headless",
+            "--headless",
+            "false",
+            "--browser-logs",
+            "false",
+            "--audio-enabled",
+            "false",
+        ]);
         let args = cli.args;
 
         assert_eq!(args.headless, Some(false));
+        assert_eq!(args.browser_logs, Some(false));
         assert_eq!(args.audio_enabled, Some(false));
+    }
+
+    #[test]
+    fn headless_enables_browser_logs_by_default() {
+        let mut config = Config::default();
+
+        apply_cli_overrides(&mut config, &HeadlessArgs::default());
+
+        assert!(config.browser_logs);
+    }
+
+    #[test]
+    fn headless_can_disable_browser_logs() {
+        let mut config = Config::default();
+        let args = HeadlessArgs {
+            browser_logs: Some(false),
+            ..Default::default()
+        };
+
+        apply_cli_overrides(&mut config, &args);
+
+        assert!(!config.browser_logs);
     }
 
     #[test]
@@ -425,6 +465,19 @@ mod tests {
         );
         assert_eq!(configs[0].backend, ParticipantBackendKind::Cloudflare);
         assert!(!configs[0].audio_enabled);
+    }
+
+    #[test]
+    fn participant_json_can_override_browser_logs() {
+        let global_config = Config {
+            browser_logs: true,
+            ..Default::default()
+        };
+
+        let configs = build_participant_configs(global_config, &[r#"{"browser_logs":false}"#.to_string()])
+            .expect("participant configs");
+
+        assert!(!configs[0].browser_logs);
     }
 
     #[test]

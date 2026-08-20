@@ -99,6 +99,8 @@ mod tests {
             "headless",
             "--url",
             "https://latest.dev.hyper.video/F27-T5F-DXY",
+            "--browser-logs",
+            "false",
             "--participant",
             r#"{"audio_enabled": false, "backend": "local"}"#,
             "--participant",
@@ -113,6 +115,7 @@ mod tests {
                     Some("https://latest.dev.hyper.video/F27-T5F-DXY")
                 );
                 assert_eq!(headless.participants.len(), 2);
+                assert_eq!(headless.browser_logs, Some(false));
             }
             other => panic!("expected headless command, got {other:?}"),
         }
