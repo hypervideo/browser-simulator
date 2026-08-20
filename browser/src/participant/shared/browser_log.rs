@@ -2,6 +2,7 @@ use std::fmt;
 use tracing::Level;
 
 const MAX_TEXT_BYTES: usize = 4 * 1024;
+const MAX_BATCH_ENTRIES: usize = 500;
 const ELLIPSIS: &str = "...";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,6 +83,23 @@ pub(in crate::participant) fn browser_level(level: &str) -> Level {
     }
 }
 
+pub(in crate::participant) fn emit_browser_log_batch(participant: &str, entries: Vec<BrowserLogEntry>) {
+    let dropped = entries.len().saturating_sub(MAX_BATCH_ENTRIES);
+    if dropped > 0 {
+        BrowserLogEntry::new(
+            participant,
+            BrowserLogSource::Browser,
+            Level::WARN,
+            format!("dropped {dropped} browser log entries"),
+        )
+        .emit();
+    }
+
+    for entry in entries.into_iter().skip(dropped) {
+        entry.emit();
+    }
+}
+
 fn truncate_text(mut text: String) -> String {
     if text.len() <= MAX_TEXT_BYTES {
         return text;
@@ -123,8 +141,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn emits_browser_log_with_participant_source_and_target() {
+    fn capture_logs(run: impl FnOnce()) -> String {
         let output = Arc::new(Mutex::new(Vec::new()));
         let writer_output = Arc::clone(&output);
         let subscriber = tracing_subscriber::fmt()
@@ -133,7 +150,15 @@ mod tests {
             .with_writer(move || SharedBuffer(Arc::clone(&writer_output)))
             .finish();
 
-        tracing::subscriber::with_default(subscriber, || {
+        tracing::subscriber::with_default(subscriber, run);
+
+        let output = output.lock().expect("lock output").clone();
+        String::from_utf8(output).expect("UTF-8 output")
+    }
+
+    #[test]
+    fn emits_browser_log_with_participant_source_and_target() {
+        let output = capture_logs(|| {
             BrowserLogEntry::new(
                 "local-fox-3",
                 BrowserLogSource::Console,
@@ -143,10 +168,32 @@ mod tests {
             .emit();
         });
 
-        let output = String::from_utf8(output.lock().expect("lock output").clone()).expect("UTF-8 output");
         assert!(output.contains("INFO participant{name=local-fox-3}: browser:"));
         assert!(output.contains("transport connected"));
         assert!(output.contains("source=console"));
+    }
+
+    #[test]
+    fn batches_drop_oldest_entries_over_limit() {
+        let entries = (0..502)
+            .map(|index| {
+                BrowserLogEntry::new(
+                    "aws-owl-7",
+                    BrowserLogSource::Console,
+                    Level::INFO,
+                    format!("browser-entry-{index:03}"),
+                )
+            })
+            .collect();
+
+        let output = capture_logs(|| emit_browser_log_batch("aws-owl-7", entries));
+
+        assert!(output.contains("dropped 2 browser log entries"));
+        assert!(!output.contains("browser-entry-000"));
+        assert!(!output.contains("browser-entry-001"));
+        assert!(output.contains("browser-entry-002"));
+        assert!(output.contains("browser-entry-501"));
+        assert_eq!(output.lines().count(), 501);
     }
 
     #[test]
