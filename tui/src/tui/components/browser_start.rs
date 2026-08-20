@@ -127,6 +127,11 @@ pub struct BrowserStart {
     participant_store: ParticipantStore,
 }
 
+fn participant_backend_options() -> impl Iterator<Item = ParticipantBackendKind> {
+    ParticipantBackendKind::iter()
+        .filter(|backend| cfg!(debug_assertions) || *backend != ParticipantBackendKind::RemoteStub)
+}
+
 impl BrowserStart {
     pub fn new(participant_store: ParticipantStore) -> Self {
         Self {
@@ -665,7 +670,7 @@ impl Component for BrowserStart {
             BrowserStartAction::StartSelectBackend => {
                 self.backend_list = Some(EnumListInput::new(
                     "Participant backend",
-                    ParticipantBackendKind::iter(),
+                    participant_backend_options(),
                     self.config.backend,
                 ));
                 return Ok(None);
@@ -999,5 +1004,21 @@ impl Component for BrowserStart {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::participant_backend_options;
+    use client_simulator_config::ParticipantBackendKind;
+
+    #[test]
+    fn remote_stub_backend_visibility_matches_build_mode() {
+        let options = participant_backend_options().collect::<Vec<_>>();
+
+        assert_eq!(
+            options.contains(&ParticipantBackendKind::RemoteStub),
+            cfg!(debug_assertions),
+        );
     }
 }
