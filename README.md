@@ -35,6 +35,25 @@ nix run 'git+https://github.com/hypervideo/browser-simulator.git?submodules=1' -
 Set `submodules=1` because the build uses files from a Git submodule. The shorter
 `github:hypervideo/browser-simulator` flake reference does not fetch submodules.
 
+## Cloudflare worker commands
+
+The `cf` subcommand inspects and closes sessions on the Cloudflare browser
+simulator worker:
+
+```sh
+hyper-client-simulator cf sessions              # open sessions and a summary
+hyper-client-simulator cf limits                # Browser Rendering limits
+hyper-client-simulator cf close <SESSION_IDS>   # one ID, a comma-separated list, or `all`
+```
+
+The commands read the worker URL and HTTP timeout from `cloudflare.base_url`
+and `cloudflare.request_timeout_seconds` in `config.yaml`. Override them per
+call with `--base-url <URL>`, `--local` (use `http://127.0.0.1:8787`), and
+`--timeout <SECONDS>`. Add `--json` to print the raw worker response.
+
+`hyper-client-simulator aws` offers the same for AWS Device Farm sessions. Run
+`hyper-client-simulator aws --help` for details.
+
 ## Development
 
 This repository uses `hypervideo/cloudflare-browser-simulator` as a Git submodule

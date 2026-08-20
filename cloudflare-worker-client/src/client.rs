@@ -5,6 +5,7 @@ use crate::generated::{
         CommandSessionSessionId,
         GetSessionStateSessionId,
         KeepAliveSessionSessionId,
+        SessionBatchCloseRequestSessionIdsItem,
     },
     Client as ApiClient,
 };
@@ -144,6 +145,31 @@ impl CloudflareWorkerClient {
             .map(|response| response.into_inner())
             .map_err(|error| api_error(error, "close worker session", &self.base_url, &Method::POST, &path))
     }
+
+    pub async fn close_sessions(&self, session_ids: &[String]) -> Result<types::SessionBatchCloseResponse> {
+        let session_ids = session_ids
+            .iter()
+            .map(|session_id| {
+                SessionBatchCloseRequestSessionIdsItem::try_from(session_id.as_str())
+                    .map_err(|error| eyre!("Invalid worker session ID `{session_id}`: {error}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let request = types::SessionBatchCloseRequest { session_ids };
+
+        self.api
+            .close_sessions(&request)
+            .await
+            .map(|response| response.into_inner())
+            .map_err(|error| {
+                api_error(
+                    error,
+                    "close worker sessions",
+                    &self.base_url,
+                    &Method::POST,
+                    "sessions/close",
+                )
+            })
+    }
 }
 
 fn normalize_base_url(base_url: &str) -> Result<String> {
@@ -250,6 +276,36 @@ mod tests {
 
         let request = request_task.await.unwrap();
         assert!(request.starts_with("GET /limits HTTP/1.1\r\n"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn closes_sessions_in_one_batch_request() {
+        let response = concat!(
+            r#"{"ok":true,"results":[{"ok":true,"sessionId":"a","log":[]},{"ok":false,"sessionId":"b","error":"boom","log":[]}],"#,
+            r#""summary":{"requestedSessions":2,"closedSessions":1,"failedSessions":1}}"#
+        );
+        let (base_url, request_task) = spawn_json_server(200, response).await;
+        let client = CloudflareWorkerClient::new(&base_url, Duration::from_secs(5)).unwrap();
+
+        let response = client.close_sessions(&["a".to_owned(), "b".to_owned()]).await.unwrap();
+
+        assert_eq!(response.results.len(), 2);
+        assert!(response.results[0].ok);
+        assert_eq!(response.results[1].error.as_deref(), Some("boom"));
+        let request = request_task.await.unwrap();
+        assert!(request.starts_with("POST /sessions/close HTTP/1.1\r\n"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_session_ids_before_sending_a_batch_close() {
+        let client = CloudflareWorkerClient::new("http://127.0.0.1:9", Duration::from_secs(5)).unwrap();
+
+        let error = client
+            .close_sessions(&["a".to_owned(), String::new()])
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("Invalid worker session ID ``"), "{error}");
     }
 
     #[tokio::test]

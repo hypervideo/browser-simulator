@@ -93,6 +93,7 @@ clap.workspace = true
 client-simulator-browser.workspace = true
 client-simulator-config.workspace = true
 client-simulator-tui.workspace = true
+cloudflare-worker-client.workspace = true
 color-eyre.workspace = true
 eyre.workspace = true
 human-panic.workspace = true

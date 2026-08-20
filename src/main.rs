@@ -1,4 +1,5 @@
 mod aws;
+mod cf;
 mod errors;
 mod headless;
 
@@ -81,6 +82,8 @@ enum Command {
     Cookie(CookieArgs),
     /// Manage AWS Device Farm Test Grid sessions
     Aws(aws::AwsArgs),
+    /// Manage sessions on the Cloudflare browser simulator worker
+    Cf(cf::CfArgs),
 }
 
 #[cfg(test)]
@@ -279,6 +282,81 @@ mod tests {
     }
 
     #[test]
+    fn parses_cf_sessions_json() {
+        let args = CliArgs::parse_from(["hyper-client-simulator", "cf", "sessions", "--json"]);
+        match args.command {
+            Some(Command::Cf(cf::CfArgs {
+                command: cf::CfCommand::Sessions(args),
+            })) => {
+                assert!(args.json);
+                assert!(!args.local);
+                assert_eq!(args.base_url, None);
+                assert_eq!(args.timeout, None);
+            }
+            other => panic!("expected cf sessions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_cf_limits_with_worker_overrides() {
+        let args = CliArgs::parse_from([
+            "hyper-client-simulator",
+            "cf",
+            "limits",
+            "--base-url",
+            "http://worker.test",
+            "--timeout",
+            "5",
+        ]);
+        match args.command {
+            Some(Command::Cf(cf::CfArgs {
+                command: cf::CfCommand::Limits(args),
+            })) => {
+                assert_eq!(args.base_url.as_deref(), Some("http://worker.test"));
+                assert_eq!(args.timeout, Some(5));
+            }
+            other => panic!("expected cf limits, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_cf_close_with_local_worker() {
+        let args = CliArgs::parse_from(["hyper-client-simulator", "cf", "close", "a,b", "--local"]);
+        match args.command {
+            Some(Command::Cf(cf::CfArgs {
+                command: cf::CfCommand::Close(args),
+            })) => {
+                assert_eq!(args.session_ids, "a,b");
+                assert!(args.worker.local);
+            }
+            other => panic!("expected cf close, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_cf_close_without_session_ids() {
+        let err =
+            CliArgs::try_parse_from(["hyper-client-simulator", "cf", "close"]).expect_err("close needs session IDs");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn rejects_cf_local_combined_with_base_url() {
+        let err = CliArgs::try_parse_from([
+            "hyper-client-simulator",
+            "cf",
+            "sessions",
+            "--local",
+            "--base-url",
+            "http://worker.test",
+        ])
+        .expect_err("--local conflicts with --base-url");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
     fn parses_aws_setup_auth() {
         let args = CliArgs::parse_from(["hyper-client-simulator", "aws", "setup-auth"]);
         match args.command {
@@ -319,6 +397,7 @@ async fn main() -> eyre::Result<()> {
         }
         Some(Command::Cookie(args)) => run_cookie(args, logging_filter_from_env(logging)).await,
         Some(Command::Aws(args)) => aws::run(args, logging_filter_from_env(logging)).await,
+        Some(Command::Cf(args)) => cf::run(args, logging_filter_from_env(logging)).await,
     }
 }
 

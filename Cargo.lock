@@ -1889,6 +1889,7 @@ dependencies = [
  "client-simulator-browser",
  "client-simulator-config",
  "client-simulator-tui",
+ "cloudflare-worker-client",
  "color-eyre",
  "eyre",
  "human-panic",
