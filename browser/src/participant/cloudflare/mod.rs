@@ -4,6 +4,12 @@ use crate::{
         HyperSessionCookieManger,
     },
     participant::shared::{
+        browser_log::{
+            console_level,
+            emit_browser_log_batch,
+            BrowserLogEntry,
+            BrowserLogSource,
+        },
         messages::{
             ParticipantLogMessage,
             ParticipantMessage,
@@ -62,6 +68,7 @@ enum CloudflareAuth {
 pub(super) struct CloudflareLaunchOptions {
     headless: bool,
     fake_media: FakeMedia,
+    browser_logs: bool,
 }
 
 impl From<&client_simulator_config::Config> for CloudflareLaunchOptions {
@@ -69,6 +76,7 @@ impl From<&client_simulator_config::Config> for CloudflareLaunchOptions {
         Self {
             headless: config.headless,
             fake_media: config.fake_media(),
+            browser_logs: config.browser_logs,
         }
     }
 }
@@ -98,6 +106,29 @@ fn forward_worker_entries(participant_name: &str, entries: &[types::AutomationLo
             format!("worker {} {}", entry.at.to_rfc3339(), entry.step),
         );
     }
+}
+
+fn forward_worker_browser_entries(participant_name: &str, entries: &[types::BrowserLogEntry]) {
+    let entries = entries
+        .iter()
+        .map(|entry| map_worker_browser_entry(participant_name, entry))
+        .collect();
+    emit_browser_log_batch(participant_name, entries);
+}
+
+fn map_worker_browser_entry(participant_name: &str, entry: &types::BrowserLogEntry) -> BrowserLogEntry {
+    let source = match entry.source {
+        types::BrowserLogEntrySource::Console => BrowserLogSource::Console,
+        types::BrowserLogEntrySource::Exception => BrowserLogSource::Exception,
+        types::BrowserLogEntrySource::Browser => BrowserLogSource::Browser,
+    };
+
+    BrowserLogEntry::new(
+        participant_name,
+        source,
+        console_level(&entry.level),
+        entry.message.clone(),
+    )
 }
 
 fn store_cached_state(cached_state: &Arc<Mutex<ParticipantState>>, state: &types::ParticipantState) {
@@ -197,6 +228,10 @@ impl CloudflareSession {
         forward_worker_entries(&self.launch_spec.username, entries);
     }
 
+    fn log_worker_browser_entries(&self, entries: &[types::BrowserLogEntry]) {
+        forward_worker_browser_entries(&self.launch_spec.username, entries);
+    }
+
     fn log_backend_limitations(&self) {
         if !self.launch_options.headless {
             self.log_message(
@@ -260,6 +295,7 @@ impl CloudflareSession {
             .map_err(|error| eyre!("Failed to encode Hyper Core session cookie for the worker: {error}"))?;
 
         Ok(types::SessionCreateRequest {
+            browser_logs: Some(self.launch_options.browser_logs),
             debug: Some(self.cloudflare_config.debug),
             display_name: types::SessionCreateRequestDisplayName::try_from(self.launch_spec.username.clone())
                 .map_err(|error| eyre!("Invalid Cloudflare display name: {error}"))?,
@@ -360,6 +396,7 @@ impl CloudflareSession {
                         match client.keep_alive_session(&session_id).await {
                             Ok(response) => {
                                 forward_worker_entries(&participant_name, &response.log);
+                                forward_worker_browser_entries(&participant_name, &response.browser_log);
 
                                 store_cached_state(&cached_state, &response.state);
 
@@ -410,6 +447,11 @@ impl CloudflareSession {
         let request = self.build_create_request().await?;
         let response = self.worker_client()?.create_session(&request).await?;
         self.log_worker_entries(&response.log);
+        if let Some(entries) = response.browser_log.as_deref() {
+            self.log_worker_browser_entries(entries);
+        } else if self.launch_options.browser_logs {
+            self.log_message("debug", "worker does not report browser logs");
+        }
 
         self.termination_tx.send_replace(None);
         self.update_cached_state(&response.state);
@@ -436,6 +478,7 @@ impl CloudflareSession {
 
         let response = self.worker_client()?.close_session(&session_id).await?;
         self.log_worker_entries(&response.log);
+        self.log_worker_browser_entries(&response.browser_log);
         self.session_id = None;
         self.termination_tx.send_replace(None);
         {
@@ -458,6 +501,7 @@ impl CloudflareSession {
         let request = Self::command_request(message);
         let response = self.worker_client()?.command_session(&session_id, &request).await?;
         self.log_worker_entries(&response.log);
+        self.log_worker_browser_entries(&response.browser_log);
         self.update_cached_state(&response.state);
         Ok(())
     }
@@ -830,12 +874,14 @@ pub(crate) fn take_spawned_participants_for_test() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
+        map_worker_browser_entry,
         CloudflareLaunchOptions,
         CloudflareSession,
     };
     use crate::{
         auth::HyperSessionCookieManger,
         participant::shared::{
+            browser_log::BrowserLogSource,
             messages::ParticipantMessage,
             ParticipantDriverSession,
             ParticipantLaunchSpec,
@@ -883,6 +929,23 @@ mod tests {
     };
     use url::Url;
 
+    #[test]
+    fn maps_worker_browser_entries() {
+        let entry = cloudflare_worker_client::types::BrowserLogEntry {
+            at: Utc::now(),
+            level: "warning".to_owned(),
+            message: "ICE connection state: disconnected".to_owned(),
+            source: cloudflare_worker_client::types::BrowserLogEntrySource::Console,
+        };
+
+        let entry = map_worker_browser_entry("cf-owl-7", &entry);
+
+        assert_eq!(entry.participant, "cf-owl-7");
+        assert_eq!(entry.source, BrowserLogSource::Console);
+        assert_eq!(entry.level, tracing::Level::WARN);
+        assert_eq!(entry.text, "ICE connection state: disconnected");
+    }
+
     #[derive(Clone, Debug)]
     struct CapturedRequest {
         method: String,
@@ -915,6 +978,7 @@ mod tests {
             let writer_output = Arc::clone(&output);
             let subscriber = tracing_subscriber::fmt()
                 .with_ansi(false)
+                .with_max_level(tracing::Level::TRACE)
                 .with_writer(move || SharedBuffer(Arc::clone(&writer_output)))
                 .finish();
 
@@ -1036,6 +1100,7 @@ mod tests {
             serde_json::from_str::<Value>(&requests[2].body).unwrap(),
             json!({
                 "debug": true,
+                "browserLogs": false,
                 "displayName": "cloudflare-sim",
                 "frontendKind": "hyper-core",
                 "hyperSessionCookie": "fetched-cookie",
@@ -1122,6 +1187,131 @@ mod tests {
 
         session.close().await.unwrap();
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn start_forwards_worker_browser_logs() {
+        let captured_logs = CapturedLogs::new();
+        let responses = VecDeque::from(vec![
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-browser-logs",
+                    "state": worker_state_json(true, false, true, false, true, "none", "none", false),
+                    "log": [],
+                    "browserLog": [
+                        {
+                            "at": Utc::now().to_rfc3339(),
+                            "level": "warning",
+                            "source": "console",
+                            "message": "ICE connection state: disconnected"
+                        },
+                        {
+                            "at": Utc::now().to_rfc3339(),
+                            "level": "error",
+                            "source": "exception",
+                            "message": "Uncaught TypeError: track is undefined"
+                        }
+                    ]
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-browser-logs",
+                    "log": [],
+                    "browserLog": []
+                }),
+            ),
+        ]);
+        let (base_url, requests, server) = spawn_http_server(responses).await;
+        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+        let mut options = launch_options(true, FakeMedia::None);
+        options.browser_logs = true;
+        let mut session = CloudflareSession::new_for_test(
+            launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
+            options,
+            CloudflareConfig {
+                base_url: Url::parse(&base_url).unwrap(),
+                request_timeout_seconds: 5,
+                session_timeout_ms: 120_000,
+                navigation_timeout_ms: 30_000,
+                selector_timeout_ms: 10_000,
+                debug: false,
+                health_poll_interval_ms: 60_000,
+            },
+            None,
+            cookie_manager,
+        );
+
+        session.start().await.unwrap();
+        session.close().await.unwrap();
+        server.abort();
+
+        let logs = captured_logs.output();
+        assert!(logs.contains("participant{name=cloudflare-sim}: browser:"));
+        assert!(logs.contains("ICE connection state: disconnected"));
+        assert!(logs.contains("source=console"));
+        assert!(logs.contains("Uncaught TypeError: track is undefined"));
+        assert!(logs.contains("source=exception"));
+        assert!(!logs.contains("worker does not report browser logs"));
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&requests[0].body).unwrap()["browserLogs"],
+            true
+        );
+    }
+
+    #[tokio::test]
+    async fn start_reports_an_older_worker_without_browser_logs() {
+        let captured_logs = CapturedLogs::new();
+        let responses = VecDeque::from(vec![
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-old-worker",
+                    "state": worker_state_json(true, false, true, false, true, "none", "none", false),
+                    "log": []
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-old-worker",
+                    "log": []
+                }),
+            ),
+        ]);
+        let (base_url, _requests, server) = spawn_http_server(responses).await;
+        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+        let mut options = launch_options(true, FakeMedia::None);
+        options.browser_logs = true;
+        let mut session = CloudflareSession::new_for_test(
+            launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
+            options,
+            CloudflareConfig {
+                base_url: Url::parse(&base_url).unwrap(),
+                request_timeout_seconds: 5,
+                session_timeout_ms: 120_000,
+                navigation_timeout_ms: 30_000,
+                selector_timeout_ms: 10_000,
+                debug: false,
+                health_poll_interval_ms: 60_000,
+            },
+            None,
+            cookie_manager,
+        );
+
+        session.start().await.unwrap();
+        session.close().await.unwrap();
+        server.abort();
+
+        assert!(captured_logs.output().contains("worker does not report browser logs"));
     }
 
     #[tokio::test]
@@ -1576,7 +1766,11 @@ mod tests {
     }
 
     fn launch_options(headless: bool, fake_media: FakeMedia) -> CloudflareLaunchOptions {
-        CloudflareLaunchOptions { headless, fake_media }
+        CloudflareLaunchOptions {
+            headless,
+            fake_media,
+            browser_logs: false,
+        }
     }
 
     fn launch_spec(frontend_kind: ResolvedFrontendKind, room_url: &str) -> ParticipantLaunchSpec {

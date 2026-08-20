@@ -252,6 +252,7 @@ mod tests {
         SessionCreateRequest,
         SessionCreateRequestDisplayName,
         SessionCreateRequestFrontendKind,
+        SessionCreateResponse,
     };
     use std::time::Duration;
     use tokio::{
@@ -342,8 +343,22 @@ mod tests {
         assert!(message.contains("future-noise-model"), "{message}");
     }
 
+    #[test]
+    fn create_response_preserves_browser_log_field_presence() {
+        let without_browser_log: SessionCreateResponse =
+            serde_json::from_value(create_response_json()).expect("response without browser logs");
+        assert!(without_browser_log.browser_log.is_none());
+
+        let mut with_browser_log = create_response_json();
+        with_browser_log["browserLog"] = serde_json::json!([]);
+        let with_browser_log: SessionCreateResponse =
+            serde_json::from_value(with_browser_log).expect("response with browser logs");
+        assert!(with_browser_log.browser_log.is_some_and(|entries| entries.is_empty()));
+    }
+
     fn create_session_request() -> SessionCreateRequest {
         SessionCreateRequest {
+            browser_logs: Some(true),
             debug: Some(false),
             display_name: SessionCreateRequestDisplayName::try_from("Cloudflare Simulator").unwrap(),
             frontend_kind: SessionCreateRequestFrontendKind::HyperCore,
@@ -365,6 +380,28 @@ mod tests {
                 video_enabled: true,
             },
         }
+    }
+
+    fn create_response_json() -> serde_json::Value {
+        serde_json::json!({
+            "ok": true,
+            "sessionId": "cf-session-123",
+            "state": {
+                "running": true,
+                "joined": true,
+                "muted": false,
+                "videoActivated": true,
+                "screenshareActivated": false,
+                "autoGainControl": true,
+                "noiseSuppression": "none",
+                "transportMode": "webrtc",
+                "videoConstraintPublishWebcam": "none",
+                "videoConstraintSubscribe": "none",
+                "videoMaxConcurrentTracks": null,
+                "backgroundBlur": false
+            },
+            "log": []
+        })
     }
 
     async fn spawn_json_server(status: u16, body: &'static str) -> (String, tokio::task::JoinHandle<String>) {

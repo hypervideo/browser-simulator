@@ -16,7 +16,8 @@ fn main() {
             spec_path.display()
         )
     });
-    let spec = serde_json::from_slice::<openapiv3::OpenAPI>(&spec_bytes).expect("failed to parse OpenAPI spec");
+    let mut spec = serde_json::from_slice::<openapiv3::OpenAPI>(&spec_bytes).expect("failed to parse OpenAPI spec");
+    preserve_create_browser_log_presence(&mut spec);
 
     let mut generator = progenitor::Generator::default();
     let tokens = generator
@@ -27,4 +28,29 @@ fn main() {
 
     let out_path = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR")).join("worker_api.rs");
     fs::write(out_path, content).expect("failed to write generated Rust client");
+}
+
+fn preserve_create_browser_log_presence(spec: &mut openapiv3::OpenAPI) {
+    let components = spec.components.as_mut().expect("OpenAPI spec has no components");
+    let response = components
+        .schemas
+        .get_mut("SessionCreateResponse")
+        .expect("OpenAPI spec has no SessionCreateResponse");
+    let openapiv3::ReferenceOr::Item(response) = response else {
+        panic!("SessionCreateResponse must be an inline schema");
+    };
+    let openapiv3::SchemaKind::Type(openapiv3::Type::Object(response)) = &mut response.schema_kind else {
+        panic!("SessionCreateResponse must be an object schema");
+    };
+    let browser_log = response
+        .properties
+        .get_mut("browserLog")
+        .expect("SessionCreateResponse has no browserLog field");
+    let openapiv3::ReferenceOr::Item(browser_log) = browser_log else {
+        panic!("SessionCreateResponse.browserLog must be an inline schema");
+    };
+
+    // Progenitor maps an optional array to an empty Vec. Nullable keeps its
+    // presence as Option<Vec<_>>, so an older worker remains detectable.
+    browser_log.schema_data.nullable = true;
 }
