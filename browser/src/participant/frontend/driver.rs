@@ -57,10 +57,9 @@ impl FrontendContext {
     }
 
     pub(in crate::participant) fn send_log_message(&self, level: &str, message: impl ToString) {
-        if let Err(err) = self
-            .sender
-            .send(ParticipantLogMessage::new(level, self.participant_name(), message))
-        {
+        let log_message = ParticipantLogMessage::new(level, self.participant_name(), message);
+        log_message.write();
+        if let Err(err) = self.sender.send(log_message) {
             trace!(participant = %self.participant_name(), "Failed to send log message: {err}");
         }
     }
@@ -77,4 +76,69 @@ pub(in crate::participant) trait FrontendAutomation: Send {
 /// Decode the legacy `data-test-state="true"|"false"` attribute.
 pub(in crate::participant) fn decode_test_state(value: Option<String>) -> Option<bool> {
     value.map(|value| value == "true")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        super::commands::tests::RecordingDriver,
+        *,
+    };
+    use client_simulator_config::{
+        Config,
+        ParticipantConfig,
+    };
+    use std::{
+        io::{
+            Result as IoResult,
+            Write,
+        },
+        sync::{
+            Arc,
+            Mutex,
+        },
+    };
+    use tokio::sync::mpsc::unbounded_channel;
+    use url::Url;
+
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buffer: &[u8]) -> IoResult<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> IoResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn frontend_log_messages_are_written_to_tracing() {
+        let (sender, _receiver) = unbounded_channel();
+        let context = FrontendContext {
+            launch_spec: ParticipantLaunchSpec::from(ParticipantConfig {
+                username: "sim-user".to_string(),
+                session_url: Url::parse("https://example.com/room").unwrap(),
+                app_config: Config::default(),
+            }),
+            driver: Box::new(RecordingDriver::default()),
+            sender,
+        };
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer_output = Arc::clone(&output);
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || SharedBuffer(Arc::clone(&writer_output)))
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            context.send_log_message("info", "Joined the space");
+        });
+
+        let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(output.contains("INFO"));
+        assert!(output.contains("Joined the space"));
+    }
 }

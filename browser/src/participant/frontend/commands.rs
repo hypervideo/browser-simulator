@@ -114,7 +114,7 @@ pub(super) async fn set_force_webrtc(driver: &dyn BrowserDriver, value: bool) ->
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::participant::frontend) mod tests {
     use super::*;
     use client_simulator_config::VideoConstraint;
     use eyre::Result;
@@ -129,7 +129,7 @@ mod tests {
     };
 
     #[derive(Default)]
-    struct RecordingDriver {
+    pub(in crate::participant::frontend) struct RecordingDriver {
         calls: Mutex<Vec<(String, Option<serde_json::Value>)>>,
         next_result: Mutex<serde_json::Value>,
     }

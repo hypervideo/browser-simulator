@@ -33,6 +33,7 @@ cloudflare-worker-client.workspace = true
 [dev-dependencies]
 serde_json.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "time"] }
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
