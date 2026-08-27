@@ -5,10 +5,6 @@ pub struct TuiArgs {
     #[clap(long, value_name = "URL")]
     pub url: Option<String>,
 
-    /// Optional authentication cookie to override the stored configuration.
-    #[clap(long, value_name = "COOKIE")]
-    pub cookie: Option<String>,
-
     /// Enable or disable fake WebRTC devices/UI.
     ///   - adds `--use-fake-device-for-media-stream`
     ///   - adds `--use-fake-ui-for-media-stream`
@@ -43,9 +39,6 @@ mod config_ext {
             let mut cache = HashMap::<String, Value>::new();
             if let Some(url) = &self.url {
                 cache.insert("url".to_string(), url.clone().into());
-            }
-            if let Some(cookie) = &self.cookie {
-                cache.insert("cookie".to_string(), cookie.clone().into());
             }
             if let Some(fake_media) = &self.fake_media {
                 cache.insert("fake_media".to_string(), (*fake_media).into());

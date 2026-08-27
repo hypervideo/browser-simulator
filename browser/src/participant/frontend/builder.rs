@@ -8,18 +8,18 @@ use super::{
 };
 use crate::{
     auth::{
-        BorrowedCookie,
-        HyperSessionCookieManger,
+        BorrowedCredentials,
+        FirstPartyCredentialsManager,
     },
     participant::shared::ResolvedFrontendKind,
 };
 use eyre::Result;
 
-/// How to authenticate the frontend. HyperLite needs no cookie.
+/// How to authenticate the frontend. Hyper Lite does not need Hyper Core credentials.
 pub(in crate::participant) enum FrontendAuth {
     HyperCore {
-        cookie: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
+        credentials: Option<BorrowedCredentials>,
+        credentials_manager: FirstPartyCredentialsManager,
     },
     HyperLite,
 }
@@ -27,11 +27,14 @@ pub(in crate::participant) enum FrontendAuth {
 impl FrontendAuth {
     pub(in crate::participant) fn for_kind(
         kind: ResolvedFrontendKind,
-        cookie: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
+        credentials: Option<BorrowedCredentials>,
+        credentials_manager: FirstPartyCredentialsManager,
     ) -> Self {
         match kind {
-            ResolvedFrontendKind::HyperCore => Self::HyperCore { cookie, cookie_manager },
+            ResolvedFrontendKind::HyperCore => Self::HyperCore {
+                credentials,
+                credentials_manager,
+            },
             ResolvedFrontendKind::HyperLite => Self::HyperLite,
         }
     }
@@ -46,15 +49,18 @@ impl FrontendKindBuilder {
         auth: FrontendAuth,
     ) -> Result<Box<dyn FrontendAutomation>> {
         match auth {
-            FrontendAuth::HyperCore { cookie, cookie_manager } => {
-                let cookie = if let Some(cookie) = cookie {
-                    cookie
+            FrontendAuth::HyperCore {
+                credentials,
+                credentials_manager,
+            } => {
+                let credentials = if let Some(credentials) = credentials {
+                    credentials
                 } else {
-                    cookie_manager
-                        .fetch_new_cookie(context.launch_spec.base_url(), context.participant_name())
+                    credentials_manager
+                        .fetch_new_credentials(context.launch_spec.base_url(), context.participant_name())
                         .await?
                 };
-                Ok(Box::new(ParticipantInner::new(context, cookie)))
+                Ok(Box::new(ParticipantInner::new(context, credentials)))
             }
             FrontendAuth::HyperLite => Ok(Box::new(ParticipantInnerLite::new(context))),
         }

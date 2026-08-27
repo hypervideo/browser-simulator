@@ -48,8 +48,8 @@ dist-build *args="":
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-fetch-cookie username="simulator-user" server-url="http://localhost:8081":
-    cargo run -q -- cookie --url {{ server-url }} --user {{ username }}
+fetch-credentials username="simulator-user" server-url="http://localhost:8081":
+    cargo run -q -- credentials --url {{ server-url }} --user {{ username }}
 
 cachix-push:
     nix build --no-link --print-out-paths \

@@ -178,7 +178,7 @@ pub(in crate::participant::frontend) mod tests {
             async move { Ok(value) }.boxed()
         }
 
-        fn set_cookie(&self, _domain: &str, _name: &str, _value: &str) -> BoxFuture<'_, Result<()>> {
+        fn seed_first_party_credentials(&self, _realm: &str, _credentials: &str) -> BoxFuture<'_, Result<()>> {
             async { Ok(()) }.boxed()
         }
     }

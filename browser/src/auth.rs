@@ -1,5 +1,3 @@
-use chromiumoxide::cdp::browser_protocol::network::CookieParam;
-use chrono::prelude::*;
 use eyre::{
     Context as _,
     OptionExt as _,
@@ -24,140 +22,144 @@ use std::{
     },
 };
 
-/// Manages cookies. Provides access to borrowed cookies.
+/// Reuses guest credentials between simulator participants without sharing one identity concurrently.
 #[derive(Clone, Debug)]
-pub struct HyperSessionCookieManger {
+pub struct FirstPartyCredentialsManager {
     stash_file: PathBuf,
-    available_cookies: Arc<Mutex<HashMap<Domain, VecDeque<HyperSessionCookie>>>>,
+    available_credentials: Arc<Mutex<HashMap<String, VecDeque<FirstPartyCredentials>>>>,
 }
 
-impl HyperSessionCookieManger {
+impl FirstPartyCredentialsManager {
     pub fn new(stash_file: impl Into<PathBuf>) -> Self {
         Self {
             stash_file: stash_file.into(),
-            available_cookies: Default::default(),
+            available_credentials: Default::default(),
         }
     }
 
-    pub fn give_cookie(&self, domain: impl ToString) -> Option<BorrowedCookie> {
-        let domain = domain.to_string();
-        let mut available_cookies = self.available_cookies.lock().unwrap();
-        let available_cookies = available_cookies.entry(domain.clone()).or_default();
-        // A cookie can expire while it sits in the queue. Never hand out an expired one; the caller fetches
-        // a fresh cookie instead.
-        available_cookies.retain(|cookie| !cookie.is_expired());
-        available_cookies
+    pub fn give_credentials(&self, base_url: &url::Url) -> Option<BorrowedCredentials> {
+        let server_url = server_key(base_url);
+        self.available_credentials
+            .lock()
+            .unwrap()
+            .entry(server_url.clone())
+            .or_default()
             .pop_front()
-            .map(|cookie| BorrowedCookie::new(domain, cookie, self.clone()))
-            .inspect(|cookie| {
-                debug!(name = cookie.username(), "borrowed cookie");
+            .map(|credentials| BorrowedCredentials::new(server_url, credentials, self.clone()))
+            .inspect(|credentials| {
+                debug!(name = credentials.username(), "borrowed first-party credentials");
             })
     }
 
-    fn return_cookie(&self, domain: impl ToString, cookie: HyperSessionCookie) {
-        debug!(name = cookie.username, "returned cookie");
-        let mut available_cookies = self.available_cookies.lock().unwrap();
-        let available_cookies = available_cookies.entry(domain.to_string()).or_default();
-        available_cookies.push_back(cookie);
+    fn return_credentials(&self, server_url: String, credentials: FirstPartyCredentials) {
+        debug!(name = credentials.username, "returned first-party credentials");
+        self.available_credentials
+            .lock()
+            .unwrap()
+            .entry(server_url)
+            .or_default()
+            .push_back(credentials);
     }
 
-    pub async fn fetch_new_cookie(&self, base_url: url::Url, username: impl AsRef<str>) -> Result<BorrowedCookie> {
-        let cookie = HyperSessionCookie::fetch_token_and_set_name(base_url.clone(), username).await?;
+    pub async fn fetch_new_credentials(
+        &self,
+        base_url: url::Url,
+        username: impl AsRef<str>,
+    ) -> Result<BorrowedCredentials> {
+        let credentials = FirstPartyCredentials::fetch(&base_url, username).await?;
+        let server_url = server_key(&base_url);
 
-        // Save the new cookie so we can reuse it later.
-
-        let mut stash = HyperSessionCookieStash::load(&self.stash_file);
+        let mut stash = FirstPartyCredentialsStash::load(&self.stash_file);
         stash
-            .cookies
-            .entry(base_url.to_string())
+            .credentials
+            .entry(server_url.clone())
             .or_default()
-            .push(cookie.clone());
+            .push(credentials.clone());
         stash.save()?;
 
-        Ok(BorrowedCookie::new(base_url, cookie, self.clone()))
+        Ok(BorrowedCredentials::new(server_url, credentials, self.clone()))
     }
 
-    pub async fn give_or_fetch_cookie(&self, base_url: url::Url, username: impl AsRef<str>) -> Result<BorrowedCookie> {
-        let username = username.as_ref();
-
-        if let Some(cookie) = self.give_cookie(base_url.clone()) {
-            return Ok(cookie);
+    pub async fn give_or_fetch_credentials(
+        &self,
+        base_url: url::Url,
+        username: impl AsRef<str>,
+    ) -> Result<BorrowedCredentials> {
+        if let Some(credentials) = self.give_credentials(&base_url) {
+            return Ok(credentials);
         }
 
-        self.fetch_new_cookie(base_url, username).await
+        self.fetch_new_credentials(base_url, username).await
     }
 }
 
-impl From<HyperSessionCookieStash> for HyperSessionCookieManger {
-    fn from(stash: HyperSessionCookieStash) -> Self {
+impl From<FirstPartyCredentialsStash> for FirstPartyCredentialsManager {
+    fn from(stash: FirstPartyCredentialsStash) -> Self {
         Self {
             stash_file: stash.stash_file,
-            available_cookies: Arc::new(Mutex::new(
+            available_credentials: Arc::new(Mutex::new(
                 stash
-                    .cookies
+                    .credentials
                     .into_iter()
-                    .map(|(domain, cookies)| (domain, VecDeque::from(cookies)))
+                    .map(|(server_url, credentials)| (server_url, VecDeque::from(credentials)))
                     .collect(),
             )),
         }
     }
 }
 
-// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
-/// A cookie that will be returned to the manager when dropped.
+/// Credentials that return to the manager when their participant stops.
 #[derive(Debug)]
-pub struct BorrowedCookie {
-    domain: Domain,
-    pub(crate) cookie: HyperSessionCookie,
-    manager: HyperSessionCookieManger,
+pub struct BorrowedCredentials {
+    server_url: String,
+    credentials: FirstPartyCredentials,
+    manager: FirstPartyCredentialsManager,
 }
 
-impl Drop for BorrowedCookie {
+impl Drop for BorrowedCredentials {
     fn drop(&mut self) {
-        self.manager.return_cookie(self.domain.clone(), self.cookie.clone());
+        self.manager
+            .return_credentials(self.server_url.clone(), self.credentials.clone());
     }
 }
 
-impl BorrowedCookie {
-    pub(crate) fn new(domain: impl ToString, cookie: HyperSessionCookie, manager: HyperSessionCookieManger) -> Self {
+impl BorrowedCredentials {
+    fn new(server_url: String, credentials: FirstPartyCredentials, manager: FirstPartyCredentialsManager) -> Self {
         Self {
-            domain: domain.to_string(),
-            cookie,
+            server_url,
+            credentials,
             manager,
         }
     }
 
-    pub fn as_browser_cookie_for(&self, domain: impl AsRef<str>) -> Result<CookieParam> {
-        self.cookie.as_browser_cookie_for(domain)
-    }
-
     pub fn username(&self) -> &str {
-        &self.cookie.username
+        &self.credentials.username
     }
 
-    pub fn raw_value(&self) -> &str {
-        &self.cookie.cookie
+    pub fn realm(&self) -> &str {
+        &self.credentials.realm
+    }
+
+    pub fn envelope_json(&self) -> Result<String> {
+        self.credentials.envelope_json()
     }
 }
 
-// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+fn server_key(base_url: &url::Url) -> String {
+    base_url.origin().ascii_serialization()
+}
 
-pub type Domain = String;
-
-/// Only store cookies for selected hyper servers. For these servers we don't want to needlessly create new guest
-/// accounts, for other (dev) servers guest creation does not matter.
+/// Persist guest identities only where creating a new account for every run is undesirable.
 const PERSISTENCE_WHITELIST: [&str; 3] = ["latest.dev.hyper.video", "staging.hyper.video", "meet.hyper.video"];
 
-/// List of cookies that can be stored and retrieved.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HyperSessionCookieStash {
+pub(crate) struct FirstPartyCredentialsStash {
+    #[serde(skip)]
     stash_file: PathBuf,
-    cookies: HashMap<Domain, Vec<HyperSessionCookie>>,
+    credentials: HashMap<String, Vec<FirstPartyCredentials>>,
 }
 
-impl HyperSessionCookieStash {
-    /// Load the cookies from the simulator data directory.
+impl FirstPartyCredentialsStash {
     fn load(file: impl AsRef<Path>) -> Self {
         let file = file.as_ref();
         let mut stash: Self = file
@@ -165,202 +167,112 @@ impl HyperSessionCookieStash {
             .then(|| {
                 std::fs::File::open(file)
                     .ok()
-                    .and_then(|f| serde_json::from_reader(f).ok())
+                    .and_then(|file| serde_json::from_reader(file).ok())
             })
             .flatten()
-            .inspect(|_| {
-                debug!(?file, "loaded hyper_session cookies");
-            })
+            .inspect(|_| debug!(?file, "loaded first-party credentials"))
             .unwrap_or_else(|| {
-                debug!(?file, "no hyper_session cookies found");
+                debug!(?file, "no first-party credentials found");
                 Self {
                     stash_file: file.to_path_buf(),
-                    cookies: Default::default(),
+                    credentials: Default::default(),
                 }
             });
-
-        // Drop expired cookies here so the next `save` does not write them back and the stash does not grow
-        // with dead entries.
-        for cookies in stash.cookies.values_mut() {
-            cookies.retain(|cookie| !cookie.is_expired());
-        }
-
+        stash.stash_file = file.to_path_buf();
         stash
     }
 
-    /// Load the cookies from the given directory.
-    pub fn load_from_data_dir(data_dir: impl AsRef<Path>) -> Self {
-        const HYPER_COOKIES_FILE: &str = "hyper_session_cookies.json";
-        let file = data_dir.as_ref().join(HYPER_COOKIES_FILE);
-        Self::load(file)
+    pub(crate) fn load_from_data_dir(data_dir: impl AsRef<Path>) -> Self {
+        Self::load(data_dir.as_ref().join("first_party_credentials.json"))
     }
 
-    fn with_whitelisted_domains(&self) -> Self {
-        let cookies = self
-            .cookies
+    fn with_whitelisted_servers(&self) -> Self {
+        let credentials = self
+            .credentials
             .iter()
-            .filter(|(domain, _)| {
-                PERSISTENCE_WHITELIST
-                    .iter()
-                    .any(|whitelisted| domain.contains(whitelisted))
+            .filter(|(server_url, _)| {
+                url::Url::parse(server_url)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_owned))
+                    .is_some_and(|host| PERSISTENCE_WHITELIST.contains(&host.as_str()))
             })
-            .map(|(domain, cookies)| (domain.clone(), cookies.clone()))
+            .map(|(server_url, credentials)| (server_url.clone(), credentials.clone()))
             .collect();
 
         Self {
             stash_file: self.stash_file.clone(),
-            cookies,
+            credentials,
         }
     }
 
-    /// Save the cookies to the given directory.
     fn save(&self) -> Result<()> {
         let dir = self.stash_file.parent().ok_or_eyre("failed to get parent directory")?;
         std::fs::create_dir_all(dir)?;
-        let file = std::fs::File::create(&self.stash_file)?;
-        serde_json::to_writer_pretty(&file, &self.with_whitelisted_domains())?;
-        debug!(?file, "saved hyper_session cookies");
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let file = options.open(&self.stash_file)?;
+        serde_json::to_writer_pretty(&file, &self.with_whitelisted_servers())?;
+        debug!(?file, "saved first-party credentials");
         Ok(())
     }
 }
 
-/// A token (actually a cookie) to authenticate against the hyper.video server.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HyperSessionCookie {
-    domain: Domain,
-    created_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
-    pub username: String,
-    cookie: String,
+struct FirstPartyCredentials {
+    username: String,
+    realm: String,
+    first_party_access_token: String,
+    renewal_token: String,
 }
 
-impl HyperSessionCookie {
-    pub(crate) fn new(domain: impl ToString, cookie: impl ToString) -> Self {
-        let created_at = Utc::now();
-        Self {
-            domain: domain.to_string(),
-            created_at,
-            // TODO: Currently we use a year expiration date on the server but we should dynamically determine this
-            // value here as it is likely to change.
-            expires_at: created_at + chrono::Duration::days(365),
-            username: Default::default(),
-            cookie: cookie.to_string(),
-        }
-    }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GuestAuthResponse {
+    first_party_access_token: String,
+    renewal_token: String,
+}
 
-    pub(crate) fn is_expired(&self) -> bool {
-        Utc::now() > self.expires_at
-    }
-
-    fn cookie_header(&self) -> Result<reqwest::header::HeaderValue> {
-        reqwest::header::HeaderValue::from_str(&format!("hyper_session={}", self.cookie))
-            .context("failed to create cookie header")
-    }
-
-    fn client() -> Result<reqwest::Client> {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .danger_accept_invalid_certs(true)
-            .build()
-            .context("failed to build reqwest client")
-    }
-
-    async fn fetch_token_and_set_name(base_url: url::Url, name: impl AsRef<str>) -> Result<Self> {
-        let mut auth = HyperSessionCookie::fetch_token(&base_url).await?;
-        auth.set_name(name, &base_url).await?;
-        Ok(auth)
-    }
-
-    async fn fetch_token(base_url: &url::Url) -> Result<Self> {
+impl FirstPartyCredentials {
+    async fn fetch(base_url: &url::Url, username: impl AsRef<str>) -> Result<Self> {
+        let username = username.as_ref();
         let url = base_url
             .join("/api/v1/auth/guest")
             .context("failed to join base URL with /api/v1/auth/guest")?;
 
-        debug!(%url, "Requesting guest cookie");
-
-        let response = Self::client()?
-            .post(url)
-            .query(&[("username", "guest")])
-            .send()
-            .await?
-            .error_for_status()?;
-
-        let cookie = response
-            .cookies()
-            .find(|cookie| cookie.name() == "hyper_session")
-            .ok_or_eyre("api/v1/auth/guest did not return a cookie")?
-            .value()
-            .to_string();
-
-        Ok(Self::new(base_url, cookie))
-    }
-
-    #[expect(unused)]
-    pub(crate) async fn check_validity(&self, server_base_url: &url::Url) -> bool {
-        let header = match self.cookie_header() {
-            Ok(h) => h,
-            _ => return false,
-        };
-
-        let Ok(client) = Self::client() else { return false };
-
-        let url = server_base_url
-            .join("/api/v1/auth/me")
-            .expect("failed to join base URL with /api/v1/auth/me");
-
-        client
-            .get(url)
-            .header("Cookie", header)
-            .send()
-            .await
-            .map(|response| response.status().is_success())
-            .unwrap_or(false)
-    }
-
-    #[expect(unused)]
-    pub(crate) async fn logout(&self, server_base_url: &url::Url) -> Result<()> {
-        let url = server_base_url
-            .join("/api/v1/auth/logout")
-            .context("failed to join base URL with /api/v1/auth/logout")?;
-        Self::client()?
-            .post(url)
-            .header("Content-Type", "application/json")
-            .header("Cookie", self.cookie_header()?)
-            .body("{}")
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
-    }
-
-    pub(crate) async fn set_name(&mut self, name: impl AsRef<str>, server_base_url: &url::Url) -> Result<()> {
-        let name = name.as_ref();
-        let url = server_base_url
-            .join("/api/v1/auth/me/name")
-            .context("failed to join base URL with /api/v1/auth/me/name")?;
-        Self::client()?
-            .put(url)
-            .header("Content-Type", "application/json")
-            .header("Cookie", self.cookie_header()?)
-            .json(&serde_json::json!({
-                "name": name,
-            }))
-            .send()
-            .await?
-            .error_for_status()?;
-        self.username = name.to_string();
-        Ok(())
-    }
-
-    pub(crate) fn as_browser_cookie_for(&self, domain: impl AsRef<str>) -> Result<CookieParam> {
-        CookieParam::builder()
-            .name("hyper_session")
-            .value(self.cookie.clone())
-            .domain(domain.as_ref())
-            .path("/")
+        debug!(%url, %username, "requesting guest credentials");
+        let response = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .danger_accept_invalid_certs(true)
             .build()
-            .map_err(|e| eyre::eyre!(e))
-            .context("failed to build cookie")
+            .context("failed to build reqwest client")?
+            .post(url)
+            .query(&[("username", username)])
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<GuestAuthResponse>()
+            .await?;
+
+        Ok(Self {
+            username: username.to_owned(),
+            realm: base_url.origin().ascii_serialization(),
+            first_party_access_token: response.first_party_access_token,
+            renewal_token: response.renewal_token,
+        })
+    }
+
+    fn envelope_json(&self) -> Result<String> {
+        serde_json::to_string(&serde_json::json!({
+            "realm": self.realm,
+            "first_party_access_token": self.first_party_access_token,
+            "renewal_token": self.renewal_token,
+        }))
+        .context("failed to serialize first-party credentials")
     }
 }
 
@@ -371,24 +283,29 @@ mod tests {
         SystemTime,
         UNIX_EPOCH,
     };
+    use tokio::{
+        io::{
+            AsyncReadExt as _,
+            AsyncWriteExt as _,
+        },
+        net::TcpListener,
+    };
 
-    /// A whitelisted domain so that `save` keeps the cookies.
-    const DOMAIN: &str = "https://staging.hyper.video/";
+    const SERVER_URL: &str = "https://staging.hyper.video";
 
-    fn cookie(username: &str, expires_in: chrono::Duration) -> HyperSessionCookie {
-        HyperSessionCookie {
-            domain: DOMAIN.to_string(),
-            created_at: Utc::now(),
-            expires_at: Utc::now() + expires_in,
+    fn credentials(username: &str) -> FirstPartyCredentials {
+        FirstPartyCredentials {
             username: username.to_string(),
-            cookie: format!("{username}-session"),
+            realm: "https://staging.hyper.video".to_string(),
+            first_party_access_token: format!("{username}-access"),
+            renewal_token: format!("{username}-renewal"),
         }
     }
 
-    fn stash_with(stash_file: PathBuf, cookies: Vec<HyperSessionCookie>) -> HyperSessionCookieStash {
-        HyperSessionCookieStash {
+    fn stash_with(stash_file: PathBuf, credentials: Vec<FirstPartyCredentials>) -> FirstPartyCredentialsStash {
+        FirstPartyCredentialsStash {
             stash_file,
-            cookies: HashMap::from([(DOMAIN.to_string(), cookies)]),
+            credentials: HashMap::from([(SERVER_URL.to_string(), credentials)]),
         }
     }
 
@@ -400,47 +317,79 @@ mod tests {
     }
 
     #[test]
-    fn give_cookie_returns_none_when_only_expired_cookies_exist() {
-        let stash = stash_with(
-            "unused.json".into(),
-            vec![cookie("expired", -chrono::Duration::hours(1))],
-        );
-        let manager = HyperSessionCookieManger::from(stash);
+    fn borrowed_credentials_return_to_the_pool() {
+        let manager =
+            FirstPartyCredentialsManager::from(stash_with("unused.json".into(), vec![credentials("simulator")]));
 
-        assert!(manager.give_cookie(DOMAIN).is_none());
+        let server_url = url::Url::parse(SERVER_URL).unwrap();
+        let borrowed = manager.give_credentials(&server_url).unwrap();
+        assert_eq!(borrowed.username(), "simulator");
+        assert!(manager.give_credentials(&server_url).is_none());
+        drop(borrowed);
+
+        assert_eq!(manager.give_credentials(&server_url).unwrap().username(), "simulator");
     }
 
     #[test]
-    fn give_cookie_skips_expired_cookies_and_returns_the_next_valid_one() {
-        let stash = stash_with(
-            "unused.json".into(),
-            vec![
-                cookie("expired", -chrono::Duration::hours(1)),
-                cookie("valid", chrono::Duration::hours(1)),
-            ],
-        );
-        let manager = HyperSessionCookieManger::from(stash);
+    fn stash_round_trips_credentials() {
+        let stash_file = unique_temp_dir().join("first_party_credentials.json");
+        stash_with(stash_file.clone(), vec![credentials("simulator")])
+            .save()
+            .unwrap();
 
-        let borrowed = manager.give_cookie(DOMAIN).expect("the valid cookie");
-        assert_eq!(borrowed.username(), "valid");
+        let stored = std::fs::read_to_string(&stash_file).unwrap();
+        assert!(!stored.contains("stash_file"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&stash_file).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        let loaded = FirstPartyCredentialsStash::load(stash_file);
+
+        assert_eq!(loaded.credentials[SERVER_URL][0].username, "simulator");
     }
 
     #[test]
-    fn load_drops_expired_cookies() {
-        let stash_file = unique_temp_dir().join("hyper_session_cookies.json");
-        stash_with(
-            stash_file.clone(),
-            vec![
-                cookie("expired", -chrono::Duration::hours(1)),
-                cookie("valid", chrono::Duration::hours(1)),
-            ],
-        )
-        .save()
-        .unwrap();
+    fn envelope_matches_hyper_core_storage_shape() {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&credentials("simulator").envelope_json().unwrap()).unwrap(),
+            serde_json::json!({
+                "realm": "https://staging.hyper.video",
+                "first_party_access_token": "simulator-access",
+                "renewal_token": "simulator-renewal",
+            })
+        );
+    }
 
-        let loaded = HyperSessionCookieStash::load(&stash_file);
+    #[tokio::test]
+    async fn fetches_credentials_for_the_requested_username() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = url::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0_u8; 4096];
+            let bytes_read = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..bytes_read]);
+            assert!(request.starts_with("POST /api/v1/auth/guest?username=simulator HTTP/1.1"));
 
-        let usernames: Vec<_> = loaded.cookies[DOMAIN].iter().map(|c| c.username.as_str()).collect();
-        assert_eq!(usernames, ["valid"]);
+            let body = r#"{"firstPartyAccessToken":"access","renewalToken":"renewal"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let credentials = FirstPartyCredentials::fetch(&base_url, "simulator").await.unwrap();
+        server.await.unwrap();
+
+        assert_eq!(credentials.username, "simulator");
+        assert_eq!(credentials.realm, base_url.origin().ascii_serialization());
+        assert_eq!(credentials.first_party_access_token, "access");
+        assert_eq!(credentials.renewal_token, "renewal");
     }
 }

@@ -1,8 +1,8 @@
 use super::chromium_driver::ChromiumDriver;
 use crate::{
     auth::{
-        BorrowedCookie,
-        HyperSessionCookieManger,
+        BorrowedCredentials,
+        FirstPartyCredentialsManager,
     },
     participant::{
         frontend::{
@@ -106,10 +106,10 @@ impl LocalChromiumSession {
     pub(crate) fn new(
         launch_spec: ParticipantLaunchSpec,
         browser_config: BrowserConfig,
-        auth: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
+        auth: Option<BorrowedCredentials>,
+        credentials_manager: FirstPartyCredentialsManager,
     ) -> Self {
-        let frontend_builder = FrontendAuth::for_kind(launch_spec.frontend_kind, auth, cookie_manager);
+        let frontend_builder = FrontendAuth::for_kind(launch_spec.frontend_kind, auth, credentials_manager);
         let (termination_tx, termination_rx) = watch::channel(None);
         let closing = Arc::new(AtomicBool::new(false));
 

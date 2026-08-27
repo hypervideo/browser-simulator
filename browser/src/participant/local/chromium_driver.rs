@@ -133,24 +133,13 @@ impl BrowserDriver for ChromiumDriver {
         .boxed()
     }
 
-    fn set_cookie(&self, domain: &str, name: &str, value: &str) -> BoxFuture<'_, Result<()>> {
-        use chromiumoxide::cdp::browser_protocol::network::CookieParam;
-
-        let domain = domain.to_owned();
-        let name = name.to_owned();
-        let value = value.to_owned();
+    fn seed_first_party_credentials(&self, realm: &str, credentials: &str) -> BoxFuture<'_, Result<()>> {
+        let script = super::super::frontend::first_party_credentials_init_script(realm, credentials);
         async move {
-            let cookie = CookieParam::builder()
-                .name(name)
-                .value(value)
-                .domain(domain)
-                .path("/")
-                .build()
-                .map_err(|e| eyre::eyre!("failed to build cookie: {e}"))?;
             self.page
-                .set_cookies(vec![cookie])
+                .add_init_script(script?)
                 .await
-                .context("failed to set cookie")?;
+                .context("failed to install first-party credential init script")?;
             Ok(())
         }
         .boxed()

@@ -4,8 +4,8 @@ mod webdriver_driver;
 
 use crate::{
     auth::{
-        BorrowedCookie,
-        HyperSessionCookieManger,
+        BorrowedCredentials,
+        FirstPartyCredentialsManager,
     },
     participant::{
         frontend::{
@@ -192,11 +192,11 @@ impl DeviceFarmSession {
         launch_spec: ParticipantLaunchSpec,
         launch_options: DeviceFarmLaunchOptions,
         config: DeviceFarmConfig,
-        cookie: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
+        credentials: Option<BorrowedCredentials>,
+        credentials_manager: FirstPartyCredentialsManager,
         api: Arc<dyn TestGridApi>,
     ) -> Self {
-        let auth = FrontendAuth::for_kind(launch_spec.frontend_kind, cookie, cookie_manager);
+        let auth = FrontendAuth::for_kind(launch_spec.frontend_kind, credentials, credentials_manager);
         let (termination_tx, termination_rx) = watch::channel(None);
         Self {
             cached_state: ParticipantState {

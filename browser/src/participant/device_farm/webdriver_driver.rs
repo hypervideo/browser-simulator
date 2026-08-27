@@ -9,8 +9,8 @@ use futures::{
 };
 use std::time::Duration;
 use thirtyfour::{
+    extensions::cdp::ChromeDevTools,
     By,
-    Cookie,
     WebDriver,
 };
 
@@ -133,21 +133,16 @@ impl BrowserDriver for WebDriverDriver {
         .boxed()
     }
 
-    fn set_cookie(&self, domain: &str, name: &str, value: &str) -> BoxFuture<'_, Result<()>> {
-        let domain = domain.to_owned();
-        let name = name.to_owned();
-        let value = value.to_owned();
+    fn seed_first_party_credentials(&self, realm: &str, credentials: &str) -> BoxFuture<'_, Result<()>> {
+        let script = super::super::frontend::first_party_credentials_init_script(realm, credentials);
         async move {
-            // WebDriver requires being on the target origin before adding a cookie.
-            let origin = format!("https://{domain}/");
-            self.driver
-                .goto(&origin)
+            ChromeDevTools::new(self.driver.handle.clone())
+                .execute_cdp_with_params(
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    serde_json::json!({ "source": script? }),
+                )
                 .await
-                .with_context(|| format!("failed to open origin {origin} before setting cookie"))?;
-            let mut cookie = Cookie::new(name, value);
-            cookie.set_domain(domain);
-            cookie.set_path("/");
-            self.driver.add_cookie(cookie).await.context("failed to add cookie")?;
+                .context("failed to install first-party credential init script")?;
             Ok(())
         }
         .boxed()

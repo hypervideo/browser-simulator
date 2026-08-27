@@ -5,7 +5,7 @@
 //! that points thirtyfour at that server. No real AWS or browser is involved.
 
 use client_simulator_browser::{
-    auth::HyperSessionCookieManger,
+    auth::FirstPartyCredentialsManager,
     participant::{
         device_farm::{
             close_test_grid_session,
@@ -60,10 +60,10 @@ use tokio::{
 #[tokio::test]
 async fn device_farm_session_creates_url_connects_joins_and_closes() {
     let (base_url, requests, server) = spawn_webdriver_mock().await;
-    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let credentials_manager = FirstPartyCredentialsManager::new(unique_temp_dir().join("credentials.json"));
     let participant = Participant::spawn_device_farm_with_api(
         &device_farm_config(),
-        cookie_manager,
+        credentials_manager,
         Arc::new(TestGridStub { url: base_url }),
     )
     .expect("device farm participant should spawn");
@@ -97,11 +97,11 @@ async fn device_farm_session_creates_url_connects_joins_and_closes() {
 async fn device_farm_session_requests_and_emits_browser_logs() {
     let logs = CapturedLogs::new();
     let (base_url, requests, server) = spawn_webdriver_mock().await;
-    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let credentials_manager = FirstPartyCredentialsManager::new(unique_temp_dir().join("credentials.json"));
     let mut config = device_farm_config();
     config.browser_logs = true;
     let participant =
-        Participant::spawn_device_farm_with_api(&config, cookie_manager, Arc::new(TestGridStub { url: base_url }))
+        Participant::spawn_device_farm_with_api(&config, credentials_manager, Arc::new(TestGridStub { url: base_url }))
             .expect("device farm participant should spawn");
     let participant_name = participant.name.clone();
     let state = participant.state.clone();
@@ -144,11 +144,11 @@ async fn device_farm_session_falls_back_to_legacy_browser_log_endpoint() {
         ..Default::default()
     })
     .await;
-    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let credentials_manager = FirstPartyCredentialsManager::new(unique_temp_dir().join("credentials.json"));
     let mut config = device_farm_config();
     config.browser_logs = true;
     let participant =
-        Participant::spawn_device_farm_with_api(&config, cookie_manager, Arc::new(TestGridStub { url: base_url }))
+        Participant::spawn_device_farm_with_api(&config, credentials_manager, Arc::new(TestGridStub { url: base_url }))
             .expect("device farm participant should spawn");
     let state = participant.state.clone();
 
@@ -185,12 +185,12 @@ async fn device_farm_session_preserves_signed_test_grid_url_path_and_query() {
         ..Default::default()
     })
     .await;
-    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let credentials_manager = FirstPartyCredentialsManager::new(unique_temp_dir().join("credentials.json"));
     let mut config = device_farm_config();
     config.browser_logs = true;
     let participant = Participant::spawn_device_farm_with_api(
         &config,
-        cookie_manager,
+        credentials_manager,
         Arc::new(TestGridStub {
             url: format!("{base_url}/signed-grid/wd/hub?{signature}"),
         }),
@@ -256,11 +256,11 @@ async fn device_farm_session_polls_and_publishes_frontend_state_changes() {
         ..Default::default()
     })
     .await;
-    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let credentials_manager = FirstPartyCredentialsManager::new(unique_temp_dir().join("credentials.json"));
     let mut config = device_farm_config();
     config.device_farm.health_poll_interval_ms = 100;
     let participant =
-        Participant::spawn_device_farm_with_api(&config, cookie_manager, Arc::new(TestGridStub { url: base_url }))
+        Participant::spawn_device_farm_with_api(&config, credentials_manager, Arc::new(TestGridStub { url: base_url }))
             .expect("device farm participant should spawn");
     let state = participant.state.clone();
 
@@ -342,11 +342,11 @@ async fn device_farm_session_stops_when_webdriver_health_check_fails() {
         ..Default::default()
     })
     .await;
-    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let credentials_manager = FirstPartyCredentialsManager::new(unique_temp_dir().join("credentials.json"));
     let mut config = device_farm_config();
     config.device_farm.health_poll_interval_ms = 20;
     let participant =
-        Participant::spawn_device_farm_with_api(&config, cookie_manager, Arc::new(TestGridStub { url: base_url }))
+        Participant::spawn_device_farm_with_api(&config, credentials_manager, Arc::new(TestGridStub { url: base_url }))
             .expect("device farm participant should spawn");
     let state = participant.state.clone();
 

@@ -13,6 +13,7 @@ pub(in crate::participant) use builder::{
     FrontendKindBuilder,
 };
 pub(in crate::participant) use driver::{
+    first_party_credentials_init_script,
     BrowserDriver,
     FrontendAutomation,
     FrontendContext,

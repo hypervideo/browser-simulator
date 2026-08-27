@@ -28,7 +28,7 @@ use super::{
     },
     selectors::classic,
 };
-use crate::auth::BorrowedCookie;
+use crate::auth::BorrowedCredentials;
 use client_simulator_config::{
     NoiseSuppression,
     TransportMode,
@@ -48,31 +48,23 @@ use std::time::Duration;
 #[derive(Debug)]
 pub(super) struct ParticipantInner {
     context: FrontendContext,
-    auth: BorrowedCookie,
+    auth: BorrowedCredentials,
 }
 
 impl ParticipantInner {
-    pub(super) fn new(context: FrontendContext, auth: BorrowedCookie) -> Self {
+    pub(super) fn new(context: FrontendContext, auth: BorrowedCredentials) -> Self {
         Self { context, auth }
     }
 
-    async fn set_cookie(&self) -> Result<()> {
-        let domain = self
-            .context
-            .launch_spec
-            .session_url
-            .host_str()
-            .unwrap_or("localhost")
-            .to_owned();
-        let value = self.auth.raw_value().to_owned();
+    async fn seed_credentials(&self) -> Result<()> {
+        let credentials = self.auth.envelope_json()?;
         self.context
             .driver
-            .set_cookie(&domain, "hyper_session", &value)
+            .seed_first_party_credentials(self.auth.realm(), &credentials)
             .await
-            .context("failed to set cookie")?;
+            .context("failed to seed first-party credentials")?;
 
-        self.context
-            .log_message("debug", format!("Set cookie for domain {domain}"));
+        self.context.log_message("debug", "Seeded first-party credentials");
 
         Ok(())
     }
@@ -82,7 +74,7 @@ impl ParticipantInner {
     }
 
     async fn join_session(&mut self) -> Result<()> {
-        self.set_cookie().await?;
+        self.seed_credentials().await?;
 
         self.context
             .driver

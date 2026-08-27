@@ -1,6 +1,6 @@
 use clap::Parser;
 use client_simulator_browser::{
-    auth::HyperSessionCookieManger,
+    auth::FirstPartyCredentialsManager,
     participant::Participant,
 };
 use client_simulator_config::{
@@ -36,7 +36,7 @@ async fn run(Args { url }: Args) -> Result<()> {
             },
         },
         None,
-        HyperSessionCookieManger::new("cookies.json"),
+        FirstPartyCredentialsManager::new("first_party_credentials.json"),
     )
     .expect("Failed to create participant config");
 

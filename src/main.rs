@@ -9,10 +9,7 @@ use clap::{
 };
 use client_simulator_config::TuiArgs;
 use client_simulator_tui::start_tui;
-use eyre::{
-    Context as _,
-    OptionExt as _,
-};
+use eyre::Context as _;
 use tracing_subscriber::{
     filter::LevelFilter,
     fmt,
@@ -78,8 +75,8 @@ enum Command {
     Tui(TuiArgs),
     /// Start simulator participants without the TUI
     Headless(headless::HeadlessArgs),
-    /// Connect to the hyper server to get a hyper session cookie
-    Cookie(CookieArgs),
+    /// Connect to the Hyper server to get first-party guest credentials
+    Credentials(CredentialsArgs),
     /// Manage AWS Device Farm Test Grid sessions
     Aws(aws::AwsArgs),
     /// Manage sessions on the Cloudflare browser simulator worker
@@ -372,12 +369,12 @@ mod tests {
 }
 
 #[derive(clap::Args, Debug, Clone)]
-pub struct CookieArgs {
+pub struct CredentialsArgs {
     /// Base URL of the hyper server
     #[clap(long = "url", value_name = "URL", default_value = "http://localhost:8081")]
     pub base_url: url::Url,
 
-    /// Username for the hyper session
+    /// Username for the guest account
     #[clap(long, value_name = "USERNAME", default_value = "browser-simulator user")]
     pub user: String,
 }
@@ -398,13 +395,13 @@ async fn main() -> eyre::Result<()> {
             let code = headless::run(args, logging_filter_from_env(logging)).await?;
             std::process::exit(code);
         }
-        Some(Command::Cookie(args)) => run_cookie(args, logging_filter_from_env(logging)).await,
+        Some(Command::Credentials(args)) => run_credentials(args, logging_filter_from_env(logging)).await,
         Some(Command::Aws(args)) => aws::run(args, logging_filter_from_env(logging)).await,
         Some(Command::Cf(args)) => cf::run(args, logging_filter_from_env(logging)).await,
     }
 }
 
-async fn run_cookie(CookieArgs { base_url, user }: CookieArgs, filter: EnvFilter) -> eyre::Result<()> {
+async fn run_credentials(CredentialsArgs { base_url, user }: CredentialsArgs, filter: EnvFilter) -> eyre::Result<()> {
     registry()
         .with(
             fmt::layer()
@@ -415,21 +412,14 @@ async fn run_cookie(CookieArgs { base_url, user }: CookieArgs, filter: EnvFilter
         .with(tracing_error::ErrorLayer::default())
         .init();
 
-    let domain = base_url
-        .host_str()
-        .ok_or_eyre("Base URL must have a valid host")?
-        .to_string();
     let config = client_simulator_config::Config::new(Default::default()).context("Failed to create config")?;
     let participants_store = client_simulator_browser::participant::ParticipantStore::new(config.data_dir());
-    let cookie = participants_store
-        .cookies()
-        .give_or_fetch_cookie(base_url, user)
+    let credentials = participants_store
+        .credentials()
+        .give_or_fetch_credentials(base_url, user)
         .await
-        .context("Failed to fetch or give cookie")?;
-    let cookie = cookie
-        .as_browser_cookie_for(&domain)
-        .context("Failed to convert cookie for browser")?;
-    let json = serde_json::to_string(&cookie).context("Failed to serialize cookie to JSON")?;
+        .context("Failed to fetch first-party credentials")?;
+    let json = credentials.envelope_json()?;
 
     println!("{json}");
 
