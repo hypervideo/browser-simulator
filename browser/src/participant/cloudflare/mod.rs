@@ -237,7 +237,6 @@ impl CloudflareSession {
             display_name: types::SessionCreateRequestDisplayName::try_from(self.launch_spec.username.clone())
                 .map_err(|error| eyre!("Invalid Cloudflare display name: {error}"))?,
             frontend_kind: map_frontend_kind(self.launch_spec.frontend_kind),
-            hyper_session_cookie: None,
             navigation_timeout_ms: Some(self.cloudflare_config.navigation_timeout_ms as f64),
             room_url: self.launch_spec.session_url.to_string(),
             selector_timeout_ms: Some(self.cloudflare_config.selector_timeout_ms as f64),

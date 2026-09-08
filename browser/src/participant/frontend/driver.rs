@@ -33,7 +33,7 @@ pub(in crate::participant) trait BrowserDriver: Send + Sync {
     /// `Ok(None)` if the element exists but the attribute is absent.
     fn attribute(&self, selector: &str, name: &str) -> BoxFuture<'_, Result<Option<String>>>;
     fn eval(&self, js_body: &str, arg: Option<serde_json::Value>) -> BoxFuture<'_, Result<serde_json::Value>>;
-    /// Seed Hyper Core's credential envelope before the first page is created.
+    /// Seed credentials before navigation without overwriting subsequent SDK renewals.
     fn seed_first_party_credentials(&self, realm: &str, credentials: &str) -> BoxFuture<'_, Result<()>>;
 }
 
@@ -43,7 +43,7 @@ pub(in crate::participant) fn first_party_credentials_init_script(realm: &str, c
     let key = serde_json::to_string(STORAGE_KEY).context("failed to encode credential storage key")?;
     let credentials = serde_json::to_string(credentials).context("failed to encode first-party credentials")?;
     Ok(format!(
-        "if (globalThis.location.origin === {realm}) {{ globalThis.localStorage.setItem({key}, {credentials}); }}"
+        "if (globalThis.location.origin === {realm} && globalThis.localStorage.getItem({key}) === null) {{ globalThis.localStorage.setItem({key}, {credentials}); }}"
     ))
 }
 
@@ -95,7 +95,7 @@ mod tests {
     fn credential_init_script_escapes_its_value() {
         assert_eq!(
             first_party_credentials_init_script("https://example.com", r#"{"token":"a'b"}"#).unwrap(),
-            r#"if (globalThis.location.origin === "https://example.com") { globalThis.localStorage.setItem("hyper_video_first_party_credentials", "{\"token\":\"a'b\"}"); }"#
+            r#"if (globalThis.location.origin === "https://example.com" && globalThis.localStorage.getItem("hyper_video_first_party_credentials") === null) { globalThis.localStorage.setItem("hyper_video_first_party_credentials", "{\"token\":\"a'b\"}"); }"#
         );
     }
     use client_simulator_config::{

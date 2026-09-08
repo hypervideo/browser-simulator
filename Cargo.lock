@@ -796,6 +796,7 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-devicefarm",
+ "base64",
  "bytes",
  "chromiumoxide",
  "chrono",

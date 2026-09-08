@@ -1,3 +1,7 @@
+use base64::{
+    engine::general_purpose::URL_SAFE_NO_PAD,
+    Engine as _,
+};
 use eyre::{
     Context as _,
     OptionExt as _,
@@ -39,11 +43,10 @@ impl FirstPartyCredentialsManager {
 
     pub fn give_credentials(&self, base_url: &url::Url) -> Option<BorrowedCredentials> {
         let server_url = server_key(base_url);
-        self.available_credentials
-            .lock()
-            .unwrap()
-            .entry(server_url.clone())
-            .or_default()
+        let mut available = self.available_credentials.lock().unwrap();
+        let credentials = available.entry(server_url.clone()).or_default();
+        credentials.retain(FirstPartyCredentials::can_renew);
+        credentials
             .pop_front()
             .map(|credentials| BorrowedCredentials::new(server_url, credentials, self.clone()))
             .inspect(|credentials| {
@@ -52,6 +55,9 @@ impl FirstPartyCredentialsManager {
     }
 
     fn return_credentials(&self, server_url: String, credentials: FirstPartyCredentials) {
+        if !credentials.can_renew() {
+            return;
+        }
         debug!(name = credentials.username, "returned first-party credentials");
         self.available_credentials
             .lock()
@@ -179,6 +185,9 @@ impl FirstPartyCredentialsStash {
                 }
             });
         stash.stash_file = file.to_path_buf();
+        for credentials in stash.credentials.values_mut() {
+            credentials.retain(FirstPartyCredentials::can_renew);
+        }
         stash
     }
 
@@ -238,6 +247,22 @@ struct GuestAuthResponse {
 }
 
 impl FirstPartyCredentials {
+    fn can_renew(&self) -> bool {
+        #[derive(Deserialize)]
+        struct Expiry {
+            exp: i64,
+        }
+
+        // Cache eviction only: the server still verifies the JWT. An expired access
+        // token is reusable as long as Hyper Core can renew it after startup.
+        self.renewal_token
+            .split('.')
+            .nth(1)
+            .and_then(|payload| URL_SAFE_NO_PAD.decode(payload).ok())
+            .and_then(|payload| serde_json::from_slice::<Expiry>(&payload).ok())
+            .is_some_and(|expiry| expiry.exp > chrono::Utc::now().timestamp())
+    }
+
     async fn fetch(base_url: &url::Url, username: impl AsRef<str>) -> Result<Self> {
         let username = username.as_ref();
         let url = base_url
@@ -298,8 +323,52 @@ mod tests {
             username: username.to_string(),
             realm: "https://staging.hyper.video".to_string(),
             first_party_access_token: format!("{username}-access"),
-            renewal_token: format!("{username}-renewal"),
+            renewal_token: renewal_token(i64::MAX),
         }
+    }
+
+    fn renewal_token(exp: i64) -> String {
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::json!({ "exp": exp }).to_string());
+        format!("e30.{payload}.signature")
+    }
+
+    #[test]
+    fn pool_discards_expired_and_unreadable_renewal_tokens() {
+        let server_url = url::Url::parse(SERVER_URL).unwrap();
+        for token in [
+            renewal_token(0),
+            renewal_token(chrono::Utc::now().timestamp()),
+            "invalid".to_owned(),
+            "e30.e30.signature".to_owned(),
+        ] {
+            let mut expired = credentials("expired");
+            expired.renewal_token = token;
+            let mut renewable = credentials("usable");
+            renewable.first_party_access_token = renewal_token(0);
+            let manager =
+                FirstPartyCredentialsManager::from(stash_with("unused.json".into(), vec![expired.clone(), renewable]));
+            // An expired access token is still reusable while renewal remains possible.
+            let usable = manager.give_credentials(&server_url).unwrap();
+            assert_eq!(usable.username(), "usable");
+            manager.return_credentials(SERVER_URL.to_owned(), expired);
+            assert!(manager.give_credentials(&server_url).is_none());
+        }
+    }
+
+    #[test]
+    fn stash_prunes_expired_credentials_before_saving_replacements() {
+        let stash_file = unique_temp_dir().join("first_party_credentials.json");
+        let mut expired = credentials("expired");
+        expired.renewal_token = renewal_token(0);
+        stash_with(stash_file.clone(), vec![expired, credentials("usable")])
+            .save()
+            .unwrap();
+        let loaded = FirstPartyCredentialsStash::load(&stash_file);
+        assert_eq!(loaded.credentials[SERVER_URL].len(), 1);
+        loaded.save().unwrap();
+        let stored = std::fs::read_to_string(stash_file).unwrap();
+        assert!(!stored.contains("expired"));
+        assert!(stored.contains("usable"));
     }
 
     fn stash_with(stash_file: PathBuf, credentials: Vec<FirstPartyCredentials>) -> FirstPartyCredentialsStash {
@@ -327,7 +396,12 @@ mod tests {
         assert!(manager.give_credentials(&server_url).is_none());
         drop(borrowed);
 
-        assert_eq!(manager.give_credentials(&server_url).unwrap().username(), "simulator");
+        let mut borrowed = manager.give_credentials(&server_url).unwrap();
+        assert_eq!(borrowed.username(), "simulator");
+        // Simulate the renewal token expiring while the participant is running.
+        borrowed.credentials.renewal_token = renewal_token(0);
+        drop(borrowed);
+        assert!(manager.give_credentials(&server_url).is_none());
     }
 
     #[test]
@@ -360,15 +434,21 @@ mod tests {
             serde_json::json!({
                 "realm": "https://staging.hyper.video",
                 "first_party_access_token": "simulator-access",
-                "renewal_token": "simulator-renewal",
+                "renewal_token": renewal_token(i64::MAX),
             })
         );
     }
 
     #[tokio::test]
-    async fn fetches_credentials_for_the_requested_username() {
+    async fn expired_pool_entry_is_replaced_and_the_fresh_credentials_are_reused() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = url::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let mut expired = credentials("expired");
+        expired.renewal_token = renewal_token(0);
+        let manager = FirstPartyCredentialsManager::from(FirstPartyCredentialsStash {
+            stash_file: unique_temp_dir().join("first_party_credentials.json"),
+            credentials: HashMap::from([(server_key(&base_url), vec![expired])]),
+        });
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = vec![0_u8; 4096];
@@ -376,7 +456,11 @@ mod tests {
             let request = String::from_utf8_lossy(&request[..bytes_read]);
             assert!(request.starts_with("POST /api/v1/auth/guest?username=simulator HTTP/1.1"));
 
-            let body = r#"{"firstPartyAccessToken":"access","renewalToken":"renewal"}"#;
+            let body = serde_json::json!({
+                "firstPartyAccessToken": "access",
+                "renewalToken": renewal_token(i64::MAX),
+            })
+            .to_string();
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -384,12 +468,20 @@ mod tests {
             stream.write_all(response.as_bytes()).await.unwrap();
         });
 
-        let credentials = FirstPartyCredentials::fetch(&base_url, "simulator").await.unwrap();
+        let borrowed = manager
+            .give_or_fetch_credentials(base_url.clone(), "simulator")
+            .await
+            .unwrap();
         server.await.unwrap();
 
+        let credentials = &borrowed.credentials;
         assert_eq!(credentials.username, "simulator");
         assert_eq!(credentials.realm, base_url.origin().ascii_serialization());
         assert_eq!(credentials.first_party_access_token, "access");
-        assert_eq!(credentials.renewal_token, "renewal");
+        assert_eq!(credentials.renewal_token, renewal_token(i64::MAX));
+        drop(borrowed);
+        // The mock server has stopped: reuse must not make another HTTP request.
+        let reused = manager.give_or_fetch_credentials(base_url, "simulator").await.unwrap();
+        assert_eq!(reused.credentials.first_party_access_token, "access");
     }
 }
