@@ -88,7 +88,7 @@ The command applies settings in this order:
 
 A later value wins. Browser logs are the exception. The `headless` subcommand sets them to `true` unless you pass `--browser-logs false`.
 
-Each participant needs a session URL from `config.yaml`, `--url`, or its JSON object. A `/m` or `/m/...` path selects Hyper Lite. Other paths select Hyper Core and may require a session cookie.
+Each participant needs a session URL from `config.yaml`, `--url`, or its JSON object. A `/m` or `/m/...` path selects Hyper Lite. Other paths select Hyper Core; the simulator obtains and injects first-party guest credentials before navigation.
 
 With no `--participant`, the command starts one participant from the shared settings. With one or more `--participant` values, it starts only those participants. It does not start an extra participant from the shared settings.
 

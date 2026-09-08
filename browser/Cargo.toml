@@ -9,6 +9,7 @@ repository.workspace = true
 aws-config.workspace = true
 aws-sdk-devicefarm.workspace = true
 async-trait.workspace = true
+base64 = "0.22.1"
 bytes.workspace = true
 chromiumoxide.workspace = true
 chrono.workspace = true

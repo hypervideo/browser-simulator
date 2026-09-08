@@ -94,7 +94,9 @@ where
     };
 
     if let Err(err) = start_result {
-        let warning = driver.start_error_warning(&err);
+        let warning = driver
+            .start_error_warning(&err)
+            .or_else(|| Some(ParticipantWarning::new("Failed to connect", format!("{err:#}"))));
         if let Some(warning) = warning.clone() {
             state.send_modify(|current| {
                 current.warning = Some(warning.clone());
@@ -617,6 +619,7 @@ mod tests {
     async fn runtime_surfaces_start_error_warning_in_state() {
         struct FailingStartDriver {
             close_count: Arc<AtomicUsize>,
+            custom_warning: bool,
         }
 
         impl ParticipantDriverSession for FailingStartDriver {
@@ -649,34 +652,42 @@ mod tests {
             }
 
             fn start_error_warning(&self, _err: &eyre::Report) -> Option<ParticipantWarning> {
-                Some(ParticipantWarning::new("AWS auth", "Run setup-auth"))
+                self.custom_warning
+                    .then(|| ParticipantWarning::new("AWS auth", "Run setup-auth"))
             }
         }
 
-        let (_message_tx, message_rx) = unbounded_channel();
-        let (state_tx, state_rx) = watch::channel(ParticipantState::default());
-        let close_count = Arc::new(AtomicUsize::new(0));
+        for custom_warning in [false, true] {
+            let (_message_tx, message_rx) = unbounded_channel();
+            let (state_tx, state_rx) = watch::channel(ParticipantState::default());
+            let close_count = Arc::new(AtomicUsize::new(0));
 
-        run_participant_runtime(
-            message_rx,
-            state_tx,
-            FailingStartDriver {
-                close_count: Arc::clone(&close_count),
-            },
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
+            run_participant_runtime(
+                message_rx,
+                state_tx,
+                FailingStartDriver {
+                    close_count: Arc::clone(&close_count),
+                    custom_warning,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(close_count.load(Ordering::SeqCst), 1);
-        assert!(!state_rx.borrow().running);
-        assert_eq!(
-            state_rx
-                .borrow()
-                .warning
-                .as_ref()
-                .map(|warning| warning.message.as_str()),
-            Some("Run setup-auth")
-        );
+            assert_eq!(close_count.load(Ordering::SeqCst), 1);
+            assert!(!state_rx.borrow().running);
+            assert_eq!(
+                state_rx
+                    .borrow()
+                    .warning
+                    .as_ref()
+                    .map(|warning| warning.message.as_str()),
+                Some(if custom_warning {
+                    "Run setup-auth"
+                } else {
+                    "credentials not loaded"
+                })
+            );
+        }
     }
 }

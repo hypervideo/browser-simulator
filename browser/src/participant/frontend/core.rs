@@ -28,7 +28,7 @@ use super::{
     },
     selectors::classic,
 };
-use crate::auth::BorrowedCookie;
+use crate::auth::BorrowedCredentials;
 use client_simulator_config::{
     NoiseSuppression,
     TransportMode,
@@ -36,6 +36,7 @@ use client_simulator_config::{
 };
 use eyre::{
     Context as _,
+    OptionExt as _,
     Result,
 };
 use futures::{
@@ -48,31 +49,23 @@ use std::time::Duration;
 #[derive(Debug)]
 pub(super) struct ParticipantInner {
     context: FrontendContext,
-    auth: BorrowedCookie,
+    auth: BorrowedCredentials,
 }
 
 impl ParticipantInner {
-    pub(super) fn new(context: FrontendContext, auth: BorrowedCookie) -> Self {
+    pub(super) fn new(context: FrontendContext, auth: BorrowedCredentials) -> Self {
         Self { context, auth }
     }
 
-    async fn set_cookie(&self) -> Result<()> {
-        let domain = self
-            .context
-            .launch_spec
-            .session_url
-            .host_str()
-            .unwrap_or("localhost")
-            .to_owned();
-        let value = self.auth.raw_value().to_owned();
+    async fn inject_credentials(&self) -> Result<()> {
+        let credentials = self.auth.stored_credentials_json()?;
         self.context
             .driver
-            .set_cookie(&domain, "hyper_session", &value)
+            .inject_first_party_credentials(self.auth.realm(), &credentials)
             .await
-            .context("failed to set cookie")?;
+            .context("failed to inject first-party credentials")?;
 
-        self.context
-            .log_message("debug", format!("Set cookie for domain {domain}"));
+        self.context.log_message("debug", "Injected first-party credentials");
 
         Ok(())
     }
@@ -82,7 +75,7 @@ impl ParticipantInner {
     }
 
     async fn join_session(&mut self) -> Result<()> {
-        self.set_cookie().await?;
+        self.inject_credentials().await?;
 
         self.context
             .driver
@@ -341,6 +334,22 @@ impl ParticipantInner {
 }
 
 impl FrontendAutomation for ParticipantInner {
+    fn save_credentials(&mut self) -> BoxFuture<'_, Result<()>> {
+        async move {
+            let value = tokio::time::timeout(
+                Duration::from_secs(5),
+                self.context.driver.eval(
+                    "if (globalThis.location.origin !== arguments[0]) return null; return globalThis.localStorage.getItem('hyper_video_first_party_credentials');",
+                    Some(serde_json::json!(self.auth.realm())),
+                ),
+            ).await.context("timed out reading browser credentials")??;
+            if !value.is_null() {
+                self.auth.update_from_stored_credentials(value.as_str().ok_or_eyre("expected browser credentials string")?)?;
+            }
+            Ok(())
+        }.boxed()
+    }
+
     fn join(&mut self) -> BoxFuture<'_, Result<()>> {
         async move { self.join_session().await }.boxed()
     }

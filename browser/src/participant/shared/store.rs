@@ -1,7 +1,7 @@
 use crate::{
     auth::{
-        HyperSessionCookieManger,
-        HyperSessionCookieStash,
+        FirstPartyCredentialsManager,
+        FirstPartyCredentialsStash,
     },
     participant::{
         Participant,
@@ -27,24 +27,24 @@ use std::{
 /// Store of active participants exposed to the TUI for display and control.
 #[derive(Debug, Clone)]
 pub struct ParticipantStore {
-    cookies: HyperSessionCookieManger,
+    credentials: FirstPartyCredentialsManager,
     inner: Arc<Mutex<HashMap<String, Participant>>>,
 }
 
 impl ParticipantStore {
     pub fn new(data_dir: impl AsRef<Path>) -> Self {
         Self {
-            cookies: HyperSessionCookieStash::load_from_data_dir(data_dir).into(),
+            credentials: FirstPartyCredentialsStash::load_from_data_dir(data_dir).into(),
             inner: Default::default(),
         }
     }
 
-    pub fn cookies(&self) -> &HyperSessionCookieManger {
-        &self.cookies
+    pub fn credentials(&self) -> &FirstPartyCredentialsManager {
+        &self.credentials
     }
 
     pub fn spawn(&self, config: &Config) -> Result<()> {
-        let participant = Participant::spawn(config, self.cookies.clone())?;
+        let participant = Participant::spawn(config, self.credentials.clone())?;
         self.add(participant);
         Ok(())
     }

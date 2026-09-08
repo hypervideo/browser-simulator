@@ -68,7 +68,7 @@ impl Component for NavTabs {
         };
 
         // Define tab titles for each Mode
-        let tab_titles = vec!["Browser [1]".to_string(), format!("Logs [2]")];
+        let tab_titles = vec!["Browser [1]".to_string(), "Logs [2]".to_string()];
 
         let selected_tab = match self.screen {
             Screen::BrowserStart => 0,

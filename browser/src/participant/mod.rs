@@ -1,6 +1,6 @@
 use super::auth::{
-    BorrowedCookie,
-    HyperSessionCookieManger,
+    BorrowedCredentials,
+    FirstPartyCredentialsManager,
 };
 use crate::participant::{
     local::session::LocalChromiumSession,
@@ -133,29 +133,33 @@ impl ParticipantTaskControl {
 }
 
 impl Participant {
-    pub fn spawn_with_app_config(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+    pub fn spawn_with_app_config(config: &Config, credentials_manager: FirstPartyCredentialsManager) -> Result<Self> {
         let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
-        let base_url = session_url.origin().unicode_serialization();
-        let cookie = cookie_manager.give_cookie(&base_url);
-        let name = cookie.as_ref().map(BorrowedCookie::username);
+        let credentials = matches!(
+            ResolvedFrontendKind::from_session_url(&session_url),
+            ResolvedFrontendKind::HyperCore
+        )
+        .then(|| credentials_manager.give_credentials(&session_url))
+        .flatten();
+        let name = credentials.as_ref().map(BorrowedCredentials::username);
         let participant_config = ParticipantConfig::new(config, name)?;
         debug!("Participant config: {:#?}", participant_config);
-        Self::with_participant_config(participant_config, cookie, cookie_manager)
+        Self::with_participant_config(participant_config, credentials, credentials_manager)
     }
 
-    pub fn spawn(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+    pub fn spawn(config: &Config, credentials_manager: FirstPartyCredentialsManager) -> Result<Self> {
         match config.backend {
-            ParticipantBackendKind::Local => Self::spawn_with_app_config(config, cookie_manager),
-            ParticipantBackendKind::Cloudflare => Self::spawn_cloudflare(config, cookie_manager),
-            ParticipantBackendKind::RemoteStub => Self::spawn_remote_stub(config, cookie_manager),
-            ParticipantBackendKind::AwsDeviceFarm => Self::spawn_device_farm(config, cookie_manager),
+            ParticipantBackendKind::Local => Self::spawn_with_app_config(config, credentials_manager),
+            ParticipantBackendKind::Cloudflare => Self::spawn_cloudflare(config, credentials_manager),
+            ParticipantBackendKind::RemoteStub => Self::spawn_remote_stub(config, credentials_manager),
+            ParticipantBackendKind::AwsDeviceFarm => Self::spawn_device_farm(config, credentials_manager),
         }
     }
 
     pub fn with_participant_config(
         participant_config: ParticipantConfig,
-        cookie: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
+        credentials: Option<BorrowedCredentials>,
+        credentials_manager: FirstPartyCredentialsManager,
     ) -> Result<Self> {
         let launch_spec = ParticipantLaunchSpec::from(participant_config.clone());
         let browser_config = client_simulator_config::BrowserConfig::from(&participant_config);
@@ -166,7 +170,7 @@ impl Participant {
         let (state_receiver, task_guard) = spawn_session(
             name.clone(),
             receiver_tx,
-            LocalChromiumSession::new(launch_spec, browser_config, cookie, cookie_manager),
+            LocalChromiumSession::new(launch_spec, browser_config, credentials, credentials_manager),
         );
 
         Ok(Self {
@@ -179,12 +183,8 @@ impl Participant {
         })
     }
 
-    pub fn spawn_remote_stub(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
-        let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
-        let base_url = session_url.origin().unicode_serialization();
-        let cookie = cookie_manager.give_cookie(&base_url);
-        let name = cookie.as_ref().map(BorrowedCookie::username);
-        let participant_config = ParticipantConfig::new(config, name)?;
+    pub fn spawn_remote_stub(config: &Config, _credentials_manager: FirstPartyCredentialsManager) -> Result<Self> {
+        let participant_config = ParticipantConfig::new(config, None::<String>)?;
         let launch_spec = ParticipantLaunchSpec::from(participant_config);
         let name = launch_spec.username.clone();
 
@@ -201,15 +201,8 @@ impl Participant {
         })
     }
 
-    pub fn spawn_cloudflare(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
-        let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
-        let frontend_kind = ResolvedFrontendKind::from_session_url(&session_url);
-        let base_url = session_url.origin().unicode_serialization();
-        let cookie = matches!(frontend_kind, ResolvedFrontendKind::HyperCore)
-            .then(|| cookie_manager.give_cookie(&base_url))
-            .flatten();
-        let name = cookie.as_ref().map(BorrowedCookie::username);
-        let participant_config = ParticipantConfig::new(config, name)?;
+    pub fn spawn_cloudflare(config: &Config, _credentials_manager: FirstPartyCredentialsManager) -> Result<Self> {
+        let participant_config = ParticipantConfig::new(config, None::<String>)?;
         let launch_spec = ParticipantLaunchSpec::from(participant_config);
         let name = launch_spec.username.clone();
 
@@ -221,8 +214,6 @@ impl Participant {
                 launch_spec,
                 cloudflare::CloudflareLaunchOptions::from(config),
                 config.cloudflare.clone(),
-                cookie,
-                cookie_manager,
             ),
         );
 
@@ -236,18 +227,18 @@ impl Participant {
         })
     }
 
-    pub fn spawn_device_farm(config: &Config, cookie_manager: HyperSessionCookieManger) -> Result<Self> {
+    pub fn spawn_device_farm(config: &Config, credentials_manager: FirstPartyCredentialsManager) -> Result<Self> {
         let device_farm_config = config.device_farm.clone();
         let api = Arc::new(crate::participant::device_farm::AwsTestGrid::new(
             &device_farm_config.region,
         ));
-        Self::spawn_device_farm_with_api(config, cookie_manager, api)
+        Self::spawn_device_farm_with_api(config, credentials_manager, api)
     }
 
     #[doc(hidden)]
     pub fn spawn_device_farm_with_api(
         config: &Config,
-        cookie_manager: HyperSessionCookieManger,
+        credentials_manager: FirstPartyCredentialsManager,
         api: Arc<dyn crate::testing::TestGridApi>,
     ) -> Result<Self> {
         use crate::participant::device_farm::{
@@ -257,11 +248,10 @@ impl Participant {
 
         let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
         let frontend_kind = ResolvedFrontendKind::from_session_url(&session_url);
-        let base_url = session_url.origin().unicode_serialization();
-        let cookie = matches!(frontend_kind, ResolvedFrontendKind::HyperCore)
-            .then(|| cookie_manager.give_cookie(&base_url))
+        let credentials = matches!(frontend_kind, ResolvedFrontendKind::HyperCore)
+            .then(|| credentials_manager.give_credentials(&session_url))
             .flatten();
-        let name = cookie.as_ref().map(BorrowedCookie::username);
+        let name = credentials.as_ref().map(BorrowedCredentials::username);
         let participant_config = ParticipantConfig::new(config, name)?;
         let launch_spec = ParticipantLaunchSpec::from(participant_config);
         let name = launch_spec.username.clone();
@@ -278,8 +268,8 @@ impl Participant {
                 launch_spec,
                 launch_options,
                 device_farm_config,
-                cookie,
-                cookie_manager,
+                credentials,
+                credentials_manager,
                 api,
             ),
         );

@@ -6,7 +6,10 @@ use super::super::shared::{
     ParticipantLaunchSpec,
     ParticipantState,
 };
-use eyre::Result;
+use eyre::{
+    Context as _,
+    Result,
+};
 use futures::future::BoxFuture;
 use std::time::Duration;
 
@@ -30,9 +33,18 @@ pub(in crate::participant) trait BrowserDriver: Send + Sync {
     /// `Ok(None)` if the element exists but the attribute is absent.
     fn attribute(&self, selector: &str, name: &str) -> BoxFuture<'_, Result<Option<String>>>;
     fn eval(&self, js_body: &str, arg: Option<serde_json::Value>) -> BoxFuture<'_, Result<serde_json::Value>>;
-    /// Set a cookie for `domain`. Drivers that require being on-origin first
-    /// (WebDriver) must navigate to the origin before setting it.
-    fn set_cookie(&self, domain: &str, name: &str, value: &str) -> BoxFuture<'_, Result<()>>;
+    /// Inject credentials before navigation without overwriting subsequent SDK renewals.
+    fn inject_first_party_credentials(&self, realm: &str, credentials: &str) -> BoxFuture<'_, Result<()>>;
+}
+
+pub(in crate::participant) fn first_party_credentials_init_script(realm: &str, credentials: &str) -> Result<String> {
+    const STORAGE_KEY: &str = "hyper_video_first_party_credentials";
+    let realm = serde_json::to_string(realm).context("failed to encode credential realm")?;
+    let key = serde_json::to_string(STORAGE_KEY).context("failed to encode credential storage key")?;
+    let credentials = serde_json::to_string(credentials).context("failed to encode first-party credentials")?;
+    Ok(format!(
+        "if (globalThis.location.origin === {realm} && globalThis.localStorage.getItem({key}) === null) {{ globalThis.localStorage.setItem({key}, {credentials}); }}"
+    ))
 }
 
 /// Context shared by every frontend automation, parameterised over the driver.
@@ -65,6 +77,10 @@ pub(in crate::participant) trait FrontendAutomation: Send {
     fn leave(&mut self) -> BoxFuture<'_, Result<()>>;
     fn handle_command(&mut self, message: ParticipantMessage) -> BoxFuture<'_, Result<()>>;
     fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>>;
+    /// Capture browser-owned credentials before leaving or destroying the page.
+    fn save_credentials(&mut self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Decode the legacy `data-test-state="true"|"false"` attribute.
@@ -78,6 +94,14 @@ mod tests {
         super::commands::tests::RecordingDriver,
         *,
     };
+
+    #[test]
+    fn credential_init_script_escapes_its_value() {
+        assert_eq!(
+            first_party_credentials_init_script("https://example.com", r#"{"token":"a'b"}"#).unwrap(),
+            r#"if (globalThis.location.origin === "https://example.com" && globalThis.localStorage.getItem("hyper_video_first_party_credentials") === null) { globalThis.localStorage.setItem("hyper_video_first_party_credentials", "{\"token\":\"a'b\"}"); }"#
+        );
+    }
     use client_simulator_config::{
         Config,
         ParticipantConfig,

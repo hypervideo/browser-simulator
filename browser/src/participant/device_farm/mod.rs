@@ -4,8 +4,8 @@ mod webdriver_driver;
 
 use crate::{
     auth::{
-        BorrowedCookie,
-        HyperSessionCookieManger,
+        BorrowedCredentials,
+        FirstPartyCredentialsManager,
     },
     participant::{
         frontend::{
@@ -192,11 +192,11 @@ impl DeviceFarmSession {
         launch_spec: ParticipantLaunchSpec,
         launch_options: DeviceFarmLaunchOptions,
         config: DeviceFarmConfig,
-        cookie: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
+        credentials: Option<BorrowedCredentials>,
+        credentials_manager: FirstPartyCredentialsManager,
         api: Arc<dyn TestGridApi>,
     ) -> Self {
-        let auth = FrontendAuth::for_kind(launch_spec.frontend_kind, cookie, cookie_manager);
+        let auth = FrontendAuth::for_kind(launch_spec.frontend_kind, credentials, credentials_manager);
         let (termination_tx, termination_rx) = watch::channel(None);
         Self {
             cached_state: ParticipantState {
@@ -304,16 +304,15 @@ impl DeviceFarmSession {
             launch_spec: self.launch_spec.clone(),
             driver: Box::new(webdriver_driver),
         };
-        let mut automation = FrontendKindBuilder::build(context, auth).await?;
+        self.automation = Some(FrontendKindBuilder::build(context, auth).await?);
 
         self.termination_tx.send_replace(None);
         self.start_max_duration_poller();
-        if let Err(err) = automation.join().await {
+        if let Err(err) = self.automation_mut()?.join().await {
             self.stop_max_duration_poller().await;
             return Err(err);
         }
 
-        self.automation = Some(automation);
         self.cached_state.running = true;
         self.log_message("info", "Connected Device Farm browser session");
         Ok(())
@@ -392,6 +391,12 @@ impl DeviceFarmSession {
 
         let mut automation = self.automation.take();
         let driver = self.webdriver.take();
+
+        if let Some(automation) = automation.as_mut() {
+            if let Err(err) = automation.save_credentials().await {
+                self.log_message("warn", format!("Failed saving browser credentials: {err}"));
+            }
+        }
 
         // Close has two levels: leave the meeting if the frontend still looks
         // joined, then always tear down the Selenium session. Do not refresh
@@ -680,44 +685,49 @@ mod tests {
 
     #[tokio::test]
     async fn close_uses_cached_state_instead_of_refreshing_frontend_before_leave() {
-        let refreshed = Arc::new(AtomicBool::new(false));
-        let left = Arc::new(AtomicBool::new(false));
-        let (termination_tx, termination_rx) = watch::channel(None);
+        for joined in [false, true] {
+            let refreshed = Arc::new(AtomicBool::new(false));
+            let left = Arc::new(AtomicBool::new(false));
+            let saved = Arc::new(AtomicBool::new(false));
+            let (termination_tx, termination_rx) = watch::channel(None);
 
-        let mut session = DeviceFarmSession {
-            launch_spec: launch_spec(),
-            launch_options: DeviceFarmLaunchOptions {
-                headless: true,
-                browser_logs: false,
-                fake_media: FakeMedia::default(),
-            },
-            config: DeviceFarmConfig::default(),
-            api: Arc::new(UnusedTestGridApi),
-            auth: None,
-            automation: Some(Box::new(RecordingAutomation {
-                refreshed: Arc::clone(&refreshed),
-                left: Arc::clone(&left),
-            })),
-            webdriver: None,
-            cached_state: ParticipantState {
-                running: true,
-                joined: true,
-                screenshare_activated: true,
-                ..Default::default()
-            },
-            termination_tx,
-            termination_rx,
-            poller_shutdown_tx: None,
-            poller_task: None,
-        };
+            let mut session = DeviceFarmSession {
+                launch_spec: launch_spec(),
+                launch_options: DeviceFarmLaunchOptions {
+                    headless: true,
+                    browser_logs: false,
+                    fake_media: FakeMedia::default(),
+                },
+                config: DeviceFarmConfig::default(),
+                api: Arc::new(UnusedTestGridApi),
+                auth: None,
+                automation: Some(Box::new(RecordingAutomation {
+                    refreshed: Arc::clone(&refreshed),
+                    left: Arc::clone(&left),
+                    saved: Arc::clone(&saved),
+                })),
+                webdriver: None,
+                cached_state: ParticipantState {
+                    running: true,
+                    joined,
+                    screenshare_activated: true,
+                    ..Default::default()
+                },
+                termination_tx,
+                termination_rx,
+                poller_shutdown_tx: None,
+                poller_task: None,
+            };
 
-        session.close_inner().await.unwrap();
+            session.close_inner().await.unwrap();
 
-        assert!(!refreshed.load(Ordering::SeqCst));
-        assert!(left.load(Ordering::SeqCst));
-        assert!(!session.cached_state.running);
-        assert!(!session.cached_state.joined);
-        assert!(!session.cached_state.screenshare_activated);
+            assert!(!refreshed.load(Ordering::SeqCst));
+            assert_eq!(left.load(Ordering::SeqCst), joined);
+            assert!(saved.load(Ordering::SeqCst));
+            assert!(!session.cached_state.running);
+            assert!(!session.cached_state.joined);
+            assert!(!session.cached_state.screenshare_activated);
+        }
     }
 
     fn launch_spec() -> ParticipantLaunchSpec {
@@ -732,9 +742,20 @@ mod tests {
     struct RecordingAutomation {
         refreshed: Arc<AtomicBool>,
         left: Arc<AtomicBool>,
+        saved: Arc<AtomicBool>,
     }
 
     impl FrontendAutomation for RecordingAutomation {
+        fn save_credentials(&mut self) -> BoxFuture<'_, Result<()>> {
+            async move {
+                assert!(!self.left.load(Ordering::SeqCst));
+                self.saved.store(true, Ordering::SeqCst);
+                // A failed snapshot must not prevent leaving or closing.
+                eyre::bail!("browser storage unavailable")
+            }
+            .boxed()
+        }
+
         fn join(&mut self) -> BoxFuture<'_, Result<()>> {
             async { Ok(()) }.boxed()
         }

@@ -129,13 +129,13 @@ pub(in crate::participant::frontend) mod tests {
     };
 
     #[derive(Default)]
-    pub(in crate::participant::frontend) struct RecordingDriver {
+    pub(in crate::participant) struct RecordingDriver {
         calls: Mutex<Vec<(String, Option<serde_json::Value>)>>,
         next_result: Mutex<serde_json::Value>,
     }
 
     impl RecordingDriver {
-        fn with_result(value: serde_json::Value) -> Self {
+        pub(in crate::participant) fn with_result(value: serde_json::Value) -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
                 next_result: Mutex::new(value),
@@ -178,7 +178,7 @@ pub(in crate::participant::frontend) mod tests {
             async move { Ok(value) }.boxed()
         }
 
-        fn set_cookie(&self, _domain: &str, _name: &str, _value: &str) -> BoxFuture<'_, Result<()>> {
+        fn inject_first_party_credentials(&self, _realm: &str, _credentials: &str) -> BoxFuture<'_, Result<()>> {
             async { Ok(()) }.boxed()
         }
     }

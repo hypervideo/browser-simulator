@@ -362,7 +362,6 @@ mod tests {
             debug: Some(false),
             display_name: SessionCreateRequestDisplayName::try_from("Cloudflare Simulator").unwrap(),
             frontend_kind: SessionCreateRequestFrontendKind::HyperCore,
-            hyper_session_cookie: None,
             navigation_timeout_ms: Some(45_000.0),
             room_url: "https://example.com/room".to_owned(),
             selector_timeout_ms: Some(20_000.0),

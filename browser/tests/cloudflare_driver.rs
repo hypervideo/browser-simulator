@@ -1,5 +1,5 @@
 use client_simulator_browser::{
-    auth::HyperSessionCookieManger,
+    auth::FirstPartyCredentialsManager,
     participant::{
         Participant,
         ParticipantState,
@@ -100,10 +100,10 @@ async fn cloudflare_runtime_updates_public_participant_state_from_worker_command
         ),
     ]);
     let (base_url, requests, server) = spawn_http_server(responses).await;
-    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let credentials_manager = FirstPartyCredentialsManager::new(unique_temp_dir().join("credentials.json"));
     let participant = Participant::spawn(
         &cloudflare_config(&format!("{base_url}/m/demo"), &base_url, 60_000),
-        cookie_manager,
+        credentials_manager,
     )
     .expect("cloudflare participant should spawn");
     let state = participant.state.clone();
@@ -178,10 +178,10 @@ async fn cloudflare_runtime_survives_command_failures_and_can_still_close() {
         ),
     ]);
     let (base_url, requests, server) = spawn_http_server(responses).await;
-    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let credentials_manager = FirstPartyCredentialsManager::new(unique_temp_dir().join("credentials.json"));
     let participant = Participant::spawn(
         &cloudflare_config(&format!("{base_url}/m/demo"), &base_url, 60_000),
-        cookie_manager,
+        credentials_manager,
     )
     .expect("cloudflare participant should spawn");
     let state = participant.state.clone();
@@ -231,10 +231,10 @@ async fn cloudflare_runtime_marks_participant_stopped_when_worker_state_poll_fai
         ),
     ]);
     let (base_url, requests, server) = spawn_http_server(responses).await;
-    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let credentials_manager = FirstPartyCredentialsManager::new(unique_temp_dir().join("credentials.json"));
     let participant = Participant::spawn(
         &cloudflare_config(&format!("{base_url}/m/demo"), &base_url, 5),
-        cookie_manager,
+        credentials_manager,
     )
     .expect("cloudflare participant should spawn");
     let state = participant.state.clone();
@@ -255,14 +255,8 @@ async fn cloudflare_runtime_marks_participant_stopped_when_worker_state_poll_fai
 }
 
 #[tokio::test]
-async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_session() {
+async fn cloudflare_runtime_delegates_hyper_core_authentication_to_the_worker() {
     let responses = VecDeque::from(vec![
-        MockResponse::new(
-            200,
-            "Set-Cookie: hyper_session=fetched-cookie; Path=/; HttpOnly\r\n",
-            "",
-        ),
-        MockResponse::json(200, json!({ "ok": true })),
         MockResponse::json(
             200,
             json!({
@@ -304,10 +298,10 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
         ),
     ]);
     let (base_url, requests, server) = spawn_http_server(responses).await;
-    let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
+    let credentials_manager = FirstPartyCredentialsManager::new(unique_temp_dir().join("credentials.json"));
     let participant = Participant::spawn(
         &cloudflare_config(&format!("{base_url}/room/demo"), &base_url, 60_000),
-        cookie_manager,
+        credentials_manager,
     )
     .expect("cloudflare participant should spawn");
     let state = participant.state.clone();
@@ -332,27 +326,14 @@ async fn cloudflare_runtime_fetches_hyper_core_cookie_before_creating_worker_ses
     server.abort();
 
     let requests = requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 3);
     assert_eq!(requests[0].method, "POST");
-    assert_eq!(requests[0].path, "/api/v1/auth/guest?username=guest");
-    assert_eq!(requests[1].method, "PUT");
-    assert_eq!(requests[1].path, "/api/v1/auth/me/name");
-    assert_eq!(
-        header_value(&requests[1], "cookie").as_deref(),
-        Some("hyper_session=fetched-cookie")
-    );
-
-    let set_name_body = request_json(&requests[1]);
-    let display_name = request_json(&requests[2])["displayName"].clone();
-    assert_eq!(requests[2].path, "/sessions");
-    assert_eq!(
-        request_json(&requests[2])["hyperSessionCookie"],
-        json!("fetched-cookie")
-    );
-    assert_eq!(display_name, set_name_body["name"]);
-    assert_eq!(requests[3].path, "/sessions/cf-runtime-core/commands");
-    assert_eq!(request_json(&requests[3]), json!({ "type": "leave" }));
-    assert_eq!(requests[4].path, "/sessions/cf-runtime-core/close");
+    assert_eq!(requests[0].path, "/sessions");
+    assert!(request_json(&requests[0])["displayName"].is_string());
+    assert!(request_json(&requests[0]).get("hyperSessionCookie").is_none());
+    assert_eq!(requests[1].path, "/sessions/cf-runtime-core/commands");
+    assert_eq!(request_json(&requests[1]), json!({ "type": "leave" }));
+    assert_eq!(requests[2].path, "/sessions/cf-runtime-core/close");
 }
 
 fn cloudflare_config(session_url: &str, base_url: &str, health_poll_interval_ms: u64) -> Config {
@@ -405,7 +386,6 @@ where
 struct CapturedRequest {
     method: String,
     path: String,
-    headers: Vec<(String, String)>,
     body: String,
 }
 
@@ -416,14 +396,6 @@ struct MockResponse {
 }
 
 impl MockResponse {
-    fn new(status: u16, headers: &str, body: &str) -> Self {
-        Self {
-            status,
-            headers: headers.to_owned(),
-            body: body.to_owned(),
-        }
-    }
-
     fn json(status: u16, body: Value) -> Self {
         Self {
             status,
@@ -487,7 +459,6 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> CapturedRequest {
     let method = request_line.next().unwrap().to_owned();
     let path = request_line.next().unwrap().to_owned();
 
-    let mut headers = Vec::new();
     let mut content_length = 0_usize;
     for line in lines.filter(|line| !line.is_empty()) {
         let (name, value) = line.split_once(':').unwrap();
@@ -495,7 +466,6 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> CapturedRequest {
         if name.eq_ignore_ascii_case("content-length") {
             content_length = value.parse().unwrap();
         }
-        headers.push((name.to_ascii_lowercase(), value));
     }
 
     let body_start = header_end + 4;
@@ -509,21 +479,12 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> CapturedRequest {
     CapturedRequest {
         method,
         path,
-        headers,
         body: String::from_utf8(body).unwrap(),
     }
 }
 
 fn find_header_end(buffer: &[u8]) -> Option<usize> {
     buffer.windows(4).position(|window| window == b"\r\n\r\n")
-}
-
-fn header_value(request: &CapturedRequest, name: &str) -> Option<String> {
-    request
-        .headers
-        .iter()
-        .find(|(header_name, _)| header_name == &name.to_ascii_lowercase())
-        .map(|(_, value)| value.clone())
 }
 
 fn request_json(request: &CapturedRequest) -> Value {

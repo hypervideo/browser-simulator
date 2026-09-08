@@ -1,25 +1,19 @@
-use crate::{
-    auth::{
-        BorrowedCookie,
-        HyperSessionCookieManger,
+use crate::participant::shared::{
+    browser_log::{
+        console_level,
+        emit_browser_log_batch,
+        BrowserLogEntry,
+        BrowserLogSource,
     },
-    participant::shared::{
-        browser_log::{
-            console_level,
-            emit_browser_log_batch,
-            BrowserLogEntry,
-            BrowserLogSource,
-        },
-        messages::{
-            ParticipantLogMessage,
-            ParticipantMessage,
-        },
-        DriverTermination,
-        ParticipantDriverSession,
-        ParticipantLaunchSpec,
-        ParticipantState,
-        ResolvedFrontendKind,
+    messages::{
+        ParticipantLogMessage,
+        ParticipantMessage,
     },
+    DriverTermination,
+    ParticipantDriverSession,
+    ParticipantLaunchSpec,
+    ParticipantState,
+    ResolvedFrontendKind,
 };
 use client_simulator_config::{
     media::FakeMedia,
@@ -56,14 +50,6 @@ use tokio::{
     time::MissedTickBehavior,
 };
 
-enum CloudflareAuth {
-    HyperCore {
-        cookie: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
-    },
-    HyperLite,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct CloudflareLaunchOptions {
     headless: bool,
@@ -85,7 +71,6 @@ pub(super) struct CloudflareSession {
     launch_spec: ParticipantLaunchSpec,
     launch_options: CloudflareLaunchOptions,
     cloudflare_config: CloudflareConfig,
-    auth: CloudflareAuth,
     session_id: Option<String>,
     cached_state: Arc<Mutex<ParticipantState>>,
     termination_tx: watch::Sender<Option<DriverTermination>>,
@@ -140,25 +125,14 @@ impl CloudflareSession {
         launch_spec: ParticipantLaunchSpec,
         launch_options: CloudflareLaunchOptions,
         cloudflare_config: CloudflareConfig,
-        cookie: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
     ) -> Self {
-        Self::build(
-            launch_spec,
-            launch_options,
-            cloudflare_config,
-            cookie,
-            cookie_manager,
-            true,
-        )
+        Self::build(launch_spec, launch_options, cloudflare_config, true)
     }
 
     fn build(
         launch_spec: ParticipantLaunchSpec,
         launch_options: CloudflareLaunchOptions,
         cloudflare_config: CloudflareConfig,
-        cookie: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
         _track_spawn: bool,
     ) -> Self {
         #[cfg(test)]
@@ -171,10 +145,6 @@ impl CloudflareSession {
             }
         }
 
-        let auth = match launch_spec.frontend_kind {
-            ResolvedFrontendKind::HyperCore => CloudflareAuth::HyperCore { cookie, cookie_manager },
-            ResolvedFrontendKind::HyperLite => CloudflareAuth::HyperLite,
-        };
         let (termination_tx, termination_rx) = watch::channel(None);
 
         Self {
@@ -185,7 +155,6 @@ impl CloudflareSession {
             launch_spec,
             launch_options,
             cloudflare_config,
-            auth,
             session_id: None,
             termination_tx,
             termination_rx,
@@ -199,17 +168,8 @@ impl CloudflareSession {
         launch_spec: ParticipantLaunchSpec,
         launch_options: CloudflareLaunchOptions,
         cloudflare_config: CloudflareConfig,
-        cookie: Option<BorrowedCookie>,
-        cookie_manager: HyperSessionCookieManger,
     ) -> Self {
-        Self::build(
-            launch_spec,
-            launch_options,
-            cloudflare_config,
-            cookie,
-            cookie_manager,
-            false,
-        )
+        Self::build(launch_spec, launch_options, cloudflare_config, false)
     }
 
     fn log_message(&self, level: &str, message: impl ToString) {
@@ -267,32 +227,9 @@ impl CloudflareSession {
         settings
     }
 
-    async fn ensure_hyper_session_cookie(&mut self) -> Result<Option<String>> {
-        match &mut self.auth {
-            CloudflareAuth::HyperCore { cookie, cookie_manager } => {
-                if cookie.is_none() {
-                    *cookie = Some(
-                        cookie_manager
-                            .give_or_fetch_cookie(self.launch_spec.base_url(), &self.launch_spec.username)
-                            .await?,
-                    );
-                }
-
-                Ok(cookie.as_ref().map(|cookie| cookie.raw_value().to_owned()))
-            }
-            CloudflareAuth::HyperLite => Ok(None),
-        }
-    }
-
     async fn build_create_request(&mut self) -> Result<types::SessionCreateRequest> {
         self.log_backend_limitations();
         let normalized_settings = self.normalized_settings();
-        let hyper_session_cookie = self
-            .ensure_hyper_session_cookie()
-            .await?
-            .map(types::SessionCreateRequestHyperSessionCookie::try_from)
-            .transpose()
-            .map_err(|error| eyre!("Failed to encode Hyper Core session cookie for the worker: {error}"))?;
 
         Ok(types::SessionCreateRequest {
             browser_logs: Some(self.launch_options.browser_logs),
@@ -300,7 +237,6 @@ impl CloudflareSession {
             display_name: types::SessionCreateRequestDisplayName::try_from(self.launch_spec.username.clone())
                 .map_err(|error| eyre!("Invalid Cloudflare display name: {error}"))?,
             frontend_kind: map_frontend_kind(self.launch_spec.frontend_kind),
-            hyper_session_cookie,
             navigation_timeout_ms: Some(self.cloudflare_config.navigation_timeout_ms as f64),
             room_url: self.launch_spec.session_url.to_string(),
             selector_timeout_ms: Some(self.cloudflare_config.selector_timeout_ms as f64),
@@ -878,17 +814,14 @@ mod tests {
         CloudflareLaunchOptions,
         CloudflareSession,
     };
-    use crate::{
-        auth::HyperSessionCookieManger,
-        participant::shared::{
-            browser_log::BrowserLogSource,
-            messages::ParticipantMessage,
-            ParticipantDriverSession,
-            ParticipantLaunchSpec,
-            ParticipantSettings,
-            ParticipantState,
-            ResolvedFrontendKind,
-        },
+    use crate::participant::shared::{
+        browser_log::BrowserLogSource,
+        messages::ParticipantMessage,
+        ParticipantDriverSession,
+        ParticipantLaunchSpec,
+        ParticipantSettings,
+        ParticipantState,
+        ResolvedFrontendKind,
     };
     use chrono::Utc;
     use client_simulator_config::{
@@ -904,21 +837,15 @@ mod tests {
     };
     use std::{
         collections::VecDeque,
-        fs,
         io::{
             Result as IoResult,
             Write,
         },
-        path::PathBuf,
         sync::{
             Arc,
             Mutex,
         },
-        time::{
-            Duration,
-            SystemTime,
-            UNIX_EPOCH,
-        },
+        time::Duration,
     };
     use tokio::{
         io::{
@@ -950,7 +877,6 @@ mod tests {
     struct CapturedRequest {
         method: String,
         path: String,
-        headers: Vec<(String, String)>,
         body: String,
     }
 
@@ -994,14 +920,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_fetches_cookie_creates_worker_session_and_close_tears_it_down() {
+    async fn start_creates_worker_session_and_close_tears_it_down() {
         let responses = VecDeque::from(vec![
-            MockResponse::new(
-                200,
-                "Set-Cookie: hyper_session=fetched-cookie; Path=/; HttpOnly\r\n",
-                "",
-            ),
-            MockResponse::json(200, json!({ "ok": true })),
             MockResponse::json(
                 200,
                 json!({
@@ -1044,7 +964,6 @@ mod tests {
             ),
         ]);
         let (base_url, requests, server) = spawn_http_server(responses).await;
-        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperCore, &format!("{base_url}/room/demo")),
             launch_options(false, FakeMedia::None),
@@ -1057,8 +976,6 @@ mod tests {
                 debug: true,
                 health_poll_interval_ms: 5_000,
             },
-            None,
-            cookie_manager,
         );
 
         session.start().await.unwrap();
@@ -1078,32 +995,17 @@ mod tests {
         server.abort();
 
         let requests = requests.lock().unwrap().clone();
-        assert_eq!(requests.len(), 4);
+        assert_eq!(requests.len(), 2);
 
         assert_eq!(requests[0].method, "POST");
-        assert_eq!(requests[0].path, "/api/v1/auth/guest?username=guest");
-
-        assert_eq!(requests[1].method, "PUT");
-        assert_eq!(requests[1].path, "/api/v1/auth/me/name");
+        assert_eq!(requests[0].path, "/sessions");
         assert_eq!(
-            header_value(&requests[1], "cookie").as_deref(),
-            Some("hyper_session=fetched-cookie")
-        );
-        assert_eq!(
-            serde_json::from_str::<Value>(&requests[1].body).unwrap(),
-            json!({ "name": "cloudflare-sim" })
-        );
-
-        assert_eq!(requests[2].method, "POST");
-        assert_eq!(requests[2].path, "/sessions");
-        assert_eq!(
-            serde_json::from_str::<Value>(&requests[2].body).unwrap(),
+            serde_json::from_str::<Value>(&requests[0].body).unwrap(),
             json!({
                 "debug": true,
                 "browserLogs": false,
                 "displayName": "cloudflare-sim",
                 "frontendKind": "hyper-core",
-                "hyperSessionCookie": "fetched-cookie",
                 "navigationTimeoutMs": 30000.0,
                 "roomUrl": format!("{base_url}/room/demo"),
                 "selectorTimeoutMs": 10000.0,
@@ -1123,8 +1025,8 @@ mod tests {
             })
         );
 
-        assert_eq!(requests[3].method, "POST");
-        assert_eq!(requests[3].path, "/sessions/cf-session-123/close");
+        assert_eq!(requests[1].method, "POST");
+        assert_eq!(requests[1].path, "/sessions/cf-session-123/close");
     }
 
     #[tokio::test]
@@ -1162,7 +1064,6 @@ mod tests {
             ),
         ]);
         let (base_url, _requests, server) = spawn_http_server(responses).await;
-        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
             launch_options(false, FakeMedia::None),
@@ -1175,8 +1076,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 60_000,
             },
-            None,
-            cookie_manager,
         );
 
         session.start().await.unwrap();
@@ -1227,7 +1126,6 @@ mod tests {
             ),
         ]);
         let (base_url, requests, server) = spawn_http_server(responses).await;
-        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
         let mut options = launch_options(true, FakeMedia::None);
         options.browser_logs = true;
         let mut session = CloudflareSession::new_for_test(
@@ -1242,8 +1140,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 60_000,
             },
-            None,
-            cookie_manager,
         );
 
         session.start().await.unwrap();
@@ -1288,7 +1184,6 @@ mod tests {
             ),
         ]);
         let (base_url, _requests, server) = spawn_http_server(responses).await;
-        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
         let mut options = launch_options(true, FakeMedia::None);
         options.browser_logs = true;
         let mut session = CloudflareSession::new_for_test(
@@ -1303,8 +1198,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 60_000,
             },
-            None,
-            cookie_manager,
         );
 
         session.start().await.unwrap();
@@ -1417,7 +1310,6 @@ mod tests {
             ),
         ]);
         let (base_url, requests, server) = spawn_http_server(responses).await;
-        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
             launch_options(false, FakeMedia::None),
@@ -1430,8 +1322,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 60_000,
             },
-            None,
-            cookie_manager,
         );
 
         session.start().await.unwrap();
@@ -1614,7 +1504,6 @@ mod tests {
             ),
         ]);
         let (base_url, requests, server) = spawn_http_server(responses).await;
-        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
         let mut spec = launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo"));
         spec.settings.transport = TransportMode::WebTransport;
         let mut session = CloudflareSession::new_for_test(
@@ -1629,8 +1518,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 60_000,
             },
-            None,
-            cookie_manager,
         );
 
         session.start().await.unwrap();
@@ -1677,7 +1564,6 @@ mod tests {
             ),
         ]);
         let (base_url, _requests, server) = spawn_http_server(responses).await;
-        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
             launch_options(
@@ -1693,8 +1579,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 60_000,
             },
-            None,
-            cookie_manager,
         );
 
         session.start().await.unwrap();
@@ -1730,7 +1614,6 @@ mod tests {
             ),
         ]);
         let (base_url, requests, server) = spawn_http_server(responses).await;
-        let cookie_manager = HyperSessionCookieManger::new(unique_temp_dir().join("cookies.json"));
         let mut session = CloudflareSession::new_for_test(
             launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo")),
             launch_options(false, FakeMedia::None),
@@ -1743,8 +1626,6 @@ mod tests {
                 debug: false,
                 health_poll_interval_ms: 5,
             },
-            None,
-            cookie_manager,
         );
 
         session.start().await.unwrap();
@@ -1920,7 +1801,6 @@ mod tests {
         let method = request_line.next().unwrap().to_owned();
         let path = request_line.next().unwrap().to_owned();
 
-        let mut headers = Vec::new();
         let mut content_length = 0_usize;
         for line in lines.filter(|line| !line.is_empty()) {
             let (name, value) = line.split_once(':').unwrap();
@@ -1928,7 +1808,6 @@ mod tests {
             if name.eq_ignore_ascii_case("content-length") {
                 content_length = value.parse().unwrap();
             }
-            headers.push((name.to_ascii_lowercase(), value));
         }
 
         let body_start = header_end + 4;
@@ -1942,28 +1821,12 @@ mod tests {
         CapturedRequest {
             method,
             path,
-            headers,
             body: String::from_utf8(body).unwrap(),
         }
     }
 
     fn find_header_end(buffer: &[u8]) -> Option<usize> {
         buffer.windows(4).position(|window| window == b"\r\n\r\n")
-    }
-
-    fn header_value(request: &CapturedRequest, name: &str) -> Option<String> {
-        request
-            .headers
-            .iter()
-            .find(|(header_name, _)| header_name == &name.to_ascii_lowercase())
-            .map(|(_, value)| value.clone())
-    }
-
-    fn unique_temp_dir() -> PathBuf {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("hyper-browser-simulator-cloudflare-{nonce}"));
-        fs::create_dir_all(&dir).unwrap();
-        dir
     }
 
     fn status_text(status: u16) -> &'static str {
@@ -1981,14 +1844,6 @@ mod tests {
     }
 
     impl MockResponse {
-        fn new(status: u16, headers: &str, body: &str) -> Self {
-            Self {
-                status,
-                headers: headers.to_owned(),
-                body: body.to_owned(),
-            }
-        }
-
         fn json(status: u16, body: Value) -> Self {
             Self {
                 status,

@@ -116,9 +116,9 @@ If the goal is not just "implement the runtime trait" but "replace the current l
 
 ### 5.2 Authentication / identity setup
 
-- Hyper Core currently requires a `hyper_session` cookie to be present in the browser before navigation. The local driver either reuses a stored cookie or fetches a new guest cookie and sets the display name through the HTTP auth API. See [`browser/src/participant/local/session.rs`](../browser/src/participant/local/session.rs) `:263-279`, [`browser/src/auth.rs`](../browser/src/auth.rs) `:61-85`, `:253-349`, and [`browser/src/participant/local/core.rs`](../browser/src/participant/local/core.rs) `:57-80`.
+- Hyper Core requires stored first-party credentials before navigation. The simulator reuses or fetches guest credentials and injects them with a browser init script; Hyper Core owns renewal after startup. The Cloudflare worker fetches its own guest credentials so renewal credentials are not forwarded through the worker API.
 - Hyper Core then fills the participant name in the join form and clicks join. See [`browser/src/participant/local/core.rs`](../browser/src/participant/local/core.rs) `:90-140`.
-- Hyper Lite does not use the cookie path and joins by clicking the join button directly. See [`browser/src/participant/local/lite.rs`](../browser/src/participant/local/lite.rs) `:49-88`.
+- Hyper Lite does not use the Hyper Core credential path and joins by clicking the join button directly. See [`browser/src/participant/local/lite.rs`](../browser/src/participant/local/lite.rs) `:49-88`.
 
 ### 5.3 Frontend-specific control hooks
 
@@ -171,7 +171,7 @@ If you are implementing a new driver, this is the minimum checklist:
 
 If you need drop-in parity with the current local Chromium backend, also implement:
 
-- Hyper Core auth/cookie setup,
+- Hyper Core first-party credential setup,
 - Hyper Core and Hyper Lite frontend control flows,
 - fake media injection,
 - headless/headed browser startup,
