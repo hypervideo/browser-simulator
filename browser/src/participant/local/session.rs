@@ -33,10 +33,7 @@ use chromiumoxide::{
     cdp::{
         browser_protocol::{
             log::EventEntryAdded,
-            target::{
-                CreateTargetParams,
-                EventDetachedFromTarget,
-            },
+            target::EventDetachedFromTarget,
         },
         js_protocol::runtime::{
             EventConsoleApiCalled,
@@ -57,7 +54,6 @@ use client_simulator_config::{
     BrowserConfig,
 };
 use eyre::{
-    bail,
     Context as _,
     ContextCompat as _,
     Result,
@@ -653,6 +649,146 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
+    // Requires Chromium/Chrome; the Nix devshell provides Chromium on Linux.
+    #[tokio::test]
+    async fn first_room_navigation_uses_injected_credentials_and_preserves_renewals() {
+        use crate::participant::frontend::BrowserDriver;
+        use base64::{
+            engine::general_purpose::URL_SAFE_NO_PAD,
+            Engine as _,
+        };
+        use client_simulator_config::{
+            Config,
+            ParticipantConfig,
+        };
+        use tokio::{
+            io::{
+                AsyncBufReadExt as _,
+                AsyncWriteExt as _,
+                BufReader,
+            },
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let room_url: url::Url = format!("http://{}/room", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let renewal_token = format!(
+            "e30.{}.signature",
+            URL_SAFE_NO_PAD.encode(r#"{"exp":9223372036854775807}"#)
+        );
+        let credentials_response = serde_json::json!({
+            "firstPartyAccessToken": "issued-access",
+            "renewalToken": renewal_token,
+        })
+        .to_string();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let credentials_response = credentials_response.clone();
+                tokio::spawn(async move {
+                    let mut request = String::new();
+                    let mut reader = BufReader::new(&mut stream);
+                    while !request.ends_with("\r\n\r\n") {
+                        if reader.read_line(&mut request).await.unwrap() == 0 {
+                            return;
+                        }
+                    }
+                    let (content_type, body) = if request.starts_with("POST /api/v1/auth/guest?") {
+                        ("application/json", credentials_response.as_str())
+                    } else {
+                        // Model the lobby creating a guest on its very first load.
+                        (
+                            "text/html",
+                            r#"<!doctype html><script>
+                            const key = 'hyper_video_first_party_credentials';
+                            if (localStorage.getItem(key) === null) {
+                                localStorage.setItem(key, JSON.stringify({
+                                    realm: location.origin,
+                                    first_party_access_token: 'page-created-guest',
+                                    renewal_token: 'page-renewal'
+                                }));
+                            }
+                            window.observedAccessToken = JSON.parse(localStorage.getItem(key)).first_party_access_token;
+                        </script>
+                        <input data-testid="trigger-join-name">
+                        <button type="submit" onclick="this.type='button'; this.dataset.testid='trigger-leave-call'; this.onclick=()=>this.remove()">Join</button>"#,
+                        )
+                    };
+                    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        let config = Config {
+            url: Some(room_url.clone()),
+            headless: true,
+            ..Default::default()
+        };
+        let participant_config = ParticipantConfig::new(&config, Some("simulator")).unwrap();
+        let browser_config = BrowserConfig::from(&participant_config);
+        let manager = FirstPartyCredentialsManager::new(browser_config.user_data_dir.as_ref().join("credentials.json"));
+        let credentials = manager
+            .fetch_new_credentials(room_url.clone(), "simulator")
+            .await
+            .unwrap();
+        let renewed = credentials
+            .stored_credentials_json()
+            .unwrap()
+            .replace("issued-access", "renewed-access");
+        let mut session = LocalChromiumSession::new(
+            participant_config.into(),
+            browser_config,
+            Some(credentials),
+            manager.clone(),
+        );
+
+        let result = timeout(Duration::from_secs(45), async {
+            session.start_inner().await?;
+            let driver = ChromiumDriver::new(session.page.as_ref().unwrap().clone());
+            let observed = driver.eval("return window.observedAccessToken;", None).await?;
+            eyre::ensure!(
+                observed == "issued-access",
+                "first room load observed {observed}, not the simulator credentials"
+            );
+
+            driver
+                .eval(
+                    "localStorage.setItem('hyper_video_first_party_credentials', arguments[0]);",
+                    Some(serde_json::json!(renewed)),
+                )
+                .await?;
+            // Exercise the existing-tab path as well as initial tab creation.
+            create_page_retry(&session.launch_spec, session.browser.as_mut().unwrap()).await?;
+            let location = driver.eval("return location.href;", None).await?;
+            eyre::ensure!(
+                location == "about:blank",
+                "reused page navigated to the room before injection"
+            );
+            session.handle_command(ParticipantMessage::Join).await?;
+            let observed = driver.eval("return window.observedAccessToken;", None).await?;
+            eyre::ensure!(
+                observed == "renewed-access",
+                "later navigation overwrote the renewal: {observed}"
+            );
+            Ok::<_, eyre::Report>(())
+        })
+        .await;
+        let closed = session.close_inner().await;
+        server.abort();
+        result.unwrap().unwrap();
+        closed.unwrap();
+        assert_eq!(
+            manager
+                .give_credentials(&room_url)
+                .unwrap()
+                .stored_credentials_json()
+                .unwrap(),
+            renewed
+        );
+    }
+
     #[tokio::test]
     async fn close_saves_core_browser_credentials_even_when_not_joined() {
         use crate::{
@@ -997,51 +1133,26 @@ fn signal_termination(termination_tx: &watch::Sender<Option<DriverTermination>>,
 }
 
 async fn create_page(launch_spec: &ParticipantLaunchSpec, browser: &mut Browser) -> Result<Page> {
+    // Frontend automation must install credentials before the first room navigation.
+    // about:blank has no HTTP response to wait for.
     let page = if let Ok(Some(page)) = browser
         .pages()
         .await
         .context("failed to get pages")
         .map(|pages| pages.into_iter().next())
     {
-        page.goto(launch_spec.session_url.to_string())
-            .await
-            .context("failed to navigate to session_url")?;
+        page.goto("about:blank").await.context("failed to open blank page")?;
         page
     } else {
         browser
-            .new_page(
-                CreateTargetParams::builder()
-                    .url(launch_spec.session_url.to_string())
-                    .build()
-                    .map_err(|e| eyre::eyre!(e))?,
-            )
+            .new_page("about:blank")
             .await
             .context("failed to create new page")?
     };
 
-    let navigation = page
-        .wait_for_navigation_response()
-        .await
-        .context("Page could not navigate to session_url")?
-        .with_context(|| {
-            format!(
-                "{}: No request returned when creating a page for {}",
-                launch_spec.username, launch_spec.session_url,
-            )
-        })?;
-
-    if let Some(text) = &navigation.failure_text {
-        bail!(
-            "{}: When creating a new page request got a failure: {}",
-            launch_spec.username,
-            text
-        );
-    }
-
     debug!(
         participant = %launch_spec.username,
-        "Created a new page for {}",
-        launch_spec.session_url
+        "Prepared blank page"
     );
 
     Ok(page)
