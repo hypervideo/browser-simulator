@@ -90,7 +90,7 @@ use tokio::{
 pub(crate) struct LocalChromiumSession {
     launch_spec: ParticipantLaunchSpec,
     browser_config: BrowserConfig,
-    frontend_builder: Option<FrontendAuth>,
+    frontend_auth: Option<FrontendAuth>,
     automation: Option<Box<dyn FrontendAutomation>>,
     browser: Option<Browser>,
     page: Option<Page>,
@@ -109,14 +109,14 @@ impl LocalChromiumSession {
         auth: Option<BorrowedCredentials>,
         credentials_manager: FirstPartyCredentialsManager,
     ) -> Self {
-        let frontend_builder = FrontendAuth::for_kind(launch_spec.frontend_kind, auth, credentials_manager);
+        let frontend_auth = FrontendAuth::for_kind(launch_spec.frontend_kind, auth, credentials_manager);
         let (termination_tx, termination_rx) = watch::channel(None);
         let closing = Arc::new(AtomicBool::new(false));
 
         Self {
             launch_spec,
             browser_config,
-            frontend_builder: Some(frontend_builder),
+            frontend_auth: Some(frontend_auth),
             automation: None,
             browser: None,
             page: None,
@@ -157,7 +157,7 @@ impl LocalChromiumSession {
         .await?;
 
         let auth = self
-            .frontend_builder
+            .frontend_auth
             .take()
             .context("local frontend auth already consumed")?;
         let automation = FrontendKindBuilder::build(
@@ -666,7 +666,7 @@ mod tests {
 
         for missing in [false, true] {
             let (auth, manager) = borrowed_for_test();
-            let original = auth.envelope_json().unwrap();
+            let original = auth.stored_credentials_json().unwrap();
             let renewed = original.replace("simulator-access", "renewed-access");
             let url = url::Url::parse(auth.realm()).unwrap();
             let config = Config {
@@ -690,7 +690,7 @@ mod tests {
                             serde_json::json!(renewed)
                         })),
                     },
-                    session.frontend_builder.take().unwrap(),
+                    session.frontend_auth.take().unwrap(),
                 )
                 .await
                 .unwrap(),
@@ -699,7 +699,11 @@ mod tests {
             session.close_inner().await.unwrap();
             assert!(session.automation.is_none());
             assert_eq!(
-                manager.give_credentials(&url).unwrap().envelope_json().unwrap(),
+                manager
+                    .give_credentials(&url)
+                    .unwrap()
+                    .stored_credentials_json()
+                    .unwrap(),
                 if missing { original } else { renewed }
             );
         }

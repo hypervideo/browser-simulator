@@ -419,7 +419,7 @@ async fn run_credentials(CredentialsArgs { base_url, user }: CredentialsArgs, fi
         .give_or_fetch_credentials(base_url, user)
         .await
         .context("Failed to fetch first-party credentials")?;
-    let json = credentials.envelope_json()?;
+    let json = credentials.stored_credentials_json()?;
 
     println!("{json}");
 

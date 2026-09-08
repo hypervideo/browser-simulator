@@ -133,7 +133,7 @@ impl BrowserDriver for ChromiumDriver {
         .boxed()
     }
 
-    fn seed_first_party_credentials(&self, realm: &str, credentials: &str) -> BoxFuture<'_, Result<()>> {
+    fn inject_first_party_credentials(&self, realm: &str, credentials: &str) -> BoxFuture<'_, Result<()>> {
         let script = super::super::frontend::first_party_credentials_init_script(realm, credentials);
         async move {
             self.page

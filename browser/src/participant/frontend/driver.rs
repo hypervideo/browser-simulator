@@ -33,8 +33,8 @@ pub(in crate::participant) trait BrowserDriver: Send + Sync {
     /// `Ok(None)` if the element exists but the attribute is absent.
     fn attribute(&self, selector: &str, name: &str) -> BoxFuture<'_, Result<Option<String>>>;
     fn eval(&self, js_body: &str, arg: Option<serde_json::Value>) -> BoxFuture<'_, Result<serde_json::Value>>;
-    /// Seed credentials before navigation without overwriting subsequent SDK renewals.
-    fn seed_first_party_credentials(&self, realm: &str, credentials: &str) -> BoxFuture<'_, Result<()>>;
+    /// Inject credentials before navigation without overwriting subsequent SDK renewals.
+    fn inject_first_party_credentials(&self, realm: &str, credentials: &str) -> BoxFuture<'_, Result<()>>;
 }
 
 pub(in crate::participant) fn first_party_credentials_init_script(realm: &str, credentials: &str) -> Result<String> {

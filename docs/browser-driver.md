@@ -116,7 +116,7 @@ If the goal is not just "implement the runtime trait" but "replace the current l
 
 ### 5.2 Authentication / identity setup
 
-- Hyper Core requires a first-party credential envelope before navigation. The simulator reuses or fetches guest credentials and installs the envelope with a browser init script; Hyper Core owns renewal after startup. The Cloudflare worker fetches its own guest envelope so renewal credentials are not forwarded through the worker API.
+- Hyper Core requires stored first-party credentials before navigation. The simulator reuses or fetches guest credentials and injects them with a browser init script; Hyper Core owns renewal after startup. The Cloudflare worker fetches its own guest credentials so renewal credentials are not forwarded through the worker API.
 - Hyper Core then fills the participant name in the join form and clicks join. See [`browser/src/participant/local/core.rs`](../browser/src/participant/local/core.rs) `:90-140`.
 - Hyper Lite does not use the Hyper Core credential path and joins by clicking the join button directly. See [`browser/src/participant/local/lite.rs`](../browser/src/participant/local/lite.rs) `:49-88`.
 

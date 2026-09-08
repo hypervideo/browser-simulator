@@ -57,15 +57,15 @@ impl ParticipantInner {
         Self { context, auth }
     }
 
-    async fn seed_credentials(&self) -> Result<()> {
-        let credentials = self.auth.envelope_json()?;
+    async fn inject_credentials(&self) -> Result<()> {
+        let credentials = self.auth.stored_credentials_json()?;
         self.context
             .driver
-            .seed_first_party_credentials(self.auth.realm(), &credentials)
+            .inject_first_party_credentials(self.auth.realm(), &credentials)
             .await
-            .context("failed to seed first-party credentials")?;
+            .context("failed to inject first-party credentials")?;
 
-        self.context.log_message("debug", "Seeded first-party credentials");
+        self.context.log_message("debug", "Injected first-party credentials");
 
         Ok(())
     }
@@ -75,7 +75,7 @@ impl ParticipantInner {
     }
 
     async fn join_session(&mut self) -> Result<()> {
-        self.seed_credentials().await?;
+        self.inject_credentials().await?;
 
         self.context
             .driver
@@ -344,7 +344,7 @@ impl FrontendAutomation for ParticipantInner {
                 ),
             ).await.context("timed out reading browser credentials")??;
             if !value.is_null() {
-                self.auth.update_from_envelope(value.as_str().ok_or_eyre("expected browser credentials string")?)?;
+                self.auth.update_from_stored_credentials(value.as_str().ok_or_eyre("expected browser credentials string")?)?;
             }
             Ok(())
         }.boxed()
