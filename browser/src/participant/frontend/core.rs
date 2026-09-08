@@ -36,6 +36,7 @@ use client_simulator_config::{
 };
 use eyre::{
     Context as _,
+    OptionExt as _,
     Result,
 };
 use futures::{
@@ -333,6 +334,22 @@ impl ParticipantInner {
 }
 
 impl FrontendAutomation for ParticipantInner {
+    fn save_credentials(&mut self) -> BoxFuture<'_, Result<()>> {
+        async move {
+            let value = tokio::time::timeout(
+                Duration::from_secs(5),
+                self.context.driver.eval(
+                    "if (globalThis.location.origin !== arguments[0]) return null; return globalThis.localStorage.getItem('hyper_video_first_party_credentials');",
+                    Some(serde_json::json!(self.auth.realm())),
+                ),
+            ).await.context("timed out reading browser credentials")??;
+            if !value.is_null() {
+                self.auth.update_from_envelope(value.as_str().ok_or_eyre("expected browser credentials string")?)?;
+            }
+            Ok(())
+        }.boxed()
+    }
+
     fn join(&mut self) -> BoxFuture<'_, Result<()>> {
         async move { self.join_session().await }.boxed()
     }

@@ -3,6 +3,7 @@ use base64::{
     Engine as _,
 };
 use eyre::{
+    ensure,
     Context as _,
     OptionExt as _,
     Result,
@@ -30,6 +31,7 @@ use std::{
 #[derive(Clone, Debug)]
 pub struct FirstPartyCredentialsManager {
     stash_file: PathBuf,
+    // ponytail: the pool lock also serializes small stash writes; split it if disk I/O causes contention.
     available_credentials: Arc<Mutex<HashMap<String, VecDeque<FirstPartyCredentials>>>>,
 }
 
@@ -75,6 +77,7 @@ impl FirstPartyCredentialsManager {
         let credentials = FirstPartyCredentials::fetch(&base_url, username).await?;
         let server_url = server_key(&base_url);
 
+        let _available = self.available_credentials.lock().unwrap();
         let mut stash = FirstPartyCredentialsStash::load(&self.stash_file);
         stash
             .credentials
@@ -148,6 +151,42 @@ impl BorrowedCredentials {
 
     pub fn envelope_json(&self) -> Result<String> {
         self.credentials.envelope_json()
+    }
+
+    /// Keep browser renewals for the next participant and the next simulator run.
+    pub(crate) fn update_from_envelope(&mut self, envelope: &str) -> Result<()> {
+        #[derive(Deserialize)]
+        struct Envelope {
+            realm: String,
+            first_party_access_token: String,
+            renewal_token: String,
+        }
+        let envelope: Envelope = serde_json::from_str(envelope).context("invalid browser credentials")?;
+        ensure!(envelope.realm == self.server_url, "browser credential realm mismatch");
+        let credentials = FirstPartyCredentials {
+            username: self.credentials.username.clone(),
+            realm: envelope.realm,
+            first_party_access_token: envelope.first_party_access_token,
+            renewal_token: envelope.renewal_token,
+        };
+        ensure!(
+            !credentials.first_party_access_token.is_empty() && credentials.can_renew(),
+            "browser credentials are empty or cannot be renewed"
+        );
+        if credentials.first_party_access_token == self.credentials.first_party_access_token
+            && credentials.renewal_token == self.credentials.renewal_token
+        {
+            return Ok(());
+        }
+
+        // Retain the renewed pair in memory even if persisting it fails.
+        let previous = std::mem::replace(&mut self.credentials, credentials);
+        let _available = self.manager.available_credentials.lock().unwrap();
+        let mut stash = FirstPartyCredentialsStash::load(&self.manager.stash_file);
+        let stored = stash.credentials.entry(self.server_url.clone()).or_default();
+        stored.retain(|entry| entry.renewal_token != previous.renewal_token);
+        stored.push(self.credentials.clone());
+        stash.save()
     }
 }
 
@@ -302,7 +341,7 @@ impl FirstPartyCredentials {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::time::{
         SystemTime,
@@ -330,6 +369,48 @@ mod tests {
     fn renewal_token(exp: i64) -> String {
         let payload = URL_SAFE_NO_PAD.encode(serde_json::json!({ "exp": exp }).to_string());
         format!("e30.{payload}.signature")
+    }
+
+    #[tokio::test]
+    async fn lite_and_stub_participants_do_not_reuse_core_names() {
+        use crate::participant::ParticipantStore;
+        use client_simulator_config::{
+            Config,
+            ParticipantBackendKind,
+        };
+
+        for (backend, path) in [
+            (ParticipantBackendKind::Local, "/m/demo"),
+            (ParticipantBackendKind::RemoteStub, "/demo"),
+        ] {
+            let dir = unique_temp_dir();
+            stash_with(
+                dir.join("first_party_credentials.json"),
+                vec![credentials("cached-core")],
+            )
+            .save()
+            .unwrap();
+            let store = ParticipantStore::new(&dir);
+            let config = Config {
+                backend,
+                url: Some(format!("{SERVER_URL}{path}").parse().unwrap()),
+                ..Default::default()
+            };
+            // Both spawns finish synchronously, before either browser task starts.
+            store.spawn(&config).unwrap();
+            store.spawn(&config).unwrap();
+            assert_eq!(store.len(), 2);
+            assert!(store.keys().iter().all(|name| name != "cached-core"));
+            assert_eq!(
+                store
+                    .credentials()
+                    .give_credentials(config.url.as_ref().unwrap())
+                    .unwrap()
+                    .username(),
+                "cached-core"
+            );
+            store.shutdown_all().await;
+        }
     }
 
     #[test]
@@ -383,6 +464,90 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hyper-browser-simulator-auth-{nonce}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    pub(crate) fn borrowed_for_test() -> (BorrowedCredentials, FirstPartyCredentialsManager) {
+        let stash = stash_with(
+            unique_temp_dir().join("first_party_credentials.json"),
+            vec![credentials("simulator")],
+        );
+        stash.save().unwrap();
+        let manager = FirstPartyCredentialsManager::from(stash);
+        (manager.give_credentials(&SERVER_URL.parse().unwrap()).unwrap(), manager)
+    }
+
+    #[test]
+    fn browser_renewals_replace_the_original_pair_in_pool_and_stash() {
+        for original_expired in [false, true] {
+            let (mut borrowed, manager) = borrowed_for_test();
+            if original_expired {
+                // The original pair expires while the browser has already renewed it.
+                borrowed.credentials.renewal_token = renewal_token(0);
+            }
+            let mut other = credentials("simulator");
+            other.renewal_token = renewal_token(i64::MAX - 1);
+            stash_with(
+                manager.stash_file.clone(),
+                vec![borrowed.credentials.clone(), other.clone()],
+            )
+            .save()
+            .unwrap();
+            let mut renewed = credentials("simulator");
+            renewed.first_party_access_token = "renewed-access".to_string();
+            renewed.renewal_token = renewal_token(i64::MAX - 2);
+            let envelope = renewed.envelope_json().unwrap();
+            borrowed.update_from_envelope(&envelope).unwrap();
+            borrowed.update_from_envelope(&envelope).unwrap();
+            drop(borrowed);
+
+            let reused = manager.give_credentials(&SERVER_URL.parse().unwrap()).unwrap();
+            assert_eq!(reused.envelope_json().unwrap(), envelope);
+            let loaded = FirstPartyCredentialsStash::load(&manager.stash_file);
+            let stored = &loaded.credentials[SERVER_URL];
+            assert_eq!(stored.len(), 2);
+            assert_eq!(stored[0].renewal_token, other.renewal_token);
+            assert_eq!(stored[1].envelope_json().unwrap(), envelope);
+        }
+    }
+
+    #[test]
+    fn invalid_browser_credentials_do_not_replace_the_borrowed_pair() {
+        let (mut borrowed, manager) = borrowed_for_test();
+        let original = borrowed.envelope_json().unwrap();
+        let stored = std::fs::read(&manager.stash_file).unwrap();
+        for envelope in [
+            "not json".to_string(),
+            "{}".to_string(),
+            original.replace(SERVER_URL, "https://other.example"),
+            original.replace("simulator-access", ""),
+            original.replace(&renewal_token(i64::MAX), &renewal_token(0)),
+            original.replace(&renewal_token(i64::MAX), "invalid"),
+        ] {
+            assert!(borrowed.update_from_envelope(&envelope).is_err());
+            assert_eq!(borrowed.envelope_json().unwrap(), original);
+            assert_eq!(std::fs::read(&manager.stash_file).unwrap(), stored);
+        }
+    }
+
+    #[test]
+    fn persistence_failure_still_returns_browser_renewals_to_the_pool() {
+        let (mut borrowed, manager) = borrowed_for_test();
+        // An existing directory cannot be opened as a stash file for writing.
+        borrowed.manager.stash_file = unique_temp_dir();
+        let envelope = borrowed
+            .envelope_json()
+            .unwrap()
+            .replace("simulator-access", "renewed-access");
+        assert!(borrowed.update_from_envelope(&envelope).is_err());
+        drop(borrowed);
+        assert_eq!(
+            manager
+                .give_credentials(&SERVER_URL.parse().unwrap())
+                .unwrap()
+                .envelope_json()
+                .unwrap(),
+            envelope
+        );
     }
 
     #[test]

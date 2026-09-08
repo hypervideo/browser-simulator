@@ -178,10 +178,8 @@ impl LocalChromiumSession {
         self.detached_target_task = Some(detached_target_task);
         self.automation = Some(automation);
 
-        if let Err(err) = self.automation_mut()?.join().await {
-            self.kill_browser().await;
-            return Err(err);
-        }
+        // The runtime closes failed starts, including saving any browser renewals.
+        self.automation_mut()?.join().await?;
 
         Ok(())
     }
@@ -197,6 +195,12 @@ impl LocalChromiumSession {
 
         if let Some(handle) = self.detached_target_task.take() {
             handle.abort();
+        }
+
+        if let Some(automation) = self.automation.as_mut() {
+            if let Err(err) = automation.save_credentials().await {
+                self.log_message("warn", format!("Failed saving browser credentials: {err}"));
+            }
         }
 
         let should_leave = if let Some(automation) = self.automation.as_mut() {
@@ -648,6 +652,58 @@ fn chrome_arg_value(key: &str, value: impl std::fmt::Display) -> String {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[tokio::test]
+    async fn close_saves_core_browser_credentials_even_when_not_joined() {
+        use crate::{
+            auth::tests::borrowed_for_test,
+            participant::frontend::RecordingDriver,
+        };
+        use client_simulator_config::{
+            Config,
+            ParticipantConfig,
+        };
+
+        for missing in [false, true] {
+            let (auth, manager) = borrowed_for_test();
+            let original = auth.envelope_json().unwrap();
+            let renewed = original.replace("simulator-access", "renewed-access");
+            let url = url::Url::parse(auth.realm()).unwrap();
+            let config = Config {
+                url: Some(url.clone()),
+                ..Default::default()
+            };
+            let participant_config = ParticipantConfig::new(&config, Some(auth.username())).unwrap();
+            let mut session = LocalChromiumSession::new(
+                participant_config.clone().into(),
+                BrowserConfig::from(&participant_config),
+                Some(auth),
+                manager.clone(),
+            );
+            session.automation = Some(
+                FrontendKindBuilder::build(
+                    FrontendContext {
+                        launch_spec: session.launch_spec.clone(),
+                        driver: Box::new(RecordingDriver::with_result(if missing {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::json!(renewed)
+                        })),
+                    },
+                    session.frontend_builder.take().unwrap(),
+                )
+                .await
+                .unwrap(),
+            );
+
+            session.close_inner().await.unwrap();
+            assert!(session.automation.is_none());
+            assert_eq!(
+                manager.give_credentials(&url).unwrap().envelope_json().unwrap(),
+                if missing { original } else { renewed }
+            );
+        }
+    }
 
     #[test]
     fn resolve_binary_prefers_path_lookup_before_fallbacks() {

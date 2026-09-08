@@ -77,6 +77,10 @@ pub(in crate::participant) trait FrontendAutomation: Send {
     fn leave(&mut self) -> BoxFuture<'_, Result<()>>;
     fn handle_command(&mut self, message: ParticipantMessage) -> BoxFuture<'_, Result<()>>;
     fn refresh_state(&mut self) -> BoxFuture<'_, Result<ParticipantState>>;
+    /// Capture browser-owned credentials before leaving or destroying the page.
+    fn save_credentials(&mut self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Decode the legacy `data-test-state="true"|"false"` attribute.

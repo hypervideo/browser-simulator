@@ -12,6 +12,8 @@ pub(in crate::participant) use builder::{
     FrontendAuth,
     FrontendKindBuilder,
 };
+#[cfg(test)]
+pub(in crate::participant) use commands::tests::RecordingDriver;
 pub(in crate::participant) use driver::{
     first_party_credentials_init_script,
     BrowserDriver,

@@ -135,7 +135,12 @@ impl ParticipantTaskControl {
 impl Participant {
     pub fn spawn_with_app_config(config: &Config, credentials_manager: FirstPartyCredentialsManager) -> Result<Self> {
         let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
-        let credentials = credentials_manager.give_credentials(&session_url);
+        let credentials = matches!(
+            ResolvedFrontendKind::from_session_url(&session_url),
+            ResolvedFrontendKind::HyperCore
+        )
+        .then(|| credentials_manager.give_credentials(&session_url))
+        .flatten();
         let name = credentials.as_ref().map(BorrowedCredentials::username);
         let participant_config = ParticipantConfig::new(config, name)?;
         debug!("Participant config: {:#?}", participant_config);
@@ -178,11 +183,8 @@ impl Participant {
         })
     }
 
-    pub fn spawn_remote_stub(config: &Config, credentials_manager: FirstPartyCredentialsManager) -> Result<Self> {
-        let session_url = config.url.clone().ok_or_eyre("No session URL provided in the config")?;
-        let credentials = credentials_manager.give_credentials(&session_url);
-        let name = credentials.as_ref().map(BorrowedCredentials::username);
-        let participant_config = ParticipantConfig::new(config, name)?;
+    pub fn spawn_remote_stub(config: &Config, _credentials_manager: FirstPartyCredentialsManager) -> Result<Self> {
+        let participant_config = ParticipantConfig::new(config, None::<String>)?;
         let launch_spec = ParticipantLaunchSpec::from(participant_config);
         let name = launch_spec.username.clone();
 
