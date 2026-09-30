@@ -2,7 +2,8 @@
 //!
 //! Uses an in-process TCP server that speaks just enough of the W3C WebDriver
 //! HTTP protocol for thirtyfour to drive a session, plus a stubbed TestGridApi
-//! that points thirtyfour at that server. No real AWS or browser is involved.
+//! that points thirtyfour at that server. The camera capture test uses real
+//! Chrome/Chromium; no test uses real AWS.
 
 use client_simulator_browser::{
     auth::FirstPartyCredentialsManager,
@@ -25,6 +26,7 @@ use eyre::Result;
 use futures::{
     future::BoxFuture,
     FutureExt as _,
+    StreamExt as _,
 };
 use serde_json::{
     json,
@@ -91,6 +93,241 @@ async fn device_farm_session_creates_url_connects_joins_and_closes() {
     assert!(paths.iter().any(|(_, path)| path == &"/session/df-1/element"));
     assert!(paths.iter().any(|(_, path)| path.ends_with("/click")));
     assert!(paths.contains(&("DELETE", "/session/df-1")));
+
+    let capture_init = requests
+        .iter()
+        .position(|request| {
+            request_json(request)["cmd"] == "Page.addScriptToEvaluateOnNewDocument"
+                && request_json(request)["params"]["source"]
+                    == include_str!("../src/participant/device_farm/camera_capture.js")
+        })
+        .expect("AWS camera capture init script should be installed");
+    let navigation = requests
+        .iter()
+        .position(|request| request.method == "POST" && request.path == "/session/df-1/url")
+        .unwrap();
+    assert!(capture_init < navigation, "limit capture before the lobby opens");
+}
+
+// Requires Chrome/Chromium, like the existing local browser tests.
+#[tokio::test]
+async fn device_farm_camera_capture_stays_at_720p() {
+    use chromiumoxide::{
+        browser::{
+            Browser,
+            BrowserConfig,
+        },
+        cdp::browser_protocol::page::AddScriptToEvaluateOnNewDocumentParams,
+    };
+
+    let (url, _, server) = spawn_webdriver_mock().await;
+    let (mut browser, mut handler) = Browser::launch(
+        BrowserConfig::builder()
+            .user_data_dir(unique_temp_dir())
+            .args([
+                "no-sandbox",
+                "use-fake-ui-for-media-stream",
+                "use-fake-device-for-media-stream",
+            ])
+            .build()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let handler = tokio::spawn(async move { while handler.next().await.is_some() {} });
+    let result = timeout(Duration::from_secs(30), async {
+        let page = browser.new_page("about:blank").await?;
+        page.execute(AddScriptToEvaluateOnNewDocumentParams::new(include_str!(
+            "../src/participant/device_farm/camera_capture.js"
+        )))
+        .await?;
+        page.goto(url).await?;
+        let value = page
+            .evaluate_function(
+                r#"async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {echoCancellation: false}, video: {width: 3840, height: 2160}
+            });
+            const track = stream.getVideoTracks()[0];
+            const dimensions = [track.getSettings()];
+            await track.applyConstraints({width: 3840, height: 2160, frameRate: {exact: 10}});
+            dimensions.push(track.getSettings());
+            const echoCancellation = stream.getAudioTracks()[0].getSettings().echoCancellation;
+            stream.getTracks().forEach(track => track.stop());
+            const restarted = await navigator.mediaDevices.getUserMedia({video: true});
+            dimensions.push(restarted.getVideoTracks()[0].getSettings());
+            restarted.getTracks().forEach(track => track.stop());
+            const audio = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
+            const audioKinds = audio.getTracks().map(track => track.kind);
+            audio.getTracks().forEach(track => track.stop());
+            return {dimensions, echoCancellation, audioKinds};
+        }"#,
+            )
+            .await?
+            .into_value::<Value>()?;
+        Ok::<_, eyre::Report>(value)
+    })
+    .await;
+    browser.close().await.unwrap();
+    handler.abort();
+    server.abort();
+
+    let result = result.unwrap().unwrap();
+    for settings in result["dimensions"].as_array().unwrap() {
+        assert_eq!(settings["width"], 1280);
+        assert_eq!(settings["height"], 720);
+    }
+    assert_eq!(result["dimensions"][1]["frameRate"], 10);
+    assert_eq!(result["echoCancellation"], false);
+    assert_eq!(result["audioKinds"], json!(["audio"]));
+}
+
+#[tokio::test]
+async fn device_farm_selected_clip_supplies_real_video_and_audio() {
+    use chromiumoxide::{
+        browser::{
+            Browser,
+            BrowserConfig,
+        },
+        cdp::browser_protocol::page::AddScriptToEvaluateOnNewDocumentParams,
+    };
+    use client_simulator_config::media::{
+        FakeMedia,
+        FakeMediaWithDescription,
+    };
+
+    for (video_source, audio_source) in [(true, true), (false, true), (true, false)] {
+        let directory = unique_temp_dir();
+        let input = directory.join("red.mp4");
+        let mut generator = std::process::Command::new("ffmpeg");
+        generator.args([
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=320x180:r=20",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=997:sample_rate=48000",
+            "-t",
+            "0.5",
+            "-c:v",
+            "mpeg4",
+            "-c:a",
+            "aac",
+        ]);
+        if video_source {
+            generator.args(["-map", "0:v:0"]);
+        }
+        if audio_source {
+            generator.args(["-map", "1:a:0"]);
+        }
+        let generated = generator.arg(&input).output().unwrap();
+        assert!(
+            generated.status.success(),
+            "{}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        let (url, requests, server) = spawn_webdriver_mock().await;
+        let mut config = device_farm_config();
+        config.fake_media_selected = Some(0);
+        config.fake_media_sources = vec![FakeMediaWithDescription::new(
+            FakeMedia::FileOrUrl(input.display().to_string()),
+            None,
+        )];
+        let participant = Participant::spawn_device_farm_with_api(
+            &config,
+            FirstPartyCredentialsManager::new(directory.join("credentials.json")),
+            Arc::new(TestGridStub { url: url.clone() }),
+        )
+        .unwrap();
+        wait_for_state(&participant.state, |state| state.running && state.joined).await;
+        participant.close().await;
+        let script = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|request| {
+                let body = request_json(request);
+                (body["cmd"] == "Page.addScriptToEvaluateOnNewDocument")
+                    .then(|| body["params"]["source"].as_str().unwrap().to_owned())
+            })
+            .expect("selected clip should be installed in the AWS browser");
+        assert!(!script.contains("/*MEDIA_DATA*/null"));
+
+        let (mut browser, mut handler) = Browser::launch(
+            BrowserConfig::builder()
+                .user_data_dir(directory.join("chrome"))
+                .args([
+                    "no-sandbox",
+                    "use-fake-ui-for-media-stream",
+                    "use-fake-device-for-media-stream",
+                    "autoplay-policy=no-user-gesture-required",
+                ])
+                .build()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let handler = tokio::spawn(async move { while handler.next().await.is_some() {} });
+        let result = timeout(Duration::from_secs(30), async {
+            let page = browser.new_page("about:blank").await?;
+            page.execute(AddScriptToEvaluateOnNewDocumentParams::new(script))
+                .await?;
+            page.goto(url).await?;
+            let value = page
+                .evaluate_function(
+                    r#"async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
+            const video = document.createElement('video'); video.muted = true; video.srcObject = stream;
+            await video.play();
+            const context = new AudioContext(); await context.resume();
+            const analyser = context.createAnalyser();
+            context.createMediaStreamSource(new MediaStream(stream.getAudioTracks())).connect(analyser);
+            let frames = 0;
+            const frame = () => {frames++; video.requestVideoFrameCallback(frame);};
+            video.requestVideoFrameCallback(frame);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            let rms = 0;
+            const samples = new Float32Array(analyser.fftSize);
+            for (let i = 0; i < 6; i++) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+                analyser.getFloatTimeDomainData(samples);
+                rms = Math.max(rms, Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length));
+            }
+            const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+            const painter = canvas.getContext('2d'); painter.drawImage(video, 0, 0, 1, 1);
+            const pixel = [...painter.getImageData(0, 0, 1, 1).data];
+            const settings = stream.getVideoTracks()[0].getSettings();
+            stream.getTracks().forEach(track => track.stop()); await context.close();
+            return {pixel, rms, frames, settings};
+        }"#,
+                )
+                .await?
+                .into_value::<Value>()?;
+            Ok::<_, eyre::Report>(value)
+        })
+        .await;
+        browser.close().await.unwrap();
+        handler.abort();
+        server.abort();
+        let result = result.unwrap().unwrap();
+        if video_source {
+            assert!(result["pixel"][0].as_u64().unwrap() > 200, "{result}");
+            assert!(result["pixel"][1].as_u64().unwrap() < 50, "{result}");
+        }
+        if audio_source {
+            assert!(result["rms"].as_f64().unwrap() > 0.01, "{result}");
+        }
+        assert!(
+            result["frames"].as_u64().unwrap() > 20,
+            "clip should keep looping: {result}"
+        );
+        assert_eq!(result["settings"]["width"], 1280);
+        assert_eq!(result["settings"]["height"], 720);
+    }
 }
 
 #[tokio::test]
@@ -494,10 +731,18 @@ async fn spawn_webdriver_mock_with_options(
     let task = tokio::spawn(async move {
         loop {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let request = read_request(&mut stream).await;
-            let response = webdriver_response(&request, &state, &options);
-            requests_for_task.lock().unwrap().push(request);
-            write_response(&mut stream, response).await;
+            let state = Arc::clone(&state);
+            let options = Arc::clone(&options);
+            let requests = Arc::clone(&requests_for_task);
+            tokio::spawn(async move {
+                // Chrome may open and close speculative connections without sending a request.
+                let Some(request) = read_request(&mut stream).await else {
+                    return;
+                };
+                let response = webdriver_response(&request, &state, &options);
+                requests.lock().unwrap().push(request);
+                write_response(&mut stream, response).await;
+            });
         }
     });
 
@@ -757,13 +1002,16 @@ async fn write_response(stream: &mut tokio::net::TcpStream, response: MockRespon
     stream.write_all(reply.as_bytes()).await.unwrap();
 }
 
-async fn read_request(stream: &mut tokio::net::TcpStream) -> CapturedRequest {
+async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<CapturedRequest> {
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 4096];
     let header_end;
 
     loop {
         let read = stream.read(&mut chunk).await.unwrap();
+        if read == 0 && buffer.is_empty() {
+            return None;
+        }
         assert!(read > 0, "unexpected EOF while reading request headers");
         buffer.extend_from_slice(&chunk[..read]);
 
@@ -797,11 +1045,11 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> CapturedRequest {
         body.extend_from_slice(&chunk[..read]);
     }
 
-    CapturedRequest {
+    Some(CapturedRequest {
         method,
         path,
         body: String::from_utf8(body).unwrap(),
-    }
+    })
 }
 
 fn find_header_end(buffer: &[u8]) -> Option<usize> {

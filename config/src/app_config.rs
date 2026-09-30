@@ -45,7 +45,7 @@ pub fn get_config_dir() -> PathBuf {
     directory
 }
 
-pub(crate) fn cache_dir() -> PathBuf {
+pub fn cache_dir() -> PathBuf {
     if let Some(dirs) = ProjectDirs::from("video", "hyper", env!("CARGO_PKG_NAME")) {
         dirs.cache_dir().to_path_buf()
     } else {

@@ -21,8 +21,8 @@ To upgrade later:
 brew upgrade hyper-client-simulator
 ```
 
-The Homebrew package installs the simulator binary only. Chrome or Chromium must
-still be installed locally on the Mac where you run it.
+The Homebrew package installs the simulator and FFmpeg for custom media sources.
+Chrome or Chromium must still be installed locally on the Mac where you run it.
 
 ## Run with Nix
 
@@ -53,6 +53,24 @@ call with `--base-url <URL>`, `--local` (use `http://127.0.0.1:8787`), and
 
 `hyper-client-simulator aws` offers the same for AWS Device Farm sessions. Run
 `hyper-client-simulator aws --help` for details.
+
+AWS Device Farm participants capture camera video at 1280×720 by default, with
+the same limit applied on camera restarts and constraint updates. Chrome's
+synthetic camera advertises up to 4K, which can overload these remote browsers.
+This capture limit is separate from `video_constraint_publish_webcam`, which
+limits encoded video. Microphone capture and screen sharing use their usual
+constraints.
+
+AWS Device Farm supports selected custom media files and direct media URLs. The
+simulator downloads and converts a source once to a cached browser-playable clip
+at 720p/20 fps, then sends it to each remote browser to loop as its camera and
+microphone. A source that cannot load fails startup before allocating an AWS
+session. Audio-only sources retain the built-in camera; video-only sources retain
+the built-in microphone. Nix supplies FFmpeg automatically; standalone binary
+installations need it on `PATH`.
+
+YouTube page URLs are not direct media URLs and need a separate playback/capture
+path. Cloudflare participants continue to use worker-provided synthetic media.
 
 ## Development
 
