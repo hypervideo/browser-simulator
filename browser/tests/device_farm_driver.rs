@@ -2,7 +2,8 @@
 //!
 //! Uses an in-process TCP server that speaks just enough of the W3C WebDriver
 //! HTTP protocol for thirtyfour to drive a session, plus a stubbed TestGridApi
-//! that points thirtyfour at that server. No real AWS or browser is involved.
+//! that points thirtyfour at that server. The camera capture test uses real
+//! Chrome/Chromium; no test uses real AWS.
 
 use client_simulator_browser::{
     auth::FirstPartyCredentialsManager,
@@ -25,6 +26,7 @@ use eyre::Result;
 use futures::{
     future::BoxFuture,
     FutureExt as _,
+    StreamExt as _,
 };
 use serde_json::{
     json,
@@ -91,6 +93,92 @@ async fn device_farm_session_creates_url_connects_joins_and_closes() {
     assert!(paths.iter().any(|(_, path)| path == &"/session/df-1/element"));
     assert!(paths.iter().any(|(_, path)| path.ends_with("/click")));
     assert!(paths.contains(&("DELETE", "/session/df-1")));
+
+    let capture_init = requests
+        .iter()
+        .position(|request| {
+            request_json(request)["cmd"] == "Page.addScriptToEvaluateOnNewDocument"
+                && request_json(request)["params"]["source"]
+                    == include_str!("../src/participant/device_farm/camera_capture.js")
+        })
+        .expect("AWS camera capture init script should be installed");
+    let navigation = requests
+        .iter()
+        .position(|request| request.method == "POST" && request.path == "/session/df-1/url")
+        .unwrap();
+    assert!(capture_init < navigation, "limit capture before the lobby opens");
+}
+
+// Requires Chrome/Chromium, like the existing local browser tests.
+#[tokio::test]
+async fn device_farm_camera_capture_stays_at_720p() {
+    use chromiumoxide::{
+        browser::{
+            Browser,
+            BrowserConfig,
+        },
+        cdp::browser_protocol::page::AddScriptToEvaluateOnNewDocumentParams,
+    };
+
+    let (url, _, server) = spawn_webdriver_mock().await;
+    let (mut browser, mut handler) = Browser::launch(
+        BrowserConfig::builder()
+            .args([
+                "no-sandbox",
+                "use-fake-ui-for-media-stream",
+                "use-fake-device-for-media-stream",
+            ])
+            .build()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let handler = tokio::spawn(async move { while handler.next().await.is_some() {} });
+    let result = timeout(Duration::from_secs(30), async {
+        let page = browser.new_page("about:blank").await?;
+        page.execute(AddScriptToEvaluateOnNewDocumentParams::new(include_str!(
+            "../src/participant/device_farm/camera_capture.js"
+        )))
+        .await?;
+        page.goto(url).await?;
+        let value = page
+            .evaluate_function(
+                r#"async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {echoCancellation: false}, video: {width: 3840, height: 2160}
+            });
+            const track = stream.getVideoTracks()[0];
+            const dimensions = [track.getSettings()];
+            await track.applyConstraints({width: 3840, height: 2160, frameRate: {exact: 10}});
+            dimensions.push(track.getSettings());
+            const echoCancellation = stream.getAudioTracks()[0].getSettings().echoCancellation;
+            stream.getTracks().forEach(track => track.stop());
+            const restarted = await navigator.mediaDevices.getUserMedia({video: true});
+            dimensions.push(restarted.getVideoTracks()[0].getSettings());
+            restarted.getTracks().forEach(track => track.stop());
+            const audio = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
+            const audioKinds = audio.getTracks().map(track => track.kind);
+            audio.getTracks().forEach(track => track.stop());
+            return {dimensions, echoCancellation, audioKinds};
+        }"#,
+            )
+            .await?
+            .into_value::<Value>()?;
+        Ok::<_, eyre::Report>(value)
+    })
+    .await;
+    browser.close().await.unwrap();
+    handler.abort();
+    server.abort();
+
+    let result = result.unwrap().unwrap();
+    for settings in result["dimensions"].as_array().unwrap() {
+        assert_eq!(settings["width"], 1280);
+        assert_eq!(settings["height"], 720);
+    }
+    assert_eq!(result["dimensions"][1]["frameRate"], 10);
+    assert_eq!(result["echoCancellation"], false);
+    assert_eq!(result["audioKinds"], json!(["audio"]));
 }
 
 #[tokio::test]

@@ -54,6 +54,13 @@ call with `--base-url <URL>`, `--local` (use `http://127.0.0.1:8787`), and
 `hyper-client-simulator aws` offers the same for AWS Device Farm sessions. Run
 `hyper-client-simulator aws --help` for details.
 
+AWS Device Farm participants capture camera video at 1280×720 by default, with
+the same limit applied on camera restarts and constraint updates. Chrome's
+synthetic camera advertises up to 4K, which can overload these remote browsers.
+This capture limit is separate from `video_constraint_publish_webcam`, which
+limits encoded video. Microphone capture and screen sharing use their usual
+constraints.
+
 ## Development
 
 This repository uses `hypervideo/cloudflare-browser-simulator` as a Git submodule

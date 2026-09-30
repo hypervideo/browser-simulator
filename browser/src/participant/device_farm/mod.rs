@@ -75,6 +75,7 @@ use thirtyfour::{
         },
         config::WebDriverConfig,
     },
+    extensions::cdp::ChromeDevTools,
     prelude::{
         WebDriverError,
         WebDriverResult,
@@ -297,6 +298,13 @@ impl DeviceFarmSession {
         )
         .await?;
         self.webdriver = Some(driver.clone());
+        ChromeDevTools::new(driver.handle.clone())
+            .execute_cdp_with_params(
+                "Page.addScriptToEvaluateOnNewDocument",
+                serde_json::json!({ "source": include_str!("camera_capture.js") }),
+            )
+            .await
+            .context("failed to install Device Farm 720p camera capture limit")?;
         let webdriver_driver = WebDriverDriver::new(driver);
 
         let auth = self.auth.take().context("device farm auth already consumed")?;
