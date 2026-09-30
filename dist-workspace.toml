@@ -24,3 +24,6 @@ publish-jobs = ["homebrew"]
 [dist.github-custom-runners]
 aarch64-apple-darwin = "blacksmith-12vcpu-macos-latest"
 x86_64-apple-darwin = "blacksmith-12vcpu-macos-latest"
+
+[dist.dependencies.homebrew]
+ffmpeg = { stage = ["run"] }

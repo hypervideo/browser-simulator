@@ -54,24 +54,64 @@ impl FakeMediaFiles {
     /// as "fake" media inputs for Chrome/Chromium.
     pub fn from_file_or_url(input: FakeMediaFileOrUrl, cache_dir: impl AsRef<Path>) -> Result<Self> {
         let cache_dir = cache_dir.as_ref();
-
-        let input = match input {
-            FakeMediaFileOrUrl::File(path) => path,
-            FakeMediaFileOrUrl::Url(url) => {
-                let name =
-                    infer_filename_from_url(&url).unwrap_or_else(|| PathBuf::from("input.mp4" /* wild guess */));
-                let url_hash = string_hash(&url)?;
-                let cache_dir = cache_dir.join("download-cache").join(&url_hash);
-                let input = cache_dir.join(&name);
-                if !input.exists() {
-                    std::fs::create_dir_all(&cache_dir)?;
-                    download_file(&url, &input)?;
-                }
-                input
-            }
-        };
-
+        let input = resolve_input(input, cache_dir)?;
         Self::from_file(&input, cache_dir)
+    }
+
+    /// Prepare a looping browser-playable clip for remote participants.
+    pub fn for_browser(input: FakeMediaFileOrUrl, cache_dir: impl AsRef<Path>) -> Result<PathBuf> {
+        // ponytail: serialize preparation so participants sharing a source cannot read a partial clip;
+        // use per-source locks if preparing different clips concurrently becomes necessary.
+        static PREPARATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = PREPARATION
+            .lock()
+            .map_err(|error| eyre::eyre!("media preparation lock: {error}"))?;
+        let cache_dir = cache_dir.as_ref();
+        let input = resolve_input(input, cache_dir)?;
+        let cache_dir = cache_dir.join("browser-media-cache-v1").join(file_hash(&input)?);
+        let cached = cache_dir.join("media.webm");
+        if cached.is_file() {
+            return Ok(cached);
+        }
+        std::fs::create_dir_all(&cache_dir)?;
+        let output = Command::new("ffmpeg")
+            .args(["-loglevel", "error", "-y", "-i"])
+            .arg(&input)
+            .args([
+                "-map",
+                "0:v:0?",
+                "-map",
+                "0:a:0?",
+                "-vf",
+                "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+                "-r",
+                "20",
+                "-c:v",
+                "libvpx",
+                "-deadline",
+                "realtime",
+                "-cpu-used",
+                "8",
+                "-b:v",
+                "1M",
+                "-c:a",
+                "libopus",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+            ])
+            .arg(&cached)
+            .output()
+            .context("Cannot prepare custom media: FFmpeg must be installed")?;
+        if !output.status.success() {
+            let _ = std::fs::remove_file(&cached);
+            bail!(
+                "Failed to prepare custom media: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(cached)
     }
 
     pub fn from_file(input: impl AsRef<Path>, cache_dir: impl AsRef<Path>) -> Result<Self> {
@@ -102,6 +142,24 @@ impl FakeMediaFiles {
             video_error,
         })
     }
+}
+
+fn resolve_input(input: FakeMediaFileOrUrl, cache_dir: &Path) -> Result<PathBuf> {
+    Ok(match input {
+        FakeMediaFileOrUrl::File(path) => path,
+        FakeMediaFileOrUrl::Url(url) => {
+            let name =
+                infer_filename_from_url(&url).unwrap_or_else(|| PathBuf::from("input.mp4" /* wild guess */));
+            let url_hash = string_hash(&url)?;
+            let cache_dir = cache_dir.join("download-cache").join(&url_hash);
+            let input = cache_dir.join(&name);
+            if !input.exists() {
+                std::fs::create_dir_all(&cache_dir)?;
+                download_file(&url, &input)?;
+            }
+            input
+        }
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

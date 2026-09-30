@@ -33,8 +33,15 @@ use crate::{
     },
 };
 pub use aws_sdk_devicefarm::types::TestGridSessionStatus;
+use base64::{
+    engine::general_purpose::STANDARD,
+    Engine as _,
+};
 use client_simulator_config::{
-    media::FakeMedia,
+    media::{
+        FakeMedia,
+        FakeMediaFiles,
+    },
     DeviceFarmConfig,
 };
 pub use control::{
@@ -222,20 +229,12 @@ impl DeviceFarmSession {
         ParticipantLogMessage::new(level, &self.launch_spec.username, message).write();
     }
 
-    fn log_backend_limitations(&self) {
-        if matches!(self.launch_options.fake_media, FakeMedia::FileOrUrl(_)) {
-            self.log_message(
-                "warn",
-                "Device Farm backend cannot use a local fake-media file/URL; using the synthetic fake device instead",
-            );
-        }
-    }
-
     fn build_capabilities(config: &DeviceFarmConfig, browser_logs: bool) -> Result<ChromeCapabilities> {
         let mut caps = DesiredCapabilities::chrome();
-        // Synthetic fake media only. Device Farm has no access to local fake-media files.
+        // Native fake devices provide permissions and any track absent from a custom clip.
         caps.add_arg("--use-fake-ui-for-media-stream")?;
         caps.add_arg("--use-fake-device-for-media-stream")?;
+        caps.add_arg("--autoplay-policy=no-user-gesture-required")?;
         caps.insert_base_capability(
             "aws:maxDurationSecs".to_string(),
             serde_json::json!(aws_duration_secs(
@@ -282,7 +281,21 @@ impl DeviceFarmSession {
         if self.automation.is_some() {
             bail!("Device Farm session already started");
         }
-        self.log_backend_limitations();
+        let capture_script = if let FakeMedia::FileOrUrl(source) = &self.launch_options.fake_media {
+            let source = source.clone();
+            self.log_message("info", format!("Preparing Device Farm media source {source}"));
+            // Prepare before allocating a billable remote browser.
+            tokio::task::spawn_blocking(move || {
+                let media = FakeMediaFiles::for_browser(source.parse()?, client_simulator_config::cache_dir())
+                    .wrap_err_with(|| format!("failed to load selected Device Farm media source {source}"))?;
+                let data = serde_json::to_string(&STANDARD.encode(std::fs::read(media)?))?;
+                Ok::<_, Report>(include_str!("camera_capture.js").replace("/*MEDIA_DATA*/null", &data))
+            })
+            .await
+            .context("Device Farm media preparation task failed")??
+        } else {
+            include_str!("camera_capture.js").to_owned()
+        };
 
         self.log_message(
             "info",
@@ -301,7 +314,7 @@ impl DeviceFarmSession {
         ChromeDevTools::new(driver.handle.clone())
             .execute_cdp_with_params(
                 "Page.addScriptToEvaluateOnNewDocument",
-                serde_json::json!({ "source": include_str!("camera_capture.js") }),
+                serde_json::json!({ "source": capture_script }),
             )
             .await
             .context("failed to install Device Farm 720p camera capture limit")?;
@@ -689,6 +702,25 @@ mod tests {
             ..DeviceFarmConfig::default()
         };
         DeviceFarmSession::build_capabilities(&config, false).unwrap()
+    }
+
+    #[tokio::test]
+    async fn invalid_custom_media_fails_before_creating_a_remote_session() {
+        let mut session = DeviceFarmSession::new(
+            launch_spec(),
+            DeviceFarmLaunchOptions {
+                headless: true,
+                browser_logs: false,
+                fake_media: FakeMedia::FileOrUrl("/definitely-missing-simulator-clip.mp4".to_owned()),
+            },
+            DeviceFarmConfig::default(),
+            None,
+            FirstPartyCredentialsManager::new(std::env::temp_dir().join("unused-media-test-credentials.json")),
+            Arc::new(UnusedTestGridApi),
+        );
+        let error = session.start_inner().await.unwrap_err();
+        assert!(format!("{error:?}").contains("Invalid input"));
+        assert!(session.webdriver.is_none());
     }
 
     #[tokio::test]

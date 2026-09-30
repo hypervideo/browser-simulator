@@ -16,6 +16,7 @@ use crate::media::{
 };
 use app_config::AppConfig;
 pub use app_config::{
+    cache_dir,
     get_config_dir,
     get_data_dir,
 };
