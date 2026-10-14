@@ -20,6 +20,8 @@ use std::time::{
     Instant,
 };
 
+const CLICK_ATTEMPTS: usize = 3;
+
 /// `BrowserDriver` implementation backed by a local chromiumoxide `Page` (CDP).
 pub(crate) struct ChromiumDriver {
     page: Page,
@@ -66,14 +68,36 @@ impl BrowserDriver for ChromiumDriver {
     fn click(&self, selector: &str) -> BoxFuture<'_, Result<()>> {
         let selector = selector.to_owned();
         async move {
-            self.page
+            let element = self
+                .page
                 .find_element(&selector)
                 .await
-                .with_context(|| format!("Could not find {selector}"))?
-                .click()
-                .await
-                .with_context(|| format!("Could not click {selector}"))?;
-            Ok(())
+                .with_context(|| format!("Could not find {selector}"))?;
+            // chromiumoxide reads the element position before it presses the mouse. When the
+            // layout shifts in between, the press hits another element, so press again.
+            for _ in 0..CLICK_ATTEMPTS {
+                element
+                    .call_js_fn(
+                        "function() { this.simulatorPressed = false; this.addEventListener('pointerdown', () => { this.simulatorPressed = true; }, { capture: true, once: true }); }",
+                        false,
+                    )
+                    .await
+                    .context("failed to watch for the mouse press")?;
+                element
+                    .click()
+                    .await
+                    .with_context(|| format!("Could not click {selector}"))?;
+                // A click that navigates destroys the page context. Only a readable `false` is a miss.
+                let pressed = element
+                    .call_js_fn("function() { return this.simulatorPressed; }", false)
+                    .await
+                    .ok()
+                    .and_then(|result| result.result.value);
+                if pressed != Some(serde_json::Value::Bool(false)) {
+                    return Ok(());
+                }
+            }
+            eyre::bail!("Could not click {selector}: the mouse press kept hitting another element")
         }
         .boxed()
     }
@@ -143,5 +167,51 @@ impl BrowserDriver for ChromiumDriver {
             Ok(())
         }
         .boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use client_simulator_config::{
+        BrowserConfig,
+        Config,
+    };
+    use futures::StreamExt as _;
+
+    // Requires Chromium/Chrome; the Nix devshell provides Chromium on Linux.
+    #[tokio::test]
+    async fn click_reaches_an_element_that_moves_before_the_mouse_press() {
+        let config = BrowserConfig {
+            app_config: Config {
+                headless: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (mut browser, mut handler) = super::super::session::create_browser(&config).await.unwrap();
+        let events = tokio::spawn(async move { while handler.next().await.is_some() {} });
+        let page = browser.new_page("about:blank").await.unwrap();
+        // Model the Hyper lobby: content appears above the join button after the
+        // driver has read the button position but before it presses the mouse.
+        page.set_content(
+            r#"<div id="spacer"></div>
+            <button onclick="window.clicks = (window.clicks ?? 0) + 1">Join</button>
+            <script>
+                document.addEventListener('mousemove', () => { spacer.style.height = '100px'; }, { once: true });
+            </script>"#,
+        )
+        .await
+        .unwrap();
+        let driver = ChromiumDriver::new(page);
+
+        let clicked = driver.click("button").await;
+        let clicks = driver.eval("return window.clicks ?? 0;", None).await;
+        browser.close().await.unwrap();
+        browser.wait().await.unwrap();
+        events.await.unwrap();
+
+        clicked.unwrap();
+        assert_eq!(clicks.unwrap(), serde_json::json!(1));
     }
 }

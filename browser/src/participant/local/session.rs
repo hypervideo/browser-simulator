@@ -577,7 +577,7 @@ fn browser_log_entry(participant: &str, event: &EventEntryAdded) -> BrowserLogEn
     )
 }
 
-async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Handler)> {
+pub(super) async fn create_browser(browser_config: &BrowserConfig) -> Result<(Browser, Handler)> {
     let binary = get_binary()?;
 
     let mut chrome_args = vec!["no-startup-window".to_string()];
