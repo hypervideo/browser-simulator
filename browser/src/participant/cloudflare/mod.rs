@@ -18,6 +18,7 @@ use crate::participant::shared::{
 use client_simulator_config::{
     media::FakeMedia,
     CloudflareConfig,
+    NoiseSuppression,
     TransportMode,
 };
 use cloudflare_worker_client::{
@@ -116,8 +117,12 @@ fn map_worker_browser_entry(participant_name: &str, entry: &types::BrowserLogEnt
     )
 }
 
-fn store_cached_state(cached_state: &Arc<Mutex<ParticipantState>>, state: &types::ParticipantState) {
-    *cached_state.lock().unwrap() = map_state(state);
+fn store_cached_state(
+    participant_name: &str,
+    cached_state: &Arc<Mutex<ParticipantState>>,
+    state: &types::ParticipantState,
+) {
+    *cached_state.lock().unwrap() = map_state(participant_name, state);
 }
 
 impl CloudflareSession {
@@ -224,6 +229,20 @@ impl CloudflareSession {
             settings.transport = TransportMode::WebRTC;
         }
 
+        match settings.noise_suppression {
+            NoiseSuppression::Disabled => {}
+            NoiseSuppression::HyperVoice => {
+                self.log_message(
+                    "warn",
+                    format!(
+                        "Cloudflare backend only supports noise suppression none; normalizing configured {} to none",
+                        settings.noise_suppression
+                    ),
+                );
+                settings.noise_suppression = NoiseSuppression::Disabled;
+            }
+        }
+
         settings
     }
 
@@ -245,8 +264,8 @@ impl CloudflareSession {
         })
     }
 
-    fn command_request(message: ParticipantMessage) -> types::SessionCommandRequest {
-        match message {
+    fn command_request(message: ParticipantMessage) -> Result<types::SessionCommandRequest> {
+        Ok(match message {
             ParticipantMessage::Join => types::SessionCommandRequest::Join,
             ParticipantMessage::Leave => types::SessionCommandRequest::Leave,
             ParticipantMessage::Close => types::SessionCommandRequest::Leave,
@@ -255,7 +274,7 @@ impl CloudflareSession {
             ParticipantMessage::ToggleScreenshare => types::SessionCommandRequest::ToggleScreenshare,
             ParticipantMessage::ToggleAutoGainControl => types::SessionCommandRequest::ToggleAutoGainControl,
             ParticipantMessage::SetNoiseSuppression(value) => types::SessionCommandRequest::SetNoiseSuppression {
-                noise_suppression: map_command_noise_suppression(value),
+                noise_suppression: map_command_noise_suppression(value)?,
             },
             ParticipantMessage::SetVideoConstraintPublishWebcam(value) => {
                 types::SessionCommandRequest::SetVideoConstraintPublishWebcam {
@@ -273,7 +292,7 @@ impl CloudflareSession {
                 }
             }
             ParticipantMessage::ToggleBackgroundBlur => types::SessionCommandRequest::ToggleBackgroundBlur,
-        }
+        })
     }
 
     fn cached_state(&self) -> ParticipantState {
@@ -281,7 +300,7 @@ impl CloudflareSession {
     }
 
     fn update_cached_state(&self, state: &types::ParticipantState) {
-        store_cached_state(&self.cached_state, state);
+        store_cached_state(&self.launch_spec.username, &self.cached_state, state);
     }
 
     fn effective_health_poll_interval(&self) -> Duration {
@@ -334,7 +353,7 @@ impl CloudflareSession {
                                 forward_worker_entries(&participant_name, &response.log);
                                 forward_worker_browser_entries(&participant_name, &response.browser_log);
 
-                                store_cached_state(&cached_state, &response.state);
+                                store_cached_state(&participant_name, &cached_state, &response.state);
 
                                 if !response.state.running {
                                     let _ = termination_tx.send(Some(DriverTermination::new(
@@ -434,7 +453,7 @@ impl CloudflareSession {
             .session_id
             .clone()
             .ok_or_else(|| eyre!("Cloudflare session is not started"))?;
-        let request = Self::command_request(message);
+        let request = Self::command_request(message)?;
         let response = self.worker_client()?.command_session(&session_id, &request).await?;
         self.log_worker_entries(&response.log);
         self.log_worker_browser_entries(&response.browser_log);
@@ -488,56 +507,17 @@ fn map_frontend_kind(frontend_kind: ResolvedFrontendKind) -> types::SessionCreat
     }
 }
 
+/// Maps the settings that [`CloudflareSession::normalized_settings`] returns onto the worker's.
+///
+/// The worker's schema lacks `hyper-voice`, which `normalized_settings` replaces with `none`, so it maps to `none`.
 fn map_settings(settings: &crate::participant::shared::ParticipantSettings) -> types::ParticipantSettings {
     types::ParticipantSettings {
         audio_enabled: settings.audio_enabled,
         auto_gain_control: settings.auto_gain_control,
         blur: settings.blur,
         noise_suppression: match settings.noise_suppression {
-            client_simulator_config::NoiseSuppression::Disabled => types::ParticipantSettingsNoiseSuppression::None,
-            client_simulator_config::NoiseSuppression::Deepfilternet => {
-                types::ParticipantSettingsNoiseSuppression::Deepfilternet
-            }
-            client_simulator_config::NoiseSuppression::RNNoise => types::ParticipantSettingsNoiseSuppression::Rnnoise,
-            client_simulator_config::NoiseSuppression::IRISCarthy => {
-                types::ParticipantSettingsNoiseSuppression::IrisCarthy
-            }
-            client_simulator_config::NoiseSuppression::KrispHigh => {
-                types::ParticipantSettingsNoiseSuppression::KrispHigh
-            }
-            client_simulator_config::NoiseSuppression::KrispMedium => {
-                types::ParticipantSettingsNoiseSuppression::KrispMedium
-            }
-            client_simulator_config::NoiseSuppression::KrispLow => types::ParticipantSettingsNoiseSuppression::KrispLow,
-            client_simulator_config::NoiseSuppression::KrispHighWithBVC => {
-                types::ParticipantSettingsNoiseSuppression::KrispHighWithBvc
-            }
-            client_simulator_config::NoiseSuppression::KrispMediumWithBVC => {
-                types::ParticipantSettingsNoiseSuppression::KrispMediumWithBvc
-            }
-            client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs => {
-                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowXxs
-            }
-            client_simulator_config::NoiseSuppression::AiCousticsSparrowXs => {
-                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowXs
-            }
-            client_simulator_config::NoiseSuppression::AiCousticsSparrowS => {
-                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowS
-            }
-            client_simulator_config::NoiseSuppression::AiCousticsSparrowL => {
-                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowL
-            }
-            client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs48khz => {
-                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowXxs48khz
-            }
-            client_simulator_config::NoiseSuppression::AiCousticsSparrowXs48khz => {
-                types::ParticipantSettingsNoiseSuppression::AiCousticsSparrowXs48khz
-            }
-            client_simulator_config::NoiseSuppression::AiCousticsRookS48khz => {
-                types::ParticipantSettingsNoiseSuppression::AiCousticsRookS48khz
-            }
-            client_simulator_config::NoiseSuppression::AiCousticsRookL48khz => {
-                types::ParticipantSettingsNoiseSuppression::AiCousticsRookL48khz
+            NoiseSuppression::Disabled | NoiseSuppression::HyperVoice => {
+                types::ParticipantSettingsNoiseSuppression::None
             }
         },
         screenshare_enabled: settings.screenshare_enabled,
@@ -552,7 +532,7 @@ fn map_settings(settings: &crate::participant::shared::ParticipantSettings) -> t
     }
 }
 
-fn map_state(state: &types::ParticipantState) -> ParticipantState {
+fn map_state(participant_name: &str, state: &types::ParticipantState) -> ParticipantState {
     ParticipantState {
         username: String::new(),
         running: state.running,
@@ -561,51 +541,7 @@ fn map_state(state: &types::ParticipantState) -> ParticipantState {
         muted: state.muted,
         video_activated: state.video_activated,
         auto_gain_control: state.auto_gain_control,
-        noise_suppression: match state.noise_suppression {
-            types::ParticipantStateNoiseSuppression::None => client_simulator_config::NoiseSuppression::Disabled,
-            types::ParticipantStateNoiseSuppression::Deepfilternet => {
-                client_simulator_config::NoiseSuppression::Deepfilternet
-            }
-            types::ParticipantStateNoiseSuppression::Rnnoise => client_simulator_config::NoiseSuppression::RNNoise,
-            types::ParticipantStateNoiseSuppression::IrisCarthy => {
-                client_simulator_config::NoiseSuppression::IRISCarthy
-            }
-            types::ParticipantStateNoiseSuppression::KrispHigh => client_simulator_config::NoiseSuppression::KrispHigh,
-            types::ParticipantStateNoiseSuppression::KrispMedium => {
-                client_simulator_config::NoiseSuppression::KrispMedium
-            }
-            types::ParticipantStateNoiseSuppression::KrispLow => client_simulator_config::NoiseSuppression::KrispLow,
-            types::ParticipantStateNoiseSuppression::KrispHighWithBvc => {
-                client_simulator_config::NoiseSuppression::KrispHighWithBVC
-            }
-            types::ParticipantStateNoiseSuppression::KrispMediumWithBvc => {
-                client_simulator_config::NoiseSuppression::KrispMediumWithBVC
-            }
-            types::ParticipantStateNoiseSuppression::AiCousticsSparrowXxs => {
-                client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs
-            }
-            types::ParticipantStateNoiseSuppression::AiCousticsSparrowXs => {
-                client_simulator_config::NoiseSuppression::AiCousticsSparrowXs
-            }
-            types::ParticipantStateNoiseSuppression::AiCousticsSparrowS => {
-                client_simulator_config::NoiseSuppression::AiCousticsSparrowS
-            }
-            types::ParticipantStateNoiseSuppression::AiCousticsSparrowL => {
-                client_simulator_config::NoiseSuppression::AiCousticsSparrowL
-            }
-            types::ParticipantStateNoiseSuppression::AiCousticsSparrowXxs48khz => {
-                client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs48khz
-            }
-            types::ParticipantStateNoiseSuppression::AiCousticsSparrowXs48khz => {
-                client_simulator_config::NoiseSuppression::AiCousticsSparrowXs48khz
-            }
-            types::ParticipantStateNoiseSuppression::AiCousticsRookS48khz => {
-                client_simulator_config::NoiseSuppression::AiCousticsRookS48khz
-            }
-            types::ParticipantStateNoiseSuppression::AiCousticsRookL48khz => {
-                client_simulator_config::NoiseSuppression::AiCousticsRookL48khz
-            }
-        },
+        noise_suppression: map_state_noise_suppression(participant_name, state.noise_suppression),
         transport_mode: match state.transport_mode {
             types::ParticipantStateTransportMode::Webrtc => client_simulator_config::TransportMode::WebRTC,
             types::ParticipantStateTransportMode::Webtransport => client_simulator_config::TransportMode::WebTransport,
@@ -620,52 +556,55 @@ fn map_state(state: &types::ParticipantState) -> ParticipantState {
     }
 }
 
-fn map_command_noise_suppression(
-    noise_suppression: client_simulator_config::NoiseSuppression,
-) -> types::SessionCommandRequestNoiseSuppression {
-    match noise_suppression {
-        client_simulator_config::NoiseSuppression::Disabled => types::SessionCommandRequestNoiseSuppression::None,
-        client_simulator_config::NoiseSuppression::Deepfilternet => {
-            types::SessionCommandRequestNoiseSuppression::Deepfilternet
-        }
-        client_simulator_config::NoiseSuppression::RNNoise => types::SessionCommandRequestNoiseSuppression::Rnnoise,
-        client_simulator_config::NoiseSuppression::IRISCarthy => {
-            types::SessionCommandRequestNoiseSuppression::IrisCarthy
-        }
-        client_simulator_config::NoiseSuppression::KrispHigh => types::SessionCommandRequestNoiseSuppression::KrispHigh,
-        client_simulator_config::NoiseSuppression::KrispMedium => {
-            types::SessionCommandRequestNoiseSuppression::KrispMedium
-        }
-        client_simulator_config::NoiseSuppression::KrispLow => types::SessionCommandRequestNoiseSuppression::KrispLow,
-        client_simulator_config::NoiseSuppression::KrispHighWithBVC => {
-            types::SessionCommandRequestNoiseSuppression::KrispHighWithBvc
-        }
-        client_simulator_config::NoiseSuppression::KrispMediumWithBVC => {
-            types::SessionCommandRequestNoiseSuppression::KrispMediumWithBvc
-        }
-        client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs => {
-            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowXxs
-        }
-        client_simulator_config::NoiseSuppression::AiCousticsSparrowXs => {
-            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowXs
-        }
-        client_simulator_config::NoiseSuppression::AiCousticsSparrowS => {
-            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowS
-        }
-        client_simulator_config::NoiseSuppression::AiCousticsSparrowL => {
-            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowL
-        }
-        client_simulator_config::NoiseSuppression::AiCousticsSparrowXxs48khz => {
-            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowXxs48khz
-        }
-        client_simulator_config::NoiseSuppression::AiCousticsSparrowXs48khz => {
-            types::SessionCommandRequestNoiseSuppression::AiCousticsSparrowXs48khz
-        }
-        client_simulator_config::NoiseSuppression::AiCousticsRookS48khz => {
-            types::SessionCommandRequestNoiseSuppression::AiCousticsRookS48khz
-        }
-        client_simulator_config::NoiseSuppression::AiCousticsRookL48khz => {
-            types::SessionCommandRequestNoiseSuppression::AiCousticsRookL48khz
+/// Maps a runtime noise suppression change onto the worker's, refusing a value that the worker can't select.
+///
+/// The worker's schema takes `none` and 16 engines that hyper.video no longer offers, but not `hyper-voice`, so
+/// Cloudflare participants run without noise suppression until the worker takes `hyper-voice`.
+fn map_command_noise_suppression(value: NoiseSuppression) -> Result<types::SessionCommandRequestNoiseSuppression> {
+    match value {
+        NoiseSuppression::Disabled => Ok(types::SessionCommandRequestNoiseSuppression::None),
+        NoiseSuppression::HyperVoice => Err(eyre!(
+            "Cloudflare backend only supports noise suppression none, not {value}"
+        )),
+    }
+}
+
+/// Maps the worker's reported noise suppression, reporting `none`, with a warning, for an engine that hyper.video no
+/// longer offers.
+///
+/// The backend only requests `none` (see [`map_command_noise_suppression`]), so the worker reports such an engine only
+/// if the page runs one that the simulator did not select.
+fn map_state_noise_suppression(
+    participant_name: &str,
+    value: types::ParticipantStateNoiseSuppression,
+) -> NoiseSuppression {
+    match value {
+        types::ParticipantStateNoiseSuppression::None => NoiseSuppression::Disabled,
+        types::ParticipantStateNoiseSuppression::Deepfilternet
+        | types::ParticipantStateNoiseSuppression::Rnnoise
+        | types::ParticipantStateNoiseSuppression::IrisCarthy
+        | types::ParticipantStateNoiseSuppression::KrispHigh
+        | types::ParticipantStateNoiseSuppression::KrispMedium
+        | types::ParticipantStateNoiseSuppression::KrispLow
+        | types::ParticipantStateNoiseSuppression::KrispHighWithBvc
+        | types::ParticipantStateNoiseSuppression::KrispMediumWithBvc
+        | types::ParticipantStateNoiseSuppression::AiCousticsSparrowXxs
+        | types::ParticipantStateNoiseSuppression::AiCousticsSparrowXs
+        | types::ParticipantStateNoiseSuppression::AiCousticsSparrowS
+        | types::ParticipantStateNoiseSuppression::AiCousticsSparrowL
+        | types::ParticipantStateNoiseSuppression::AiCousticsSparrowXxs48khz
+        | types::ParticipantStateNoiseSuppression::AiCousticsSparrowXs48khz
+        | types::ParticipantStateNoiseSuppression::AiCousticsRookS48khz
+        | types::ParticipantStateNoiseSuppression::AiCousticsRookL48khz => {
+            emit_log_message(
+                participant_name,
+                "warn",
+                format!(
+                    "Cloudflare worker reports noise suppression {value}, which hyper.video no longer offers; reporting {}",
+                    NoiseSuppression::Disabled
+                ),
+            );
+            NoiseSuppression::Disabled
         }
     }
 }
@@ -934,7 +873,7 @@ mod tests {
                         "videoActivated": true,
                         "screenshareActivated": false,
                         "autoGainControl": true,
-                        "noiseSuppression": "rnnoise",
+                        "noiseSuppression": "none",
                         "transportMode": "webrtc",
                         "videoConstraintPublishWebcam": "720p",
                         "videoConstraintSubscribe": "none",
@@ -983,7 +922,7 @@ mod tests {
         let state = session.refresh_state().await.unwrap();
         assert!(state.running);
         assert!(state.joined);
-        assert_eq!(state.noise_suppression, NoiseSuppression::RNNoise);
+        assert_eq!(state.noise_suppression, NoiseSuppression::Disabled);
         assert_eq!(state.transport_mode, TransportMode::WebRTC);
         assert_eq!(state.video_constraint_publish_webcam, VideoConstraint::P720);
         assert_eq!(state.video_constraint_subscribe, VideoConstraint::None);
@@ -1014,7 +953,7 @@ mod tests {
                     "audioEnabled": true,
                     "autoGainControl": true,
                     "blur": true,
-                    "noiseSuppression": "rnnoise",
+                    "noiseSuppression": "none",
                     "screenshareEnabled": false,
                     "transport": "webrtc",
                     "videoConstraintPublishWebcam": "720p",
@@ -1029,14 +968,16 @@ mod tests {
         assert_eq!(requests[1].path, "/sessions/cf-session-123/close");
     }
 
+    /// The backend reports `none`, with a warning, when the worker reports an engine that hyper.video no longer offers.
     #[tokio::test]
-    async fn start_accepts_ai_coustics_noise_suppression_from_worker_state() {
+    async fn start_reports_none_for_old_worker_engine() {
+        let captured_logs = CapturedLogs::new();
         let responses = VecDeque::from(vec![
             MockResponse::json(
                 200,
                 json!({
                     "ok": true,
-                    "sessionId": "cf-session-ai-coustics",
+                    "sessionId": "cf-session-old-engine",
                     "state": {
                         "running": true,
                         "joined": true,
@@ -1058,7 +999,7 @@ mod tests {
                 200,
                 json!({
                     "ok": true,
-                    "sessionId": "cf-session-ai-coustics",
+                    "sessionId": "cf-session-old-engine",
                     "log": [],
                 }),
             ),
@@ -1082,7 +1023,10 @@ mod tests {
 
         let state = session.refresh_state().await.unwrap();
         assert!(state.auto_gain_control);
-        assert_eq!(state.noise_suppression, NoiseSuppression::AiCousticsRookS48khz);
+        assert_eq!(state.noise_suppression, NoiseSuppression::Disabled);
+        assert!(captured_logs.output().contains(
+            "reports noise suppression ai-coustics-rook-s-48khz, which hyper.video no longer offers; reporting none"
+        ));
 
         session.close().await.unwrap();
         server.abort();
@@ -1269,7 +1213,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "none", false),
+                    "state": worker_state_json(true, true, true, true, false, "none", "none", false),
                     "log": [],
                 }),
             ),
@@ -1278,7 +1222,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "1080p", false),
+                    "state": worker_state_json(true, true, true, true, false, "none", "1080p", false),
                     "log": [],
                 }),
             ),
@@ -1287,7 +1231,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(true, true, true, true, false, "deepfilternet", "1080p", true),
+                    "state": worker_state_json(true, true, true, true, false, "none", "1080p", true),
                     "log": [],
                 }),
             ),
@@ -1296,7 +1240,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-commands",
-                    "state": worker_state_json(false, true, true, false, false, "deepfilternet", "1080p", true),
+                    "state": worker_state_json(false, true, true, false, false, "none", "1080p", true),
                     "log": [],
                 }),
             ),
@@ -1398,15 +1342,15 @@ mod tests {
                 ),
             ),
             (
-                ParticipantMessage::SetNoiseSuppression(NoiseSuppression::Deepfilternet),
-                json!({ "type": "set-noise-suppression", "noiseSuppression": "deepfilternet" }),
+                ParticipantMessage::SetNoiseSuppression(NoiseSuppression::Disabled),
+                json!({ "type": "set-noise-suppression", "noiseSuppression": "none" }),
                 expected_state(
                     true,
                     true,
                     true,
                     true,
                     false,
-                    NoiseSuppression::Deepfilternet,
+                    NoiseSuppression::Disabled,
                     VideoConstraint::None,
                     false,
                 ),
@@ -1420,7 +1364,7 @@ mod tests {
                     true,
                     true,
                     false,
-                    NoiseSuppression::Deepfilternet,
+                    NoiseSuppression::Disabled,
                     VideoConstraint::P1080,
                     false,
                 ),
@@ -1434,7 +1378,7 @@ mod tests {
                     true,
                     true,
                     false,
-                    NoiseSuppression::Deepfilternet,
+                    NoiseSuppression::Disabled,
                     VideoConstraint::P1080,
                     true,
                 ),
@@ -1448,7 +1392,7 @@ mod tests {
                     true,
                     false,
                     false,
-                    NoiseSuppression::Deepfilternet,
+                    NoiseSuppression::Disabled,
                     VideoConstraint::P1080,
                     true,
                 ),
@@ -1490,7 +1434,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-webrtc",
-                    "state": worker_state_json(false, false, false, false, true, "rnnoise", "720p", true),
+                    "state": worker_state_json(false, false, false, false, true, "none", "720p", true),
                     "log": [],
                 }),
             ),
@@ -1542,6 +1486,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_normalizes_noise_suppression_to_none_for_cloudflare() {
+        let captured_logs = CapturedLogs::new();
+        let responses = VecDeque::from(vec![
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-noise-suppression",
+                    "state": worker_state_json(false, false, false, false, true, "none", "720p", true),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-noise-suppression",
+                    "log": [],
+                }),
+            ),
+        ]);
+        let (base_url, requests, server) = spawn_http_server(responses).await;
+        let mut spec = launch_spec(ResolvedFrontendKind::HyperCore, &format!("{base_url}/room/demo"));
+        spec.settings.noise_suppression = NoiseSuppression::HyperVoice;
+        let mut session = CloudflareSession::new_for_test(
+            spec,
+            launch_options(false, FakeMedia::None),
+            CloudflareConfig {
+                base_url: Url::parse(&base_url).unwrap(),
+                request_timeout_seconds: 5,
+                session_timeout_ms: 120_000,
+                navigation_timeout_ms: 30_000,
+                selector_timeout_ms: 10_000,
+                debug: false,
+                health_poll_interval_ms: 60_000,
+            },
+        );
+
+        session.start().await.unwrap();
+
+        let state = session.refresh_state().await.unwrap();
+        assert_eq!(state.noise_suppression, NoiseSuppression::Disabled);
+
+        session.close().await.unwrap();
+        server.abort();
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests[0].path, "/sessions");
+        assert_eq!(
+            serde_json::from_str::<Value>(&requests[0].body).unwrap()["settings"]["noiseSuppression"],
+            json!("none")
+        );
+
+        let logs = captured_logs.output();
+        assert!(logs.contains("only supports noise suppression none; normalizing configured hyper-voice to none"));
+    }
+
+    #[tokio::test]
+    async fn set_noise_suppression_refuses_engines_for_cloudflare() {
+        let responses = VecDeque::from(vec![
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-set-noise-suppression",
+                    "state": worker_state_json(true, false, false, false, true, "none", "720p", true),
+                    "log": [],
+                }),
+            ),
+            MockResponse::json(
+                200,
+                json!({
+                    "ok": true,
+                    "sessionId": "cf-session-set-noise-suppression",
+                    "log": [],
+                }),
+            ),
+        ]);
+        let (base_url, requests, server) = spawn_http_server(responses).await;
+        let mut session = CloudflareSession::new_for_test(
+            launch_spec(ResolvedFrontendKind::HyperCore, &format!("{base_url}/room/demo")),
+            launch_options(false, FakeMedia::None),
+            CloudflareConfig {
+                base_url: Url::parse(&base_url).unwrap(),
+                request_timeout_seconds: 5,
+                session_timeout_ms: 120_000,
+                navigation_timeout_ms: 30_000,
+                selector_timeout_ms: 10_000,
+                debug: false,
+                health_poll_interval_ms: 60_000,
+            },
+        );
+
+        session.start().await.unwrap();
+
+        let error = session
+            .handle_command(ParticipantMessage::SetNoiseSuppression(NoiseSuppression::HyperVoice))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Cloudflare backend only supports noise suppression none, not hyper-voice"
+        );
+
+        session.close().await.unwrap();
+        server.abort();
+
+        // Only the create and close requests reach the worker.
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].path, "/sessions");
+        assert_eq!(requests[1].path, "/sessions/cf-session-set-noise-suppression/close");
+    }
+
+    #[tokio::test]
     async fn start_logs_ignored_headless_and_fake_media_settings_for_cloudflare() {
         let captured_logs = CapturedLogs::new();
         let responses = VecDeque::from(vec![
@@ -1550,7 +1609,7 @@ mod tests {
                 json!({
                     "ok": true,
                     "sessionId": "cf-session-limitations",
-                    "state": worker_state_json(false, false, false, false, true, "rnnoise", "720p", true),
+                    "state": worker_state_json(false, false, false, false, true, "none", "720p", true),
                     "log": [],
                 }),
             ),
@@ -1664,7 +1723,7 @@ mod tests {
                 video_enabled: true,
                 screenshare_enabled: false,
                 auto_gain_control: true,
-                noise_suppression: NoiseSuppression::RNNoise,
+                noise_suppression: NoiseSuppression::Disabled,
                 transport: TransportMode::WebRTC,
                 video_constraint_publish_webcam: VideoConstraint::P720,
                 video_constraint_subscribe: VideoConstraint::None,

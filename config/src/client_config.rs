@@ -92,60 +92,16 @@ impl VideoMaxConcurrentTracksPreset {
     }
 }
 
+/// A value of hyper.video's noise suppression setting.
 #[derive(Debug, Default, Clone, Copy, Display, EnumIter, EnumString, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub enum NoiseSuppression {
     #[default]
     #[strum(to_string = "none")]
     #[serde(rename = "none")]
     Disabled,
-    #[strum(to_string = "deepfilternet")]
-    #[serde(rename = "deepfilternet")]
-    Deepfilternet,
-    #[strum(to_string = "rnnoise")]
-    #[serde(rename = "rnnoise")]
-    RNNoise,
-    #[strum(to_string = "iris-carthy")]
-    #[serde(rename = "iris-carthy")]
-    IRISCarthy,
-    #[strum(to_string = "krisp-high")]
-    #[serde(rename = "krisp-high")]
-    KrispHigh,
-    #[strum(to_string = "krisp-medium")]
-    #[serde(rename = "krisp-medium")]
-    KrispMedium,
-    #[strum(to_string = "krisp-low")]
-    #[serde(rename = "krisp-low")]
-    KrispLow,
-    #[strum(to_string = "krisp-high-with-bvc")]
-    #[serde(rename = "krisp-high-with-bvc")]
-    KrispHighWithBVC,
-    #[strum(to_string = "krisp-medium-with-bvc")]
-    #[serde(rename = "krisp-medium-with-bvc")]
-    KrispMediumWithBVC,
-    #[strum(to_string = "ai-coustics-sparrow-xxs")]
-    #[serde(rename = "ai-coustics-sparrow-xxs")]
-    AiCousticsSparrowXxs,
-    #[strum(to_string = "ai-coustics-sparrow-xs")]
-    #[serde(rename = "ai-coustics-sparrow-xs")]
-    AiCousticsSparrowXs,
-    #[strum(to_string = "ai-coustics-sparrow-s")]
-    #[serde(rename = "ai-coustics-sparrow-s")]
-    AiCousticsSparrowS,
-    #[strum(to_string = "ai-coustics-sparrow-l")]
-    #[serde(rename = "ai-coustics-sparrow-l")]
-    AiCousticsSparrowL,
-    #[strum(to_string = "ai-coustics-sparrow-xxs-48khz")]
-    #[serde(rename = "ai-coustics-sparrow-xxs-48khz")]
-    AiCousticsSparrowXxs48khz,
-    #[strum(to_string = "ai-coustics-sparrow-xs-48khz")]
-    #[serde(rename = "ai-coustics-sparrow-xs-48khz")]
-    AiCousticsSparrowXs48khz,
-    #[strum(to_string = "ai-coustics-rook-s-48khz")]
-    #[serde(rename = "ai-coustics-rook-s-48khz")]
-    AiCousticsRookS48khz,
-    #[strum(to_string = "ai-coustics-rook-l-48khz")]
-    #[serde(rename = "ai-coustics-rook-l-48khz")]
-    AiCousticsRookL48khz,
+    #[strum(to_string = "hyper-voice")]
+    #[serde(rename = "hyper-voice")]
+    HyperVoice,
 }
 
 #[derive(Debug, Default, Clone, Copy, Display, EnumIter, EnumString, Serialize, Deserialize, PartialEq, Eq)]
@@ -168,6 +124,7 @@ impl ParticipantBackendKind {
 #[cfg(test)]
 mod tests {
     use super::{
+        NoiseSuppression,
         ParticipantBackendKind,
         VideoConstraint,
         VideoMaxConcurrentTracksPreset,
@@ -194,6 +151,24 @@ mod tests {
             assert_eq!(expected.to_string(), raw);
             assert_eq!(serde_json::to_value(expected).unwrap(), raw);
             assert_eq!(serde_json::from_value::<VideoConstraint>(raw.into()).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn noise_suppression_round_trips_hyper_media_setting_names() {
+        let values = [
+            ("none", NoiseSuppression::Disabled),
+            ("hyper-voice", NoiseSuppression::HyperVoice),
+        ];
+
+        for (raw, expected) in values {
+            assert_eq!(NoiseSuppression::from_str(raw).unwrap(), expected);
+            assert_eq!(expected.to_string(), raw);
+            assert_eq!(serde_json::to_value(expected).unwrap(), raw);
+            assert_eq!(
+                serde_json::from_value::<NoiseSuppression>(raw.into()).unwrap(),
+                expected
+            );
         }
     }
 

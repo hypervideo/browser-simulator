@@ -35,6 +35,10 @@ pub use client_config::{
 };
 pub use cloudflare_config::CloudflareConfig;
 use color_eyre::Result;
+use config::{
+    builder::DefaultState,
+    ConfigBuilder,
+};
 pub use device_farm_config::{
     default_device_farm_project_arn,
     default_device_farm_region,
@@ -59,6 +63,7 @@ use serde::{
 use std::{
     collections::HashMap,
     path::Path,
+    str::FromStr as _,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -238,20 +243,40 @@ impl Config {
 
         builder = builder.add_source(Config::default());
 
-        let config_files = [("config.yaml", config::FileFormat::Yaml)];
-
-        for (file, format) in &config_files {
-            let source = config::File::from(config_dir.join(file))
-                .format(*format)
-                .required(false);
-            builder = builder.add_source(source);
-        }
+        let config_file = config_dir.join("config.yaml");
+        builder = builder.add_source(
+            config::File::from(config_file.as_path())
+                .format(config::FileFormat::Yaml)
+                .required(false),
+        );
 
         builder = builder.add_source(args);
 
-        let cfg: Self = builder.build()?.try_deserialize()?;
+        Self::from_builder(builder, &config_file)
+    }
 
-        Ok(cfg)
+    /// Builds the configuration from `builder`, reading a noise suppression that hyper.video doesn't take as `none`.
+    ///
+    /// [`Config::save`] writes the noise suppression, so `config_file` can name an engine that an older simulator
+    /// offered. hyper.video drops stored values that it doesn't take, and the simulator does the same, with a warning,
+    /// so that every subcommand still starts. The CLI and `--participant` JSON reject an unknown value instead, because
+    /// there it is a typo.
+    fn from_builder(builder: ConfigBuilder<DefaultState>, config_file: &Path) -> Result<Self, config::ConfigError> {
+        let config = builder.build_cloned()?;
+        match config.get_string("noise_suppression") {
+            Ok(value) if NoiseSuppression::from_str(&value).is_err() => {
+                let fallback = NoiseSuppression::Disabled;
+                warn!(
+                    "{} names noise suppression {value}, which hyper.video doesn't take; using {fallback}",
+                    config_file.display()
+                );
+                builder
+                    .set_override("noise_suppression", fallback.to_string())?
+                    .build()?
+                    .try_deserialize()
+            }
+            _ => config.try_deserialize(),
+        }
     }
 
     pub fn fake_media_with_description(&self) -> FakeMediaWithDescription {
@@ -370,6 +395,28 @@ remote_url_options:
             Some(url::Url::parse("https://example.com/space/demo").expect("valid url"))
         );
         assert_eq!(config.backend, ParticipantBackendKind::Local);
+    }
+
+    /// A config file's noise suppression loads as `none` when it names an engine that hyper.video no longer offers.
+    #[test]
+    fn config_file_noise_suppression_loads_old_engine_as_none() {
+        let values = [
+            ("krisp-high", NoiseSuppression::Disabled),
+            ("hyper-voice", NoiseSuppression::HyperVoice),
+        ];
+
+        for (raw, expected) in values {
+            let builder = config::Config::builder()
+                .add_source(Config::default())
+                .add_source(config::File::from_str(
+                    &format!("noise_suppression: {raw}"),
+                    config::FileFormat::Yaml,
+                ));
+
+            let config = Config::from_builder(builder, Path::new("config.yaml")).expect("config should load");
+
+            assert_eq!(config.noise_suppression, expected, "{raw}");
+        }
     }
 
     #[test]

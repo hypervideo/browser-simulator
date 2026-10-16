@@ -107,7 +107,7 @@ mod tests {
                 video_enabled: false,
                 screenshare_enabled: true,
                 auto_gain_control: true,
-                noise_suppression: NoiseSuppression::RNNoise,
+                noise_suppression: NoiseSuppression::HyperVoice,
                 transport: TransportMode::WebRTC,
                 video_constraint_publish_webcam: VideoConstraint::P480,
                 video_constraint_subscribe: VideoConstraint::P720,
@@ -126,7 +126,7 @@ mod tests {
         assert!(!spec.settings.video_enabled);
         assert!(spec.settings.screenshare_enabled);
         assert!(spec.settings.auto_gain_control);
-        assert_eq!(spec.settings.noise_suppression, NoiseSuppression::RNNoise);
+        assert_eq!(spec.settings.noise_suppression, NoiseSuppression::HyperVoice);
         assert_eq!(spec.settings.transport, TransportMode::WebRTC);
         assert_eq!(spec.settings.video_constraint_publish_webcam, VideoConstraint::P480);
         assert_eq!(spec.settings.video_constraint_subscribe, VideoConstraint::P720);
