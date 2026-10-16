@@ -43,7 +43,7 @@ The current command set is:
 | `ToggleAudio`                            | Toggle microphone mute state.                                                      | [`browser/src/participant/mod.rs`](../browser/src/participant/mod.rs) `:242-244`, [`tui/src/tui/components/participants.rs`](../tui/src/tui/components/participants.rs) `:264-270`             |
 | `ToggleVideo`                            | Toggle camera on/off.                                                              | [`browser/src/participant/mod.rs`](../browser/src/participant/mod.rs) `:246-248`, [`tui/src/tui/components/participants.rs`](../tui/src/tui/components/participants.rs) `:272-277`             |
 | `ToggleScreenshare`                      | Toggle screen sharing on/off.                                                      | [`browser/src/participant/mod.rs`](../browser/src/participant/mod.rs) `:250-256`, [`tui/src/tui/components/participants.rs`](../tui/src/tui/components/participants.rs) `:279-284`             |
-| `SetNoiseSuppression(NoiseSuppression)`  | Set the noise suppression model.                                                   | [`browser/src/participant/mod.rs`](../browser/src/participant/mod.rs) `:258-260`, [`tui/src/tui/components/participants.rs`](../tui/src/tui/components/participants.rs) `:160-166`, `:187-195` |
+| `SetNoiseSuppression(NoiseSuppression)`  | Set the noise suppression model: `none`, `hyper-voice` or `dpdfnet2`.              | [`browser/src/participant/mod.rs`](../browser/src/participant/mod.rs) `:258-260`, [`tui/src/tui/components/participants.rs`](../tui/src/tui/components/participants.rs) `:160-166`, `:187-195` |
 | `SetWebcamResolutions(WebcamResolution)` | Set outgoing camera resolution. The enum variant name is pluralized in code today. | [`browser/src/participant/mod.rs`](../browser/src/participant/mod.rs) `:262-268`, [`tui/src/tui/components/participants.rs`](../tui/src/tui/components/participants.rs) `:170-176`, `:209-217` |
 | `ToggleBackgroundBlur`                   | Toggle background blur.                                                            | [`browser/src/participant/mod.rs`](../browser/src/participant/mod.rs) `:270-272`, [`tui/src/tui/components/participants.rs`](../tui/src/tui/components/participants.rs) `:294-299`             |
 
@@ -93,6 +93,7 @@ For parity with the current local backend, `start()` should apply those launch s
 
 - Hyper Core applies noise suppression, blur, camera resolution, and transport before join, then applies audio/video in the lobby, and applies initial screenshare after joining. See [`browser/src/participant/local/core.rs`](../browser/src/participant/local/core.rs) `:143-171`.
 - Hyper Lite currently only applies audio/video/screenshare and ignores advanced media settings. See [`browser/src/participant/local/lite.rs`](../browser/src/participant/local/lite.rs) `:90-106`, `:153-175`.
+- The Cloudflare backend applies noise suppression `none` only, because the worker accepts no other value of hyper.video's setting. It sends `none` in place of `hyper-voice` or `dpdfnet2`, with a warning, and refuses `SetNoiseSuppression` with them. See [`browser/src/participant/cloudflare/mod.rs`](../browser/src/participant/cloudflare/mod.rs).
 
 There is currently no runtime command for:
 
