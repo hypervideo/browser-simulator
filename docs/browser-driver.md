@@ -93,7 +93,6 @@ For parity with the current local backend, `start()` should apply those launch s
 
 - Hyper Core applies noise suppression, blur, camera resolution, and transport before join, then applies audio/video in the lobby, and applies initial screenshare after joining. See [`browser/src/participant/local/core.rs`](../browser/src/participant/local/core.rs) `:143-171`.
 - Hyper Lite currently only applies audio/video/screenshare and ignores advanced media settings. See [`browser/src/participant/local/lite.rs`](../browser/src/participant/local/lite.rs) `:90-106`, `:153-175`.
-- The Cloudflare backend applies noise suppression `none` only, because the worker accepts no other value of hyper.video's setting. It sends `none` in place of `hyper-voice`, with a warning, and refuses `SetNoiseSuppression` with it. See [`browser/src/participant/cloudflare/mod.rs`](../browser/src/participant/cloudflare/mod.rs).
 
 There is currently no runtime command for:
 

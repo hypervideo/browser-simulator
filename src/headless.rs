@@ -55,7 +55,7 @@ pub struct HeadlessArgs {
     #[clap(long = "auto-gain-control", value_name = "ON")]
     pub auto_gain_control: Option<OwnOrDefault<bool>>,
 
-    /// Noise suppression model: none or hyper-voice. Cloudflare participants always run with none.
+    /// Noise suppression model: none or hyper-voice.
     #[clap(long = "noise-suppression", value_name = "MODEL")]
     pub noise_suppression: Option<NoiseSuppression>,
 
