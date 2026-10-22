@@ -337,20 +337,21 @@ async fn cloudflare_runtime_delegates_hyper_core_authentication_to_the_worker() 
 }
 
 fn cloudflare_config(session_url: &str, base_url: &str, health_poll_interval_ms: u64) -> Config {
-    let mut config = Config::default();
-    config.url = Some(session_url.parse().unwrap());
-    config.backend = ParticipantBackendKind::Cloudflare;
-    config.headless = true;
-    config.cloudflare = CloudflareConfig {
-        base_url: base_url.parse().unwrap(),
-        request_timeout_seconds: 5,
-        session_timeout_ms: 120_000,
-        navigation_timeout_ms: 30_000,
-        selector_timeout_ms: 10_000,
-        debug: false,
-        health_poll_interval_ms,
-    };
-    config
+    Config {
+        url: Some(session_url.parse().unwrap()),
+        backend: ParticipantBackendKind::Cloudflare,
+        headless: true,
+        cloudflare: CloudflareConfig {
+            base_url: base_url.parse().unwrap(),
+            request_timeout_seconds: 5,
+            session_timeout_ms: 120_000,
+            navigation_timeout_ms: 30_000,
+            selector_timeout_ms: 10_000,
+            debug: false,
+            health_poll_interval_ms,
+        },
+        ..Default::default()
+    }
 }
 
 fn worker_state_json(joined: bool, muted: bool, video_activated: bool, video_constraint_publish_webcam: &str) -> Value {

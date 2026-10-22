@@ -14,6 +14,7 @@ use client_simulator_config::{
 };
 use eyre::{
     bail,
+    eyre,
     Context as _,
     Result,
 };
@@ -321,7 +322,7 @@ async fn close_sessions(api: &AwsTestGrid, config: &Config, args: CloseSessionsA
     if failures.is_empty() {
         Ok(())
     } else {
-        bail!("failed to close Device Farm sessions: {}", failures.join("; "))
+        Err(eyre!("failed to close Device Farm sessions: {}", failures.join("; ")))
     }
 }
 

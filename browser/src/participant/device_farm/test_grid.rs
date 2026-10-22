@@ -11,7 +11,7 @@ use client_simulator_config::{
     DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV,
 };
 use eyre::{
-    bail,
+    eyre,
     Result,
 };
 use futures::{
@@ -37,7 +37,7 @@ pub trait TestGridApi: Send + Sync {
         _project_arn: &str,
         _status: Option<TestGridSessionStatus>,
     ) -> BoxFuture<'_, Result<Vec<TestGridSession>>> {
-        async move { bail!("ListTestGridSessions is not implemented by this TestGridApi") }.boxed()
+        async move { Err(eyre!("ListTestGridSessions is not implemented by this TestGridApi")) }.boxed()
     }
 
     fn get_test_grid_session(
@@ -45,89 +45,7 @@ pub trait TestGridApi: Send + Sync {
         _project_arn: &str,
         _session_id: &str,
     ) -> BoxFuture<'_, Result<Option<TestGridSession>>> {
-        async move { bail!("GetTestGridSession is not implemented by this TestGridApi") }.boxed()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn device_farm_env_credentials_are_absent_when_custom_env_pair_is_absent() {
-        let credentials =
-            device_farm_env_credentials_from_vars(Err(VarError::NotPresent), Err(VarError::NotPresent)).unwrap();
-
-        assert!(credentials.is_none());
-    }
-
-    #[test]
-    fn device_farm_env_credentials_require_access_key_and_secret_pair() {
-        let error = match device_farm_env_credentials_from_vars(Ok("access-key".to_owned()), Err(VarError::NotPresent))
-        {
-            Ok(_) => panic!("partial custom credentials should fail"),
-            Err(error) => error.to_string(),
-        };
-
-        assert!(error.contains(DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV));
-        assert!(error.contains(DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV));
-    }
-
-    #[test]
-    fn device_farm_env_credentials_use_custom_env_pair_when_present() {
-        let credentials =
-            device_farm_env_credentials_from_vars(Ok("access-key".to_owned()), Ok("secret-key".to_owned()))
-                .unwrap()
-                .expect("credentials should be built");
-
-        assert_eq!(credentials.access_key_id(), "access-key");
-        assert_eq!(credentials.secret_access_key(), "secret-key");
-    }
-
-    #[test]
-    fn aws_device_farm_error_mentions_setup_auth_for_credential_errors() {
-        let error = aws_device_farm_error(
-            "CreateTestGridUrl failed",
-            std::io::Error::other("CredentialsNotLoaded"),
-        );
-
-        assert!(error.to_string().contains("aws setup-auth"));
-        assert!(error.to_string().contains(DEVICE_FARM_AWS_PROFILE));
-    }
-
-    #[test]
-    fn aws_device_farm_error_detects_profile_source_credential_errors() {
-        let error = aws_device_farm_error(
-            "CreateTestGridUrl failed",
-            std::io::Error::other(
-                "ProfileFile provider could not be built: profile `hyper-client-simulator` was not defined: \
-                 could not find source profile hyper-client-simulator referenced from the root profile",
-            ),
-        );
-
-        assert!(error.to_string().contains("aws setup-auth"));
-    }
-
-    #[test]
-    fn aws_device_farm_error_leaves_non_credential_errors_specific() {
-        let error = aws_device_farm_error(
-            "CreateTestGridUrl failed",
-            std::io::Error::other("project ARN does not exist"),
-        );
-
-        assert_eq!(error.to_string(), "CreateTestGridUrl failed");
-    }
-
-    #[test]
-    fn device_farm_credential_warning_is_available_for_wrapped_reports() {
-        let error = aws_device_farm_error(
-            "ListTestGridSessions failed",
-            std::io::Error::other("CredentialsNotLoaded"),
-        );
-        let warning = device_farm_credential_warning_for_error(&error).expect("credential warning");
-
-        assert_eq!(warning.title, "AWS Device Farm credentials");
-        assert!(warning.message.contains("aws setup-auth"));
+        async move { Err(eyre!("GetTestGridSession is not implemented by this TestGridApi")) }.boxed()
     }
 }
 
@@ -179,26 +97,24 @@ fn device_farm_env_credentials_from_vars(
             "device-farm-env",
         ))),
         (Err(VarError::NotPresent), Err(VarError::NotPresent)) => Ok(None),
-        (Ok(_), Err(VarError::NotPresent)) => {
-            bail!(
-                "{}. {}",
-                format_args!(
-                    "{DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV} is not set while {DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV} is set"
-                ),
-                credential_setup_hint()
-            )
-        }
-        (Err(VarError::NotPresent), Ok(_)) => {
-            bail!(
-                "{}. {}",
-                format_args!(
-                    "{DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV} is not set while {DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV} is set"
-                ),
-                credential_setup_hint()
-            )
-        }
-        (Err(error), _) => bail!("{DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV} could not be read: {error}"),
-        (_, Err(error)) => bail!("{DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV} could not be read: {error}"),
+        (Ok(_), Err(VarError::NotPresent)) => Err(eyre!(
+            "{}. {}",
+            format_args!(
+                "{DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV} is not set while {DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV} is set"
+            ),
+            credential_setup_hint()
+        )),
+        (Err(VarError::NotPresent), Ok(_)) => Err(eyre!(
+            "{}. {}",
+            format_args!(
+                "{DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV} is not set while {DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV} is set"
+            ),
+            credential_setup_hint()
+        )),
+        (Err(error), _) => Err(eyre!("{DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV} could not be read: {error}")),
+        (_, Err(error)) => Err(eyre!(
+            "{DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV} could not be read: {error}"
+        )),
     }
 }
 
@@ -325,5 +241,87 @@ impl TestGridApi for AwsTestGrid {
             Ok(output.test_grid_session().cloned())
         }
         .boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_farm_env_credentials_are_absent_when_custom_env_pair_is_absent() {
+        let credentials =
+            device_farm_env_credentials_from_vars(Err(VarError::NotPresent), Err(VarError::NotPresent)).unwrap();
+
+        assert!(credentials.is_none());
+    }
+
+    #[test]
+    fn device_farm_env_credentials_require_access_key_and_secret_pair() {
+        let error = match device_farm_env_credentials_from_vars(Ok("access-key".to_owned()), Err(VarError::NotPresent))
+        {
+            Ok(_) => panic!("partial custom credentials should fail"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains(DEVICE_FARM_AWS_SECRET_ACCESS_KEY_ENV));
+        assert!(error.contains(DEVICE_FARM_AWS_ACCESS_KEY_ID_ENV));
+    }
+
+    #[test]
+    fn device_farm_env_credentials_use_custom_env_pair_when_present() {
+        let credentials =
+            device_farm_env_credentials_from_vars(Ok("access-key".to_owned()), Ok("secret-key".to_owned()))
+                .unwrap()
+                .expect("credentials should be built");
+
+        assert_eq!(credentials.access_key_id(), "access-key");
+        assert_eq!(credentials.secret_access_key(), "secret-key");
+    }
+
+    #[test]
+    fn aws_device_farm_error_mentions_setup_auth_for_credential_errors() {
+        let error = aws_device_farm_error(
+            "CreateTestGridUrl failed",
+            std::io::Error::other("CredentialsNotLoaded"),
+        );
+
+        assert!(error.to_string().contains("aws setup-auth"));
+        assert!(error.to_string().contains(DEVICE_FARM_AWS_PROFILE));
+    }
+
+    #[test]
+    fn aws_device_farm_error_detects_profile_source_credential_errors() {
+        let error = aws_device_farm_error(
+            "CreateTestGridUrl failed",
+            std::io::Error::other(
+                "ProfileFile provider could not be built: profile `hyper-client-simulator` was not defined: \
+                 could not find source profile hyper-client-simulator referenced from the root profile",
+            ),
+        );
+
+        assert!(error.to_string().contains("aws setup-auth"));
+    }
+
+    #[test]
+    fn aws_device_farm_error_leaves_non_credential_errors_specific() {
+        let error = aws_device_farm_error(
+            "CreateTestGridUrl failed",
+            std::io::Error::other("project ARN does not exist"),
+        );
+
+        assert_eq!(error.to_string(), "CreateTestGridUrl failed");
+    }
+
+    #[test]
+    fn device_farm_credential_warning_is_available_for_wrapped_reports() {
+        let error = aws_device_farm_error(
+            "ListTestGridSessions failed",
+            std::io::Error::other("CredentialsNotLoaded"),
+        );
+        let warning = device_farm_credential_warning_for_error(&error).expect("credential warning");
+
+        assert_eq!(warning.title, "AWS Device Farm credentials");
+        assert!(warning.message.contains("aws setup-auth"));
     }
 }

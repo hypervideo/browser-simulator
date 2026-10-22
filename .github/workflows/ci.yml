@@ -92,7 +92,26 @@ jobs:
           tool: nextest
 
       - name: Run cargo clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # A Device Farm driver test generates a clip with FFmpeg, which the simulator then converts with FFmpeg.
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
+
+      # The local driver tests launch the runner's Chromium, whose sandbox needs unprivileged user namespaces, which
+      # Ubuntu's AppArmor restricts by default.
+      - name: Allow the Chromium sandbox
+        run: sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Probe browsers
+        run: |
+          for extra in "--no-startup-window" "--no-sandbox"; do
+            dir=$(mktemp -d)
+            start=$(date +%s.%N)
+            echo "== chromium $extra"
+            timeout 30 chromium --headless --remote-debugging-port=0 --password-store=basic --use-mock-keychain --no-first-run $extra --user-data-dir="$dir" about:blank 2>&1 \
+              | while IFS= read -r line; do printf '%6.2f %s\n' "$(echo "$(date +%s.%N) - $start" | bc)" "${line:0:110}"; done || true
+          done
 
       - name: Run cargo nextest
-        run: cargo nextest run --no-tests warn
+        run: cargo nextest run --workspace --no-tests warn

@@ -603,6 +603,26 @@ fn participants_panel_title(participant_count: usize) -> String {
     }
 }
 
+// Helper function to format duration
+fn format_duration(value: TimeDelta) -> String {
+    let seconds = value.as_seconds_f32().round() as i32;
+    if seconds < 60 {
+        format!("{}s ago", seconds)
+    } else if seconds < 3600 {
+        format!("{}m ago", seconds / 60)
+    } else {
+        format!("{}h ago", seconds / 3600)
+    }
+}
+
+fn format_bool(value: bool) -> String {
+    if value {
+        "[x]".to_string()
+    } else {
+        "[ ]".to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -677,8 +697,10 @@ mod tests {
     }
 
     fn spawn_remote_participant(store: &ParticipantStore) {
-        let mut config = Config::default();
-        config.url = Some(Url::parse("https://example.com/room/demo").expect("valid url"));
+        let config = Config {
+            url: Some(Url::parse("https://example.com/room/demo").expect("valid url")),
+            ..Default::default()
+        };
         store.spawn_remote_stub(&config).expect("spawn remote stub participant");
     }
 
@@ -694,25 +716,5 @@ mod tests {
             .expect("current time")
             .as_nanos();
         std::env::temp_dir().join(format!("hyper-browser-simulator-participants-test-{timestamp}"))
-    }
-}
-
-// Helper function to format duration
-fn format_duration(value: TimeDelta) -> String {
-    let seconds = value.as_seconds_f32().round() as i32;
-    if seconds < 60 {
-        format!("{}s ago", seconds)
-    } else if seconds < 3600 {
-        format!("{}m ago", seconds / 60)
-    } else {
-        format!("{}h ago", seconds / 3600)
-    }
-}
-
-fn format_bool(value: bool) -> String {
-    if value {
-        "[x]".to_string()
-    } else {
-        "[ ]".to_string()
     }
 }

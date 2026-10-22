@@ -622,20 +622,21 @@ impl TestGridApi for TestGridStub {
 }
 
 fn device_farm_config() -> Config {
-    let mut config = Config::default();
-    config.url = Some("https://example.com/m/demo".parse().unwrap());
-    config.backend = ParticipantBackendKind::AwsDeviceFarm;
-    config.headless = true;
-    config.device_farm = DeviceFarmConfig {
-        project_arn: "arn:aws:devicefarm:us-west-2:123456789012:testgrid-project:abc".to_string(),
-        region: "us-west-2".to_string(),
-        url_expires_seconds: 300,
-        session_max_duration_ms: 60_000,
-        idle_timeout_ms: 30_000,
-        health_poll_interval_ms: 30_000,
-        debug: false,
-    };
-    config
+    Config {
+        url: Some("https://example.com/m/demo".parse().unwrap()),
+        backend: ParticipantBackendKind::AwsDeviceFarm,
+        headless: true,
+        device_farm: DeviceFarmConfig {
+            project_arn: "arn:aws:devicefarm:us-west-2:123456789012:testgrid-project:abc".to_string(),
+            region: "us-west-2".to_string(),
+            url_expires_seconds: 300,
+            session_max_duration_ms: 60_000,
+            idle_timeout_ms: 30_000,
+            health_poll_interval_ms: 30_000,
+            debug: false,
+        },
+        ..Default::default()
+    }
 }
 
 async fn wait_for_state<F>(state: &watch::Receiver<ParticipantState>, mut predicate: F) -> ParticipantState

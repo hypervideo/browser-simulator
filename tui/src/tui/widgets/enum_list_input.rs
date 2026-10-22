@@ -1,6 +1,5 @@
 use super::ListInput;
 use eyre::{
-    bail,
     eyre,
     Result,
 };
@@ -38,7 +37,7 @@ where
         if let Some((_, value)) = self.inner.finish() {
             T::from_str(&value).map_err(|_| eyre!("Failed to parse enum value {value:?}"))
         } else {
-            bail!("No value selected")
+            Err(eyre!("No value selected"))
         }
     }
 }

@@ -19,13 +19,13 @@ run-nix *flags="":
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 clippy:
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 clippy-watch:
     fd --type f --extension rs | entr -n -r just clippy
 
 test:
-    cargo nextest run --no-tests warn
+    cargo nextest run --workspace --no-tests warn
 
 check: clippy test
 

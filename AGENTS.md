@@ -22,8 +22,8 @@ Once inside the devshell, prefer `just` recipes over ad hoc commands:
 - `just dev` runs the main simulator in debug mode.
 - `just run` runs the main simulator in release mode.
 - `just fmt` applies `cargo fmt`.
-- `just clippy` runs `cargo clippy --all-targets --all-features -- -D warnings`.
-- `just test` runs the test suite with `cargo nextest`.
+- `just clippy` runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+- `just test` runs the workspace's tests with `cargo nextest`.
 - `just check` runs linting and tests together.
 
 ## Testing Guidelines
