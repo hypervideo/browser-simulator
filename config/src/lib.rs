@@ -25,11 +25,13 @@ pub use browser_config::BrowserConfig;
 pub use client_config::{
     NoiseSuppression,
     NoiseSuppressionIter,
+    OwnOrDefault,
     ParticipantBackendKind,
     TransportMode,
     TransportModeIter,
     VideoConstraint,
     VideoConstraintIter,
+    VideoMaxConcurrentTracks,
     VideoMaxConcurrentTracksPreset,
     VideoMaxConcurrentTracksPresetIter,
 };
@@ -92,27 +94,23 @@ pub struct Config {
     pub video_enabled: bool,
     #[serde(default)]
     pub screenshare_enabled: bool,
-    #[serde(default = "default_auto_gain_control")]
-    pub auto_gain_control: bool,
+    #[serde(default)]
+    pub auto_gain_control: OwnOrDefault<bool>,
     #[serde(default)]
     pub noise_suppression: NoiseSuppression,
     #[serde(default)]
     pub transport: TransportMode,
     #[serde(default)]
-    pub video_constraint_publish_webcam: VideoConstraint,
+    pub video_constraint_publish_webcam: OwnOrDefault<VideoConstraint>,
     #[serde(default)]
-    pub video_constraint_subscribe: VideoConstraint,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub video_max_concurrent_tracks: Option<usize>,
+    pub video_constraint_subscribe: OwnOrDefault<VideoConstraint>,
     #[serde(default)]
-    pub blur: bool,
+    pub video_max_concurrent_tracks: OwnOrDefault<VideoMaxConcurrentTracks>,
+    #[serde(default)]
+    pub blur: OwnOrDefault<bool>,
 }
 
 const DEFAULT_CONFIG: &str = include_str!("default-config.yaml");
-
-const fn default_auto_gain_control() -> bool {
-    true
-}
 
 impl Default for Config {
     fn default() -> Self {
@@ -193,7 +191,10 @@ impl config::Source for Config {
         cache.insert("audio_enabled".to_string(), self.audio_enabled.into());
         cache.insert("video_enabled".to_string(), self.video_enabled.into());
         cache.insert("screenshare_enabled".to_string(), self.screenshare_enabled.into());
-        cache.insert("auto_gain_control".to_string(), self.auto_gain_control.into());
+        cache.insert(
+            "auto_gain_control".to_string(),
+            self.auto_gain_control.to_string().into(),
+        );
         cache.insert(
             "noise_suppression".to_string(),
             self.noise_suppression.to_string().into(),
@@ -207,10 +208,11 @@ impl config::Source for Config {
             "video_constraint_subscribe".to_string(),
             self.video_constraint_subscribe.to_string().into(),
         );
-        if let Some(value) = self.video_max_concurrent_tracks {
-            cache.insert("video_max_concurrent_tracks".to_string(), (value as i64).into());
-        }
-        cache.insert("blur".to_string(), self.blur.into());
+        cache.insert(
+            "video_max_concurrent_tracks".to_string(),
+            self.video_max_concurrent_tracks.to_string().into(),
+        );
+        cache.insert("blur".to_string(), self.blur.to_string().into());
         if let Some(value) = self.fake_media_selected {
             cache.insert("fake_media_selected".to_string(), (value as u64).into());
         }
@@ -517,18 +519,82 @@ video_max_concurrent_tracks: 2
             .try_deserialize()
             .expect("failed to deserialize config");
 
-        assert_eq!(config.video_constraint_publish_webcam, VideoConstraint::P480);
-        assert_eq!(config.video_constraint_subscribe, VideoConstraint::P720);
-        assert_eq!(config.video_max_concurrent_tracks, Some(2));
+        assert_eq!(
+            config.video_constraint_publish_webcam,
+            OwnOrDefault::Own(VideoConstraint::P480)
+        );
+        assert_eq!(
+            config.video_constraint_subscribe,
+            OwnOrDefault::Own(VideoConstraint::P720)
+        );
+        assert_eq!(
+            config.video_max_concurrent_tracks,
+            OwnOrDefault::Own(VideoMaxConcurrentTracks::Limit(2))
+        );
     }
 
+    /// The settings that a participant can leave to hyper.video load an explicit value as its own and `default` as
+    /// none, from a config file, from a config passed on as a source, and from a saved config.
     #[test]
-    fn default_video_max_concurrent_tracks_is_unlimited() {
+    fn own_or_default_settings_load_from_file_source_and_saved_config() {
+        let from_file: Config = config::Config::builder()
+            .add_source(Config::default())
+            .add_source(config::File::from_str(
+                r#"
+auto_gain_control: true
+video_constraint_publish_webcam: none
+video_constraint_subscribe: default
+video_max_concurrent_tracks: unlimited
+blur: false
+"#,
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .expect("failed to build config")
+            .try_deserialize()
+            .expect("failed to deserialize config");
+        let from_source: Config = config::Config::builder()
+            .add_source(from_file.clone())
+            .build()
+            .expect("failed to build config")
+            .try_deserialize()
+            .expect("failed to deserialize config");
+        let saved = yaml_serde::to_string(&from_file).expect("failed to serialize config");
+        let from_saved: Config = config::Config::builder()
+            .add_source(Config::default())
+            .add_source(config::File::from_str(&saved, config::FileFormat::Yaml))
+            .build()
+            .expect("failed to build config")
+            .try_deserialize()
+            .expect("failed to deserialize config");
+
+        for config in [from_file, from_source, from_saved] {
+            assert_eq!(config.auto_gain_control, OwnOrDefault::Own(true));
+            assert_eq!(
+                config.video_constraint_publish_webcam,
+                OwnOrDefault::Own(VideoConstraint::None)
+            );
+            assert_eq!(config.video_constraint_subscribe, OwnOrDefault::Default);
+            assert_eq!(
+                config.video_max_concurrent_tracks,
+                OwnOrDefault::Own(VideoMaxConcurrentTracks::Unlimited)
+            );
+            assert_eq!(config.blur, OwnOrDefault::Own(false));
+        }
+    }
+
+    /// The default config leaves every setting that a participant can leave to hyper.video to it, and runs no noise
+    /// suppression model.
+    #[test]
+    fn default_config_follows_hyper_video_but_suppresses_no_noise() {
         let config = Config::default();
 
-        assert_eq!(config.video_constraint_publish_webcam, VideoConstraint::None);
-        assert_eq!(config.video_constraint_subscribe, VideoConstraint::None);
-        assert_eq!(config.video_max_concurrent_tracks, None);
+        assert_eq!(config.auto_gain_control, OwnOrDefault::Default);
+        assert_eq!(config.video_constraint_publish_webcam, OwnOrDefault::Default);
+        assert_eq!(config.video_constraint_subscribe, OwnOrDefault::Default);
+        assert_eq!(config.video_max_concurrent_tracks, OwnOrDefault::Default);
+        assert_eq!(config.blur, OwnOrDefault::Default);
+        assert_eq!(config.noise_suppression, NoiseSuppression::Disabled);
     }
 
     #[test]

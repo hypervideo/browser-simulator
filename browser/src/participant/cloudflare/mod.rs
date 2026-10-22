@@ -20,6 +20,8 @@ use client_simulator_config::{
     CloudflareConfig,
     NoiseSuppression,
     TransportMode,
+    VideoConstraint,
+    VideoMaxConcurrentTracks,
 };
 use cloudflare_worker_client::{
     types,
@@ -288,7 +290,7 @@ impl CloudflareSession {
             }
             ParticipantMessage::SetVideoMaxConcurrentTracks(value) => {
                 types::SessionCommandRequest::SetVideoMaxConcurrentTracks {
-                    video_max_concurrent_tracks: value.map(|value| value as u64),
+                    video_max_concurrent_tracks: value.limit().map(|value| value as u64),
                 }
             }
             ParticipantMessage::ToggleBackgroundBlur => types::SessionCommandRequest::ToggleBackgroundBlur,
@@ -510,11 +512,13 @@ fn map_frontend_kind(frontend_kind: ResolvedFrontendKind) -> types::SessionCreat
 /// Maps the settings that [`CloudflareSession::normalized_settings`] returns onto the worker's.
 ///
 /// The worker's schema lacks `hyper-voice`, which `normalized_settings` replaces with `none`, so it maps to `none`.
+/// The schema also has no way to leave a setting to hyper.video, so a setting that the participant leaves to
+/// hyper.video sends hyper.video's default, and the track limit no limit, `null`.
 fn map_settings(settings: &crate::participant::shared::ParticipantSettings) -> types::ParticipantSettings {
     types::ParticipantSettings {
         audio_enabled: settings.audio_enabled,
-        auto_gain_control: settings.auto_gain_control,
-        blur: settings.blur,
+        auto_gain_control: settings.auto_gain_control.own().unwrap_or(true),
+        blur: settings.blur.own().unwrap_or(false),
         noise_suppression: match settings.noise_suppression {
             NoiseSuppression::Disabled | NoiseSuppression::HyperVoice => {
                 types::ParticipantSettingsNoiseSuppression::None
@@ -525,9 +529,23 @@ fn map_settings(settings: &crate::participant::shared::ParticipantSettings) -> t
             client_simulator_config::TransportMode::WebRTC => types::ParticipantSettingsTransport::Webrtc,
             client_simulator_config::TransportMode::WebTransport => types::ParticipantSettingsTransport::Webtransport,
         },
-        video_constraint_publish_webcam: map_video_constraint_publish_webcam(settings.video_constraint_publish_webcam),
-        video_constraint_subscribe: map_video_constraint_subscribe(settings.video_constraint_subscribe),
-        video_max_concurrent_tracks: settings.video_max_concurrent_tracks.map(|value| value as u64),
+        video_constraint_publish_webcam: map_video_constraint_publish_webcam(
+            settings
+                .video_constraint_publish_webcam
+                .own()
+                .unwrap_or(VideoConstraint::None),
+        ),
+        video_constraint_subscribe: map_video_constraint_subscribe(
+            settings
+                .video_constraint_subscribe
+                .own()
+                .unwrap_or(VideoConstraint::None),
+        ),
+        video_max_concurrent_tracks: settings
+            .video_max_concurrent_tracks
+            .own()
+            .and_then(VideoMaxConcurrentTracks::limit)
+            .map(|value| value as u64),
         video_enabled: settings.video_enabled,
     }
 }
@@ -550,7 +568,11 @@ fn map_state(participant_name: &str, state: &types::ParticipantState) -> Partici
             state.video_constraint_publish_webcam,
         ),
         video_constraint_subscribe: map_state_video_constraint_subscribe(state.video_constraint_subscribe),
-        video_max_concurrent_tracks: state.video_max_concurrent_tracks.map(|value| value as usize),
+        video_max_concurrent_tracks: state
+            .video_max_concurrent_tracks
+            .map_or(VideoMaxConcurrentTracks::Unlimited, |value| {
+                VideoMaxConcurrentTracks::Limit(value as usize)
+            }),
         background_blur: state.background_blur,
         screenshare_activated: state.screenshare_activated,
     }
@@ -609,6 +631,10 @@ fn map_state_noise_suppression(
     }
 }
 
+/// Maps the outgoing webcam constraint to the worker's.
+///
+/// The worker's schema has no 4320p. hyper.video has no resolution level above it, so a 4320p limit leaves every
+/// resolution, as `none` does.
 fn map_video_constraint_publish_webcam(
     value: client_simulator_config::VideoConstraint,
 ) -> types::ParticipantSettingsVideoConstraintPublishWebcam {
@@ -629,9 +655,12 @@ fn map_video_constraint_publish_webcam(
         client_simulator_config::VideoConstraint::P2160 => {
             types::ParticipantSettingsVideoConstraintPublishWebcam::X2160p
         }
+        client_simulator_config::VideoConstraint::P4320 => types::ParticipantSettingsVideoConstraintPublishWebcam::None,
     }
 }
 
+/// Maps the incoming video constraint to the worker's, 4320p to `none`, as [`map_video_constraint_publish_webcam`]
+/// says.
 fn map_video_constraint_subscribe(
     value: client_simulator_config::VideoConstraint,
 ) -> types::ParticipantSettingsVideoConstraintSubscribe {
@@ -646,6 +675,7 @@ fn map_video_constraint_subscribe(
         client_simulator_config::VideoConstraint::P1080 => types::ParticipantSettingsVideoConstraintSubscribe::X1080p,
         client_simulator_config::VideoConstraint::P1440 => types::ParticipantSettingsVideoConstraintSubscribe::X1440p,
         client_simulator_config::VideoConstraint::P2160 => types::ParticipantSettingsVideoConstraintSubscribe::X2160p,
+        client_simulator_config::VideoConstraint::P4320 => types::ParticipantSettingsVideoConstraintSubscribe::None,
     }
 }
 
@@ -683,6 +713,8 @@ fn map_state_video_constraint_subscribe(
     }
 }
 
+/// Maps the outgoing webcam constraint to the worker's command, 4320p to `none`, as
+/// [`map_video_constraint_publish_webcam`] says.
 fn map_command_video_constraint_publish_webcam(
     value: client_simulator_config::VideoConstraint,
 ) -> types::SessionCommandRequestVideoConstraintPublishWebcam {
@@ -715,9 +747,14 @@ fn map_command_video_constraint_publish_webcam(
         client_simulator_config::VideoConstraint::P2160 => {
             types::SessionCommandRequestVideoConstraintPublishWebcam::X2160p
         }
+        client_simulator_config::VideoConstraint::P4320 => {
+            types::SessionCommandRequestVideoConstraintPublishWebcam::None
+        }
     }
 }
 
+/// Maps the incoming video constraint to the worker's command, 4320p to `none`, as
+/// [`map_video_constraint_publish_webcam`] says.
 fn map_command_video_constraint_subscribe(
     value: client_simulator_config::VideoConstraint,
 ) -> types::SessionCommandRequestVideoConstraintSubscribe {
@@ -732,6 +769,7 @@ fn map_command_video_constraint_subscribe(
         client_simulator_config::VideoConstraint::P1080 => types::SessionCommandRequestVideoConstraintSubscribe::X1080p,
         client_simulator_config::VideoConstraint::P1440 => types::SessionCommandRequestVideoConstraintSubscribe::X1440p,
         client_simulator_config::VideoConstraint::P2160 => types::SessionCommandRequestVideoConstraintSubscribe::X2160p,
+        client_simulator_config::VideoConstraint::P4320 => types::SessionCommandRequestVideoConstraintSubscribe::None,
     }
 }
 
@@ -767,8 +805,10 @@ mod tests {
         media::FakeMedia,
         CloudflareConfig,
         NoiseSuppression,
+        OwnOrDefault,
         TransportMode,
         VideoConstraint,
+        VideoMaxConcurrentTracks,
     };
     use serde_json::{
         json,
@@ -926,7 +966,7 @@ mod tests {
         assert_eq!(state.transport_mode, TransportMode::WebRTC);
         assert_eq!(state.video_constraint_publish_webcam, VideoConstraint::P720);
         assert_eq!(state.video_constraint_subscribe, VideoConstraint::None);
-        assert_eq!(state.video_max_concurrent_tracks, None);
+        assert_eq!(state.video_max_concurrent_tracks, VideoMaxConcurrentTracks::Unlimited);
         assert!(state.auto_gain_control);
         assert!(state.background_blur);
 
@@ -1722,13 +1762,13 @@ mod tests {
                 audio_enabled: true,
                 video_enabled: true,
                 screenshare_enabled: false,
-                auto_gain_control: true,
+                auto_gain_control: OwnOrDefault::Own(true),
                 noise_suppression: NoiseSuppression::Disabled,
                 transport: TransportMode::WebRTC,
-                video_constraint_publish_webcam: VideoConstraint::P720,
-                video_constraint_subscribe: VideoConstraint::None,
-                video_max_concurrent_tracks: None,
-                blur: true,
+                video_constraint_publish_webcam: OwnOrDefault::Own(VideoConstraint::P720),
+                video_constraint_subscribe: OwnOrDefault::Default,
+                video_max_concurrent_tracks: OwnOrDefault::Default,
+                blur: OwnOrDefault::Own(true),
             },
         }
     }
@@ -1781,7 +1821,7 @@ mod tests {
             transport_mode: TransportMode::WebRTC,
             video_constraint_publish_webcam,
             video_constraint_subscribe: VideoConstraint::None,
-            video_max_concurrent_tracks: None,
+            video_max_concurrent_tracks: VideoMaxConcurrentTracks::Unlimited,
             background_blur,
             screenshare_activated,
         }
