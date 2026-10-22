@@ -19,6 +19,7 @@ use client_simulator_config::{
     media::FakeMedia,
     CloudflareConfig,
     NoiseSuppression,
+    OwnOrDefault,
     TransportMode,
     VideoConstraint,
     VideoMaxConcurrentTracks,
@@ -220,7 +221,7 @@ impl CloudflareSession {
     fn normalized_settings(&self) -> crate::participant::shared::ParticipantSettings {
         let mut settings = self.launch_spec.settings.clone();
 
-        if settings.transport != TransportMode::WebRTC {
+        if settings.transport != OwnOrDefault::Own(TransportMode::WebRTC) {
             self.log_message(
                 "warn",
                 format!(
@@ -228,7 +229,7 @@ impl CloudflareSession {
                     settings.transport
                 ),
             );
-            settings.transport = TransportMode::WebRTC;
+            settings.transport = OwnOrDefault::Own(TransportMode::WebRTC);
         }
 
         match settings.noise_suppression {
@@ -525,7 +526,7 @@ fn map_settings(settings: &crate::participant::shared::ParticipantSettings) -> t
             }
         },
         screenshare_enabled: settings.screenshare_enabled,
-        transport: match settings.transport {
+        transport: match settings.transport.own().unwrap_or(TransportMode::WebTransport) {
             client_simulator_config::TransportMode::WebRTC => types::ParticipantSettingsTransport::Webrtc,
             client_simulator_config::TransportMode::WebTransport => types::ParticipantSettingsTransport::Webtransport,
         },
@@ -1489,7 +1490,7 @@ mod tests {
         ]);
         let (base_url, requests, server) = spawn_http_server(responses).await;
         let mut spec = launch_spec(ResolvedFrontendKind::HyperLite, &format!("{base_url}/room/demo"));
-        spec.settings.transport = TransportMode::WebTransport;
+        spec.settings.transport = OwnOrDefault::Own(TransportMode::WebTransport);
         let mut session = CloudflareSession::new_for_test(
             spec,
             launch_options(false, FakeMedia::None),
@@ -1764,7 +1765,7 @@ mod tests {
                 screenshare_enabled: false,
                 auto_gain_control: OwnOrDefault::Own(true),
                 noise_suppression: NoiseSuppression::Disabled,
-                transport: TransportMode::WebRTC,
+                transport: OwnOrDefault::Own(TransportMode::WebRTC),
                 video_constraint_publish_webcam: OwnOrDefault::Own(VideoConstraint::P720),
                 video_constraint_subscribe: OwnOrDefault::Default,
                 video_max_concurrent_tracks: OwnOrDefault::Default,

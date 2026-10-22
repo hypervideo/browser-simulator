@@ -99,7 +99,7 @@ pub struct Config {
     #[serde(default)]
     pub noise_suppression: NoiseSuppression,
     #[serde(default)]
-    pub transport: TransportMode,
+    pub transport: OwnOrDefault<TransportMode>,
     #[serde(default)]
     pub video_constraint_publish_webcam: OwnOrDefault<VideoConstraint>,
     #[serde(default)]
@@ -542,6 +542,7 @@ video_max_concurrent_tracks: 2
             .add_source(config::File::from_str(
                 r#"
 auto_gain_control: true
+transport: webrtc
 video_constraint_publish_webcam: none
 video_constraint_subscribe: default
 video_max_concurrent_tracks: unlimited
@@ -570,6 +571,7 @@ blur: false
 
         for config in [from_file, from_source, from_saved] {
             assert_eq!(config.auto_gain_control, OwnOrDefault::Own(true));
+            assert_eq!(config.transport, OwnOrDefault::Own(TransportMode::WebRTC));
             assert_eq!(
                 config.video_constraint_publish_webcam,
                 OwnOrDefault::Own(VideoConstraint::None)
@@ -590,6 +592,7 @@ blur: false
         let config = Config::default();
 
         assert_eq!(config.auto_gain_control, OwnOrDefault::Default);
+        assert_eq!(config.transport, OwnOrDefault::Default);
         assert_eq!(config.video_constraint_publish_webcam, OwnOrDefault::Default);
         assert_eq!(config.video_constraint_subscribe, OwnOrDefault::Default);
         assert_eq!(config.video_max_concurrent_tracks, OwnOrDefault::Default);

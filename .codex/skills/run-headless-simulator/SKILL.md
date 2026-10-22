@@ -189,7 +189,7 @@ Headless option names use kebab-case. Participant JSON fields use snake_case.
 
 Repeat `--participant JSON` to add participants. It has no matching JSON field.
 
-Auto gain control, background blur, both video constraints and the track limit default to `default`, which leaves the setting to hyper.video: an admin's value for the session, else hyper.video's default. JSON `null` inherits the shared value instead.
+Auto gain control, the transport, background blur, both video constraints and the track limit default to `default`, which leaves the setting to hyper.video: an admin's value for the session, else hyper.video's default. JSON `null` inherits the shared value instead.
 
 Use a nonnegative integer, `unlimited` or `default` for `--video-max-concurrent-tracks` or `video_max_concurrent_tracks`. hyper.video's default is one track.
 
@@ -204,6 +204,7 @@ Backend:
 
 Transport:
 
+- `default`
 - `webtransport`
 - `webrtc`
 
