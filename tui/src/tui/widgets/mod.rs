@@ -8,6 +8,7 @@ pub(crate) use button::button;
 pub(crate) use enum_list_input::EnumListInput;
 pub(crate) use label_and_text::{
     label_and_bool,
+    label_and_bool_setting,
     label_and_text,
 };
 pub(crate) use list_input::ListInput;
