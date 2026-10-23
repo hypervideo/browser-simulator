@@ -227,6 +227,4 @@ Noise suppression:
 - `none`
 - `hyper-voice`
 
-Cloudflare participants run with `none` only.
-
 Run `just dev --logging info headless --help` or `hyper-client-simulator headless --help` if a flag fails.

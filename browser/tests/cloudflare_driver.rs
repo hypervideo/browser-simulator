@@ -269,7 +269,7 @@ async fn cloudflare_runtime_delegates_hyper_core_authentication_to_the_worker() 
                     "videoActivated": true,
                     "screenshareActivated": false,
                     "autoGainControl": true,
-                    "noiseSuppression": "none",
+                    "noiseSuppression": "hyper-voice",
                     "transportMode": "webrtc",
                     "videoConstraintPublishWebcam": "1080p",
                     "videoConstraintSubscribe": "none",
@@ -317,7 +317,7 @@ async fn cloudflare_runtime_delegates_hyper_core_authentication_to_the_worker() 
     assert!(started.joined);
     assert_eq!(
         started.noise_suppression,
-        client_simulator_config::NoiseSuppression::Disabled
+        client_simulator_config::NoiseSuppression::HyperVoice
     );
 
     participant.close().await;
@@ -331,6 +331,17 @@ async fn cloudflare_runtime_delegates_hyper_core_authentication_to_the_worker() 
     assert_eq!(requests[0].path, "/sessions");
     assert!(request_json(&requests[0])["displayName"].is_string());
     assert!(request_json(&requests[0]).get("hyperSessionCookie").is_none());
+    // A participant that leaves its settings to hyper.video leaves them out of the request.
+    let settings = &request_json(&requests[0])["settings"];
+    for key in [
+        "autoGainControl",
+        "blur",
+        "videoConstraintPublishWebcam",
+        "videoConstraintSubscribe",
+        "videoMaxConcurrentTracks",
+    ] {
+        assert!(settings.get(key).is_none(), "{key}");
+    }
     assert_eq!(requests[1].path, "/sessions/cf-runtime-core/commands");
     assert_eq!(request_json(&requests[1]), json!({ "type": "leave" }));
     assert_eq!(requests[2].path, "/sessions/cf-runtime-core/close");
