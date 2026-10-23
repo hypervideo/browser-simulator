@@ -46,7 +46,7 @@ audio_enabled: true
 video_enabled: true
 auto_gain_control: default
 noise_suppression: none
-transport: webtransport
+transport: default
 video_constraint_publish_webcam: default
 video_constraint_subscribe: default
 video_max_concurrent_tracks: default

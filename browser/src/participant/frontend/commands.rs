@@ -2,6 +2,7 @@ use super::driver::BrowserDriver;
 use client_simulator_config::{
     NoiseSuppression,
     OwnOrDefault,
+    TransportMode,
     VideoConstraint,
     VideoMaxConcurrentTracks,
 };
@@ -12,6 +13,7 @@ use eyre::{
 };
 use serde::{
     de::DeserializeOwned,
+    Deserialize,
     Serialize,
 };
 use serde_json::json;
@@ -29,8 +31,6 @@ const PARTICIPANT_EDIT: &str = "hyper.settings.client.edit('participant', argume
 const VOLUME_NORMALIZATION_ON: &str = "const { report, edit } = hyper.settings.client; \
     const levels = report.participant.audioSendVolumeNormalization ?? report.default.audioSendVolumeNormalization; \
     edit('participant', { set: { audioSendVolumeNormalization: levels } });";
-const FORCE_WEBRTC_GET: &str = "return hyper.settings.sessionDebug.forceWebrtc;";
-const FORCE_WEBRTC_SET: &str = "hyper.settings.sessionDebug.actions.setForceWebrtc(arguments[0]);";
 
 // The `SettingKey`s of the settings that the simulator reads and sets.
 const NOISE_SUPPRESSION: &str = "audioSendNoiseSuppression";
@@ -39,16 +39,27 @@ const BACKGROUND_BLUR: &str = "videoSendWebcamBackgroundBlur";
 const WEBCAM_MAX_RESOLUTION_LEVEL: &str = "videoSendWebcamMaxResolutionLevel";
 const RECEIVE_MAX_RESOLUTION_LEVEL: &str = "videoReceiveMaxResolutionLevel";
 const MAX_CONCURRENT_TRACKS: &str = "videoSendMaxConcurrentTracks";
+const TRANSPORT: &str = "transport";
 
-async fn get_bool(driver: &dyn BrowserDriver, js: &str) -> Result<bool> {
-    let value = driver.eval(js, None).await?;
-    serde_json::from_value(value).context("failed to read bool from eval result")
+/// A value of hyper.video's `transport` setting, its `TransportPreference`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum TransportPreference {
+    /// hyper.video's default, which connects over WebTransport where the browser has it, and over WebRTC elsewhere.
+    Automatic,
+    /// WebTransport only, with no fallback to WebRTC.
+    WebTransport,
+    /// WebRTC data channels.
+    WebRtc,
 }
 
-async fn set_value<S: serde::Serialize>(driver: &dyn BrowserDriver, js: &str, value: S) -> Result<()> {
-    let arg = serde_json::to_value(value).context("failed to serialize eval argument")?;
-    driver.eval(js, Some(arg)).await?;
-    Ok(())
+impl From<TransportMode> for TransportPreference {
+    fn from(mode: TransportMode) -> Self {
+        match mode {
+            TransportMode::WebTransport => Self::WebTransport,
+            TransportMode::WebRTC => Self::WebRtc,
+        }
+    }
 }
 
 /// Reads the value of the setting `key` that applies.
@@ -174,12 +185,20 @@ pub(super) async fn set_video_max_concurrent_tracks(
     .await
 }
 
-pub(super) async fn get_force_webrtc(driver: &dyn BrowserDriver) -> Result<bool> {
-    get_bool(driver, FORCE_WEBRTC_GET).await
+/// The transport that applies, reading [`TransportPreference::Automatic`] as WebTransport, which it picks where the
+/// browser has it.
+pub(super) async fn get_transport(driver: &dyn BrowserDriver) -> Result<TransportMode> {
+    let preference: TransportPreference = get_setting(driver, TRANSPORT).await?;
+    Ok(match preference {
+        TransportPreference::Automatic | TransportPreference::WebTransport => TransportMode::WebTransport,
+        TransportPreference::WebRtc => TransportMode::WebRTC,
+    })
 }
 
-pub(super) async fn set_force_webrtc(driver: &dyn BrowserDriver, value: bool) -> Result<()> {
-    set_value(driver, FORCE_WEBRTC_SET, value).await
+/// Sets the participant's transport, or unsets it for [`OwnOrDefault::Default`], so that an admin's value for the
+/// session applies, else [`TransportPreference::Automatic`].
+pub(super) async fn set_transport(driver: &dyn BrowserDriver, value: OwnOrDefault<TransportMode>) -> Result<()> {
+    edit_setting(driver, TRANSPORT, value.map(TransportPreference::from)).await
 }
 
 #[cfg(test)]
@@ -372,5 +391,40 @@ pub(in crate::participant::frontend) mod tests {
         let value = get_video_max_concurrent_tracks(&driver).await.unwrap();
 
         assert_eq!(value, VideoMaxConcurrentTracks::Limit(2));
+    }
+
+    #[tokio::test]
+    async fn transport_maps_to_and_from_hyper_video_preferences() {
+        let driver = RecordingDriver::default();
+
+        set_transport(&driver, OwnOrDefault::Own(TransportMode::WebRTC))
+            .await
+            .unwrap();
+        set_transport(&driver, OwnOrDefault::Own(TransportMode::WebTransport))
+            .await
+            .unwrap();
+        set_transport(&driver, OwnOrDefault::Default).await.unwrap();
+
+        assert_eq!(
+            driver.calls(),
+            vec![
+                participant_edit(json!({ "transport": "webRtc" })),
+                participant_edit(json!({ "transport": "webTransport" })),
+                participant_unset("transport"),
+            ],
+        );
+
+        let transports = [
+            ("webRtc", TransportMode::WebRTC),
+            ("webTransport", TransportMode::WebTransport),
+            ("automatic", TransportMode::WebTransport),
+        ];
+        for (setting, expected) in transports {
+            let driver = RecordingDriver::with_result(json!(setting));
+            assert_eq!(get_transport(&driver).await.unwrap(), expected);
+        }
+        assert!(get_transport(&RecordingDriver::with_result(json!("webSocket")))
+            .await
+            .is_err());
     }
 }

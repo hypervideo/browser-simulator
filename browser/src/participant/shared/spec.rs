@@ -32,7 +32,7 @@ pub(in crate::participant) struct ParticipantSettings {
     pub(in crate::participant) screenshare_enabled: bool,
     pub(in crate::participant) auto_gain_control: OwnOrDefault<bool>,
     pub(in crate::participant) noise_suppression: NoiseSuppression,
-    pub(in crate::participant) transport: TransportMode,
+    pub(in crate::participant) transport: OwnOrDefault<TransportMode>,
     pub(in crate::participant) video_constraint_publish_webcam: OwnOrDefault<VideoConstraint>,
     pub(in crate::participant) video_constraint_subscribe: OwnOrDefault<VideoConstraint>,
     pub(in crate::participant) video_max_concurrent_tracks: OwnOrDefault<VideoMaxConcurrentTracks>,
@@ -112,7 +112,7 @@ mod tests {
                 screenshare_enabled: true,
                 auto_gain_control: OwnOrDefault::Own(true),
                 noise_suppression: NoiseSuppression::HyperVoice,
-                transport: TransportMode::WebRTC,
+                transport: OwnOrDefault::Own(TransportMode::WebRTC),
                 video_constraint_publish_webcam: OwnOrDefault::Own(VideoConstraint::P480),
                 video_constraint_subscribe: OwnOrDefault::Default,
                 video_max_concurrent_tracks: OwnOrDefault::Own(VideoMaxConcurrentTracks::Limit(2)),
@@ -131,7 +131,7 @@ mod tests {
         assert!(spec.settings.screenshare_enabled);
         assert_eq!(spec.settings.auto_gain_control, OwnOrDefault::Own(true));
         assert_eq!(spec.settings.noise_suppression, NoiseSuppression::HyperVoice);
-        assert_eq!(spec.settings.transport, TransportMode::WebRTC);
+        assert_eq!(spec.settings.transport, OwnOrDefault::Own(TransportMode::WebRTC));
         assert_eq!(
             spec.settings.video_constraint_publish_webcam,
             OwnOrDefault::Own(VideoConstraint::P480)

@@ -59,8 +59,9 @@ pub struct HeadlessArgs {
     #[clap(long = "noise-suppression", value_name = "MODEL")]
     pub noise_suppression: Option<NoiseSuppression>,
 
+    /// Transport: webtransport, webrtc, or default to leave it to hyper.video. Cloudflare always uses webrtc.
     #[clap(long, value_name = "MODE")]
-    pub transport: Option<TransportMode>,
+    pub transport: Option<OwnOrDefault<TransportMode>>,
 
     /// Outgoing webcam resolution limit, such as 720p, none for no limit, or default to leave it to hyper.video.
     #[clap(long = "video-constraint-publish-webcam", value_name = "CONSTRAINT")]
@@ -94,7 +95,7 @@ struct ParticipantOverride {
     screenshare_enabled: Option<bool>,
     auto_gain_control: Option<OwnOrDefault<bool>>,
     noise_suppression: Option<NoiseSuppression>,
-    transport: Option<TransportMode>,
+    transport: Option<OwnOrDefault<TransportMode>>,
     video_constraint_publish_webcam: Option<OwnOrDefault<VideoConstraint>>,
     video_constraint_subscribe: Option<OwnOrDefault<VideoConstraint>>,
     video_max_concurrent_tracks: Option<OwnOrDefault<VideoMaxConcurrentTracks>>,
@@ -470,10 +471,19 @@ mod tests {
     /// The CLI and `--participant` JSON take `default` to leave a setting to hyper.video, next to explicit values.
     #[test]
     fn cli_and_participant_json_take_default() {
-        let cli = TestHeadlessCli::parse_from(["headless", "--blur", "default", "--auto-gain-control", "false"]);
+        let cli = TestHeadlessCli::parse_from([
+            "headless",
+            "--blur",
+            "default",
+            "--auto-gain-control",
+            "false",
+            "--transport",
+            "webtransport",
+        ]);
 
         assert_eq!(cli.args.blur, Some(OwnOrDefault::Default));
         assert_eq!(cli.args.auto_gain_control, Some(OwnOrDefault::Own(false)));
+        assert_eq!(cli.args.transport, Some(OwnOrDefault::Own(TransportMode::WebTransport)));
 
         let global_config = Config {
             video_constraint_subscribe: OwnOrDefault::Own(VideoConstraint::P720),
@@ -482,12 +492,13 @@ mod tests {
 
         let configs = build_participant_configs(
             global_config,
-            &[r#"{"video_constraint_subscribe":"default","blur":true}"#.to_string()],
+            &[r#"{"video_constraint_subscribe":"default","blur":true,"transport":"default"}"#.to_string()],
         )
         .expect("participant configs");
 
         assert_eq!(configs[0].video_constraint_subscribe, OwnOrDefault::Default);
         assert_eq!(configs[0].blur, OwnOrDefault::Own(true));
+        assert_eq!(configs[0].transport, OwnOrDefault::Default);
     }
 
     #[test]

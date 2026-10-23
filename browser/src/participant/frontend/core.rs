@@ -8,15 +8,15 @@ use super::{
     commands::{
         get_auto_gain_control,
         get_background_blur,
-        get_force_webrtc,
         get_noise_suppression,
+        get_transport,
         get_video_constraint_publish_webcam,
         get_video_constraint_subscribe,
         get_video_max_concurrent_tracks,
         set_auto_gain_control,
         set_background_blur,
-        set_force_webrtc,
         set_noise_suppression,
+        set_transport,
         set_video_constraint_publish_webcam,
         set_video_constraint_subscribe,
         set_video_max_concurrent_tracks,
@@ -32,7 +32,6 @@ use crate::auth::BorrowedCredentials;
 use client_simulator_config::{
     NoiseSuppression,
     OwnOrDefault,
-    TransportMode,
     VideoConstraint,
     VideoMaxConcurrentTracks,
 };
@@ -162,10 +161,7 @@ impl ParticipantInner {
             "max concurrent video tracks",
             set_video_max_concurrent_tracks(driver, settings.video_max_concurrent_tracks).await,
         );
-        self.log_failure(
-            "transport mode",
-            set_force_webrtc(driver, settings.transport == TransportMode::WebRTC).await,
-        );
+        self.log_failure("transport mode", set_transport(driver, settings.transport).await);
 
         if !settings.audio_enabled {
             self.log_failure("muted microphone", self.toggle_audio_inner().await);
@@ -318,10 +314,8 @@ impl ParticipantInner {
             }
         }
 
-        if let Ok(value) = get_force_webrtc(driver).await {
-            if value {
-                state.transport_mode = TransportMode::WebRTC;
-            }
+        if let Ok(value) = get_transport(driver).await {
+            state.transport_mode = value;
         }
 
         if let Ok(value) = get_video_constraint_publish_webcam(driver).await {

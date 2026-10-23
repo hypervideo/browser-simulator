@@ -28,7 +28,7 @@ use crossterm::event::KeyCode;
 use ratatui::prelude::*;
 use strum::{
     Display,
-    IntoEnumIterator as _,
+    IntoEnumIterator,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -124,7 +124,7 @@ pub struct BrowserStart {
     editing: Option<EditingState>,
     fake_media_builtin_list: Option<ListInput<FakeMediaWithDescriptionItem>>,
     noise_suppression_list: Option<EnumListInput<NoiseSuppression>>,
-    transport_list: Option<EnumListInput<TransportMode>>,
+    transport_list: Option<EnumListInput<OwnOrDefault<TransportMode>>>,
     video_constraint_publish_webcam_list: Option<EnumListInput<OwnOrDefault<VideoConstraint>>>,
     video_constraint_subscribe_list: Option<EnumListInput<OwnOrDefault<VideoConstraint>>>,
     video_max_concurrent_tracks_list: Option<EnumListInput<VideoMaxConcurrentTracksPreset>>,
@@ -132,9 +132,9 @@ pub struct BrowserStart {
     participant_store: ParticipantStore,
 }
 
-/// The values of a video constraint that the start screen lists: hyper.video's default, then each constraint.
-fn video_constraint_settings() -> impl Iterator<Item = OwnOrDefault<VideoConstraint>> {
-    std::iter::once(OwnOrDefault::Default).chain(VideoConstraint::iter().map(OwnOrDefault::Own))
+/// The values that the start screen lists for a setting that takes a `T`: hyper.video's default, then each `T`.
+fn own_or_default_values<T: IntoEnumIterator>() -> impl Iterator<Item = OwnOrDefault<T>> {
+    std::iter::once(OwnOrDefault::Default).chain(T::iter().map(OwnOrDefault::Own))
 }
 
 /// The value after `setting` in the order that Enter cycles through: hyper.video's default, on, off.
@@ -653,7 +653,7 @@ impl Component for BrowserStart {
             BrowserStartAction::StartSelectTransport => {
                 self.transport_list = Some(EnumListInput::new(
                     "Transport protocol to use",
-                    TransportMode::iter(),
+                    own_or_default_values::<TransportMode>(),
                     self.config.transport,
                 ));
                 return Ok(None);
@@ -662,7 +662,7 @@ impl Component for BrowserStart {
             BrowserStartAction::StartSelectVideoConstraintPublishWebcam => {
                 self.video_constraint_publish_webcam_list = Some(EnumListInput::new(
                     "Outgoing webcam video constraint",
-                    video_constraint_settings(),
+                    own_or_default_values::<VideoConstraint>(),
                     self.config.video_constraint_publish_webcam,
                 ));
                 return Ok(None);
@@ -671,7 +671,7 @@ impl Component for BrowserStart {
             BrowserStartAction::StartSelectVideoConstraintSubscribe => {
                 self.video_constraint_subscribe_list = Some(EnumListInput::new(
                     "Incoming video constraint",
-                    video_constraint_settings(),
+                    own_or_default_values::<VideoConstraint>(),
                     self.config.video_constraint_subscribe,
                 ));
                 return Ok(None);

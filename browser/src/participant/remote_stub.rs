@@ -9,6 +9,7 @@ use crate::participant::shared::{
     ParticipantState,
 };
 use client_simulator_config::{
+    TransportMode,
     VideoConstraint,
     VideoMaxConcurrentTracks,
 };
@@ -48,7 +49,7 @@ impl ParticipantDriverSession for RemoteStubSession {
     fn start(&mut self) -> BoxFuture<'_, Result<()>> {
         async move {
             // The stub applies none of hyper.video's settings, so a setting that the participant leaves to hyper.video
-            // reports hyper.video's default, and the track limit no limit.
+            // reports hyper.video's default, WebTransport for the transport, and no limit for the track limit.
             self.state = ParticipantState {
                 username: self.launch_spec.username.clone(),
                 running: true,
@@ -58,7 +59,12 @@ impl ParticipantDriverSession for RemoteStubSession {
                 video_activated: self.launch_spec.settings.video_enabled,
                 auto_gain_control: self.launch_spec.settings.auto_gain_control.own().unwrap_or(true),
                 noise_suppression: self.launch_spec.settings.noise_suppression,
-                transport_mode: self.launch_spec.settings.transport,
+                transport_mode: self
+                    .launch_spec
+                    .settings
+                    .transport
+                    .own()
+                    .unwrap_or(TransportMode::WebTransport),
                 video_constraint_publish_webcam: self
                     .launch_spec
                     .settings

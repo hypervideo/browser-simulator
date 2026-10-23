@@ -130,7 +130,7 @@ The current implementation has two frontend-specific automation layers:
 For Hyper Core parity, the driver needs hooks for:
 
 - join button, leave button, mute button, video button, screen share button, name input selectors, or equivalent control channels; see [`browser/src/participant/local/selectors.rs`](../browser/src/participant/local/selectors.rs) `:1-20`
-- JS getters/setters for noise suppression, blur, camera resolution, and force-WebRTC transport; see [`browser/src/participant/local/commands.rs`](../browser/src/participant/local/commands.rs) `:80-124`
+- JS getters/setters for noise suppression, blur, camera resolution, and transport; see [`browser/src/participant/local/commands.rs`](../browser/src/participant/local/commands.rs) `:80-124`
 - state scraping for mute/video/screenshare button state and advanced media settings; see [`browser/src/participant/local/core.rs`](../browser/src/participant/local/core.rs) `:271-317`
 
 For Hyper Lite parity, the driver needs the join/leave/mute/video/screenshare controls and state scraping, but the advanced settings can remain unsupported no-ops as they are today. See [`browser/src/participant/local/lite.rs`](../browser/src/participant/local/lite.rs) `:119-175`, `:193-223`.
