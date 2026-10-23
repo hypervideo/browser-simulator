@@ -17,6 +17,7 @@ use client_simulator_config::{
     NoiseSuppression,
     TransportMode,
     VideoConstraint,
+    VideoMaxConcurrentTracks,
 };
 use eyre::{
     Context as _,
@@ -266,7 +267,7 @@ impl ParticipantInnerLite {
         Ok(())
     }
 
-    async fn set_video_max_concurrent_tracks_inner(&self, _value: Option<usize>) -> Result<()> {
+    async fn set_video_max_concurrent_tracks_inner(&self, _value: VideoMaxConcurrentTracks) -> Result<()> {
         self.log_unsupported("Video constraint");
         Ok(())
     }
@@ -337,11 +338,19 @@ impl ParticipantInnerLite {
             username: self.context.launch_spec.username.clone(),
             running: true,
             joined,
-            auto_gain_control: self.context.launch_spec.settings.auto_gain_control,
+            // Lite neither applies nor reads volume normalization, so the state reports the configured value, and
+            // hyper.video's default, on, for none.
+            auto_gain_control: self
+                .context
+                .launch_spec
+                .settings
+                .auto_gain_control
+                .own()
+                .unwrap_or(true),
             transport_mode: TransportMode::default(),
             video_constraint_publish_webcam: VideoConstraint::default(),
             video_constraint_subscribe: VideoConstraint::default(),
-            video_max_concurrent_tracks: None,
+            video_max_concurrent_tracks: VideoMaxConcurrentTracks::default(),
             noise_suppression: NoiseSuppression::Disabled,
             muted: !self.context.launch_spec.settings.audio_enabled,
             video_activated: self.context.launch_spec.settings.video_enabled,

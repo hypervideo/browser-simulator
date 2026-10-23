@@ -179,17 +179,19 @@ Headless option names use kebab-case. Participant JSON fields use snake_case.
 | `--audio-enabled true\|false` | `"audio_enabled"` |
 | `--video-enabled true\|false` | `"video_enabled"` |
 | `--screenshare-enabled true\|false` | `"screenshare_enabled"` |
-| `--auto-gain-control true\|false` | `"auto_gain_control"` |
+| `--auto-gain-control true\|false\|default` | `"auto_gain_control"` |
 | `--noise-suppression MODEL` | `"noise_suppression"` |
 | `--transport MODE` | `"transport"` |
 | `--video-constraint-publish-webcam CONSTRAINT` | `"video_constraint_publish_webcam"` |
 | `--video-constraint-subscribe CONSTRAINT` | `"video_constraint_subscribe"` |
 | `--video-max-concurrent-tracks TRACKS` | `"video_max_concurrent_tracks"` |
-| `--blur true\|false` | `"blur"` |
+| `--blur true\|false\|default` | `"blur"` |
 
 Repeat `--participant JSON` to add participants. It has no matching JSON field.
 
-Use a nonnegative integer for `--video-max-concurrent-tracks` or `video_max_concurrent_tracks`. JSON `null` inherits the shared limit. It does not remove that limit.
+Auto gain control, background blur, both video constraints and the track limit default to `default`, which leaves the setting to hyper.video: an admin's value for the session, else hyper.video's default. JSON `null` inherits the shared value instead.
+
+Use a nonnegative integer, `unlimited` or `default` for `--video-max-concurrent-tracks` or `video_max_concurrent_tracks`. hyper.video's default is one track.
 
 ### Accepted Values
 
@@ -207,6 +209,7 @@ Transport:
 
 Video constraint:
 
+- `default`
 - `none`
 - `90p`
 - `144p`
@@ -217,6 +220,7 @@ Video constraint:
 - `1080p`
 - `1440p`
 - `2160p`
+- `4320p`
 
 Noise suppression:
 
