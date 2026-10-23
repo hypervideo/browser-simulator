@@ -498,12 +498,14 @@ impl DeviceFarmSession {
     async fn drain_browser_logs(driver: &WebDriver, participant: &str) -> Result<()> {
         let entries = match Self::fetch_browser_logs(driver, "/se/log").await {
             Ok(entries) => entries,
-            Err(se_log_error) => match Self::fetch_browser_logs(driver, "/log").await {
-                Ok(entries) => entries,
-                Err(legacy_error) => {
-                    bail!("failed to fetch Device Farm browser logs; /se/log: {se_log_error:#}; /log: {legacy_error:#}")
+            Err(se_log_error) => {
+                match Self::fetch_browser_logs(driver, "/log").await {
+                    Ok(entries) => entries,
+                    Err(legacy_error) => {
+                        bail!("failed to fetch Device Farm browser logs; /se/log: {se_log_error:#}; /log: {legacy_error:#}");
+                    }
                 }
-            },
+            }
         };
         emit_webdriver_browser_logs(participant, entries);
         Ok(())
@@ -791,7 +793,7 @@ mod tests {
                 assert!(!self.left.load(Ordering::SeqCst));
                 self.saved.store(true, Ordering::SeqCst);
                 // A failed snapshot must not prevent leaving or closing.
-                eyre::bail!("browser storage unavailable")
+                eyre::bail!("browser storage unavailable");
             }
             .boxed()
         }

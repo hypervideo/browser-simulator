@@ -265,9 +265,7 @@ mod tests {
 
     #[tokio::test]
     async fn normalizes_base_urls_before_building_requests() {
-        let response = concat!(
-            r#"{"ok":true,"limits":{"activeSessions":[],"maxConcurrentSessions":2,"allowedBrowserAcquisitions":1,"timeUntilNextAllowedBrowserAcquisition":0},"docs":{"activeSessions":"active","maxConcurrentSessions":"max","allowedBrowserAcquisitions":"allowed","timeUntilNextAllowedBrowserAcquisition":"wait"}}"#
-        );
+        let response = r#"{"ok":true,"limits":{"activeSessions":[],"maxConcurrentSessions":2,"allowedBrowserAcquisitions":1,"timeUntilNextAllowedBrowserAcquisition":0},"docs":{"activeSessions":"active","maxConcurrentSessions":"max","allowedBrowserAcquisitions":"allowed","timeUntilNextAllowedBrowserAcquisition":"wait"}}"#;
         let (base_url, request_task) = spawn_json_server(200, response).await;
 
         let client = CloudflareWorkerClient::new(&format!("{base_url}///"), Duration::from_secs(5)).unwrap();
@@ -326,9 +324,7 @@ mod tests {
 
     #[tokio::test]
     async fn translates_schema_mismatches_into_rebuild_hints() {
-        let response = concat!(
-            r#"{"ok":true,"sessionId":"cf-session-123","state":{"running":true,"joined":true,"muted":false,"videoActivated":true,"screenshareActivated":false,"noiseSuppression":"future-noise-model","transportMode":"webrtc","videoConstraintPublishWebcam":"none","videoConstraintSubscribe":"none","videoMaxConcurrentTracks":null,"backgroundBlur":false},"log":[]}"#
-        );
+        let response = r#"{"ok":true,"sessionId":"cf-session-123","state":{"running":true,"joined":true,"muted":false,"videoActivated":true,"screenshareActivated":false,"noiseSuppression":"future-noise-model","transportMode":"webrtc","videoConstraintPublishWebcam":"none","videoConstraintSubscribe":"none","videoMaxConcurrentTracks":null,"backgroundBlur":false},"log":[]}"#;
         let (base_url, _request_task) = spawn_json_server(200, response).await;
         let client = CloudflareWorkerClient::new(&base_url, Duration::from_secs(5)).unwrap();
 

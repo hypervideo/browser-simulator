@@ -97,7 +97,7 @@ impl BrowserDriver for ChromiumDriver {
                     return Ok(());
                 }
             }
-            eyre::bail!("Could not click {selector}: the mouse press kept hitting another element")
+            eyre::bail!("Could not click {selector}: the mouse press kept hitting another element");
         }
         .boxed()
     }
