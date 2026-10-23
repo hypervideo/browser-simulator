@@ -133,9 +133,10 @@ impl ParticipantInner {
 
     /// Applies the participant's launch settings, each on its own.
     ///
-    /// A step that fails is logged, and the steps after it still apply. So on a deployment of hyper.video without
-    /// `hyper.settings.client`, where every settings edit fails, the transport and the microphone and camera state
-    /// still apply.
+    /// A step that fails is logged, and the steps after it still apply. On a deployment of hyper.video without
+    /// `hyper.settings.client`, every settings edit fails, the transport's included. Only the microphone, camera and
+    /// screen share steps then apply, because they click the web app's buttons. The participant connects with that
+    /// deployment's default transport.
     async fn apply_all_settings(&self, in_lobby: bool) {
         let settings = &self.context.launch_spec.settings;
         let driver = self.context.driver.as_ref();
