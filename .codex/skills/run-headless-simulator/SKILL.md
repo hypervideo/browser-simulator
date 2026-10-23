@@ -221,21 +221,8 @@ Video constraint:
 Noise suppression:
 
 - `none`
-- `deepfilternet`
-- `rnnoise`
-- `iris-carthy`
-- `krisp-high`
-- `krisp-medium`
-- `krisp-low`
-- `krisp-high-with-bvc`
-- `krisp-medium-with-bvc`
-- `ai-coustics-sparrow-xxs`
-- `ai-coustics-sparrow-xs`
-- `ai-coustics-sparrow-s`
-- `ai-coustics-sparrow-l`
-- `ai-coustics-sparrow-xxs-48khz`
-- `ai-coustics-sparrow-xs-48khz`
-- `ai-coustics-rook-s-48khz`
-- `ai-coustics-rook-l-48khz`
+- `hyper-voice`
+
+Cloudflare participants run with `none` only.
 
 Run `just dev --logging info headless --help` or `hyper-client-simulator headless --help` if a flag fails.

@@ -342,7 +342,7 @@ impl ParticipantInnerLite {
             video_constraint_publish_webcam: VideoConstraint::default(),
             video_constraint_subscribe: VideoConstraint::default(),
             video_max_concurrent_tracks: None,
-            noise_suppression: NoiseSuppression::default(),
+            noise_suppression: NoiseSuppression::Disabled,
             muted: !self.context.launch_spec.settings.audio_enabled,
             video_activated: self.context.launch_spec.settings.video_enabled,
             ..Default::default()

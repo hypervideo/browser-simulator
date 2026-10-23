@@ -269,7 +269,7 @@ async fn cloudflare_runtime_delegates_hyper_core_authentication_to_the_worker() 
                     "videoActivated": true,
                     "screenshareActivated": false,
                     "autoGainControl": true,
-                    "noiseSuppression": "ai-coustics-rook-s-48khz",
+                    "noiseSuppression": "none",
                     "transportMode": "webrtc",
                     "videoConstraintPublishWebcam": "1080p",
                     "videoConstraintSubscribe": "none",
@@ -317,7 +317,7 @@ async fn cloudflare_runtime_delegates_hyper_core_authentication_to_the_worker() 
     assert!(started.joined);
     assert_eq!(
         started.noise_suppression,
-        client_simulator_config::NoiseSuppression::AiCousticsRookS48khz
+        client_simulator_config::NoiseSuppression::Disabled
     );
 
     participant.close().await;
