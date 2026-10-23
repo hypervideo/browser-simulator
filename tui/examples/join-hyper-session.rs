@@ -5,6 +5,7 @@ use client_simulator_browser::{
 };
 use client_simulator_config::{
     Config,
+    OwnOrDefault,
     ParticipantConfig,
 };
 use eyre::Result;
@@ -31,7 +32,7 @@ async fn run(Args { url }: Args) -> Result<()> {
             session_url: url.clone(),
             app_config: Config {
                 headless: false,
-                auto_gain_control: true,
+                auto_gain_control: OwnOrDefault::Own(true),
                 ..Default::default()
             },
         },

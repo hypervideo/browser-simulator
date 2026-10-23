@@ -2,6 +2,7 @@ use client_simulator_config::{
     NoiseSuppression,
     TransportMode,
     VideoConstraint,
+    VideoMaxConcurrentTracks,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -32,7 +33,7 @@ pub struct ParticipantState {
     pub transport_mode: TransportMode,
     pub video_constraint_publish_webcam: VideoConstraint,
     pub video_constraint_subscribe: VideoConstraint,
-    pub video_max_concurrent_tracks: Option<usize>,
+    pub video_max_concurrent_tracks: VideoMaxConcurrentTracks,
     pub background_blur: bool,
     pub screenshare_activated: bool,
 }
