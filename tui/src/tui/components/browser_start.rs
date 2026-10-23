@@ -17,7 +17,6 @@ use client_simulator_browser::participant::ParticipantStore;
 use client_simulator_config::{
     Config,
     NoiseSuppression,
-    OwnOrDefault,
     ParticipantBackendKind,
     TransportMode,
     VideoConstraint,
@@ -68,9 +67,7 @@ impl SelectedField {
             SelectedField::Mute => " Mute audio? <enter> to toggle. ",
             SelectedField::VideoDisable => " Enable video? <enter> to toggle. ",
             SelectedField::ScreenshareDisable => " Enable screenshare? <enter> to toggle. ",
-            SelectedField::AutoGainControl => {
-                " Automatically adjust volume? <enter> to cycle through hyper.video's default, on and off. "
-            }
+            SelectedField::AutoGainControl => " Automatically adjust volume? <enter> to toggle. ",
             SelectedField::NoiseSuppression => " Enable noise suppression? <enter> to select noise suppression model. ",
             SelectedField::Transport => " Select transport protocol. <enter> to select. ",
             SelectedField::VideoConstraintPublishWebcam => {
@@ -80,9 +77,7 @@ impl SelectedField {
             SelectedField::VideoMaxConcurrentTracks => {
                 " Select max concurrent webcam tracks. <enter> to select. "
             }
-            SelectedField::BackgroundBlur => {
-                " Enable background blur? <enter> to cycle through hyper.video's default, on and off. "
-            }
+            SelectedField::BackgroundBlur => " Enable background blur? <enter> to toggle. ",
             SelectedField::Headless => " Run the browser in headless mode? When disabled, will show a browser window with which you can interact. <enter> to toggle. ",
             SelectedField::Backend => " Select the participant backend. <enter> to select, <del> to reset. ",
             SelectedField::StartBrowser => " Start a new browser session and join a hyper.video session. <enter> to start. ",
@@ -125,25 +120,11 @@ pub struct BrowserStart {
     fake_media_builtin_list: Option<ListInput<FakeMediaWithDescriptionItem>>,
     noise_suppression_list: Option<EnumListInput<NoiseSuppression>>,
     transport_list: Option<EnumListInput<TransportMode>>,
-    video_constraint_publish_webcam_list: Option<EnumListInput<OwnOrDefault<VideoConstraint>>>,
-    video_constraint_subscribe_list: Option<EnumListInput<OwnOrDefault<VideoConstraint>>>,
+    video_constraint_publish_webcam_list: Option<EnumListInput<VideoConstraint>>,
+    video_constraint_subscribe_list: Option<EnumListInput<VideoConstraint>>,
     video_max_concurrent_tracks_list: Option<EnumListInput<VideoMaxConcurrentTracksPreset>>,
     backend_list: Option<EnumListInput<ParticipantBackendKind>>,
     participant_store: ParticipantStore,
-}
-
-/// The values of a video constraint that the start screen lists: hyper.video's default, then each constraint.
-fn video_constraint_settings() -> impl Iterator<Item = OwnOrDefault<VideoConstraint>> {
-    std::iter::once(OwnOrDefault::Default).chain(VideoConstraint::iter().map(OwnOrDefault::Own))
-}
-
-/// The value after `setting` in the order that Enter cycles through: hyper.video's default, on, off.
-const fn cycle(setting: OwnOrDefault<bool>) -> OwnOrDefault<bool> {
-    match setting {
-        OwnOrDefault::Default => OwnOrDefault::Own(true),
-        OwnOrDefault::Own(true) => OwnOrDefault::Own(false),
-        OwnOrDefault::Own(false) => OwnOrDefault::Default,
-    }
 }
 
 fn participant_backend_options() -> impl Iterator<Item = ParticipantBackendKind> {
@@ -368,7 +349,7 @@ impl Component for BrowserStart {
                 KeyCode::Enter => {
                     match list.finish() {
                         Ok(value) => {
-                            self.config.video_max_concurrent_tracks = value.to_setting();
+                            self.config.video_max_concurrent_tracks = value.to_option();
                         }
                         Err(err) => {
                             error!(?err, "Failed to parse");
@@ -662,7 +643,7 @@ impl Component for BrowserStart {
             BrowserStartAction::StartSelectVideoConstraintPublishWebcam => {
                 self.video_constraint_publish_webcam_list = Some(EnumListInput::new(
                     "Outgoing webcam video constraint",
-                    video_constraint_settings(),
+                    VideoConstraint::iter(),
                     self.config.video_constraint_publish_webcam,
                 ));
                 return Ok(None);
@@ -671,7 +652,7 @@ impl Component for BrowserStart {
             BrowserStartAction::StartSelectVideoConstraintSubscribe => {
                 self.video_constraint_subscribe_list = Some(EnumListInput::new(
                     "Incoming video constraint",
-                    video_constraint_settings(),
+                    VideoConstraint::iter(),
                     self.config.video_constraint_subscribe,
                 ));
                 return Ok(None);
@@ -681,7 +662,7 @@ impl Component for BrowserStart {
                 self.video_max_concurrent_tracks_list = Some(EnumListInput::new(
                     "Max concurrent webcam tracks",
                     VideoMaxConcurrentTracksPreset::iter(),
-                    VideoMaxConcurrentTracksPreset::from_setting(self.config.video_max_concurrent_tracks),
+                    VideoMaxConcurrentTracksPreset::from_option(self.config.video_max_concurrent_tracks),
                 ));
                 return Ok(None);
             }
@@ -719,10 +700,10 @@ impl Component for BrowserStart {
                         self.config.screenshare_enabled = !self.config.screenshare_enabled;
                     }
                     SelectedField::AutoGainControl => {
-                        self.config.auto_gain_control = cycle(self.config.auto_gain_control);
+                        self.config.auto_gain_control = !self.config.auto_gain_control;
                     }
                     SelectedField::BackgroundBlur => {
-                        self.config.blur = cycle(self.config.blur);
+                        self.config.blur = !self.config.blur;
                     }
                     SelectedField::Headless => {
                         self.config.headless = !self.config.headless;
@@ -877,7 +858,7 @@ impl Component for BrowserStart {
         current_row_index += 1;
 
         // --- Auto gain control ---
-        let widget = widgets::label_and_bool_setting(
+        let widget = widgets::label_and_bool(
             form_labels[current_row_index],
             self.config.auto_gain_control,
             max_length,
@@ -935,7 +916,11 @@ impl Component for BrowserStart {
         current_row_index += 1;
 
         // --- Max concurrent video tracks ---
-        let max_tracks = self.config.video_max_concurrent_tracks.to_string();
+        let max_tracks = self
+            .config
+            .video_max_concurrent_tracks
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unlimited".to_string());
         let widget = widgets::label_and_text(
             form_labels[current_row_index],
             &max_tracks,
@@ -947,7 +932,7 @@ impl Component for BrowserStart {
         current_row_index += 1;
 
         // --- Background blur ---
-        let widget = widgets::label_and_bool_setting(
+        let widget = widgets::label_and_bool(
             form_labels[current_row_index],
             self.config.blur,
             max_length,

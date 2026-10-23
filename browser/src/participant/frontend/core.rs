@@ -31,10 +31,8 @@ use super::{
 use crate::auth::BorrowedCredentials;
 use client_simulator_config::{
     NoiseSuppression,
-    OwnOrDefault,
     TransportMode,
     VideoConstraint,
-    VideoMaxConcurrentTracks,
 };
 use eyre::{
     Context as _,
@@ -111,7 +109,12 @@ impl ParticipantInner {
             .wait_for(classic::JOIN_BUTTON, Duration::from_secs(30))
             .await?;
 
-        self.apply_all_settings(true).await;
+        if let Err(err) = self.apply_all_settings(true).await {
+            error!(
+                participant = %self.participant_name(),
+                "Failed to apply settings before joining: {err}"
+            );
+        }
 
         self.context
             .driver
@@ -132,59 +135,45 @@ impl ParticipantInner {
         Ok(())
     }
 
-    /// Applies the participant's launch settings, each on its own.
-    ///
-    /// A step that fails is logged, and the steps after it still apply. So on a deployment of hyper.video without
-    /// `hyper.settings.client`, where every settings edit fails, the transport and the microphone and camera state
-    /// still apply.
-    async fn apply_all_settings(&self, in_lobby: bool) {
+    async fn apply_all_settings(&self, in_lobby: bool) -> Result<()> {
         let settings = &self.context.launch_spec.settings;
         let driver = self.context.driver.as_ref();
 
-        self.log_failure(
-            "auto gain control",
-            set_auto_gain_control(driver, settings.auto_gain_control).await,
-        );
-        self.log_failure(
-            "noise suppression",
-            set_noise_suppression(driver, settings.noise_suppression).await,
-        );
-        self.log_failure("background blur", set_background_blur(driver, settings.blur).await);
-        self.log_failure(
-            "outgoing webcam video constraint",
-            set_video_constraint_publish_webcam(driver, settings.video_constraint_publish_webcam).await,
-        );
-        self.log_failure(
-            "incoming video constraint",
-            set_video_constraint_subscribe(driver, settings.video_constraint_subscribe).await,
-        );
-        self.log_failure(
-            "max concurrent video tracks",
-            set_video_max_concurrent_tracks(driver, settings.video_max_concurrent_tracks).await,
-        );
-        self.log_failure(
-            "transport mode",
-            set_force_webrtc(driver, settings.transport == TransportMode::WebRTC).await,
-        );
+        set_auto_gain_control(driver, settings.auto_gain_control)
+            .await
+            .context("failed to set auto gain control")?;
+        set_noise_suppression(driver, settings.noise_suppression)
+            .await
+            .context("failed to set noise suppression")?;
+        set_background_blur(driver, settings.blur)
+            .await
+            .context("failed to set background blur")?;
+        set_video_constraint_publish_webcam(driver, settings.video_constraint_publish_webcam)
+            .await
+            .context("failed to set outgoing webcam video constraint")?;
+        set_video_constraint_subscribe(driver, settings.video_constraint_subscribe)
+            .await
+            .context("failed to set incoming video constraint")?;
+        set_video_max_concurrent_tracks(driver, settings.video_max_concurrent_tracks)
+            .await
+            .context("failed to set max concurrent video tracks")?;
+        set_force_webrtc(driver, settings.transport == TransportMode::WebRTC)
+            .await
+            .context("failed to set transport mode")?;
 
         if !settings.audio_enabled {
-            self.log_failure("muted microphone", self.toggle_audio_inner().await);
+            self.toggle_audio_inner().await?;
         }
 
         if !settings.video_enabled {
-            self.log_failure("disabled camera", self.toggle_video_inner().await);
+            self.toggle_video_inner().await?;
         }
 
         if !in_lobby && settings.screenshare_enabled {
-            self.log_failure("screen share", self.toggle_screen_share_inner().await);
+            self.toggle_screen_share_inner().await?;
         }
-    }
 
-    /// Logs that the launch setting `setting` failed to apply.
-    fn log_failure(&self, setting: &str, result: Result<()>) {
-        if let Err(err) = result {
-            error!(participant = %self.participant_name(), "Failed to apply {setting}: {err:#}");
-        }
+        Ok(())
     }
 
     async fn leave_session(&mut self) -> Result<()> {
@@ -234,21 +223,21 @@ impl ParticipantInner {
 
     async fn set_video_constraint_publish_webcam_inner(&self, value: VideoConstraint) -> Result<()> {
         info!(participant = %self.participant_name(), "Changing outgoing webcam video constraint to {value}");
-        set_video_constraint_publish_webcam(self.context.driver.as_ref(), OwnOrDefault::Own(value))
+        set_video_constraint_publish_webcam(self.context.driver.as_ref(), value)
             .await
             .context("Failed to set outgoing webcam video constraint")
     }
 
     async fn set_video_constraint_subscribe_inner(&self, value: VideoConstraint) -> Result<()> {
         info!(participant = %self.participant_name(), "Changing incoming video constraint to {value}");
-        set_video_constraint_subscribe(self.context.driver.as_ref(), OwnOrDefault::Own(value))
+        set_video_constraint_subscribe(self.context.driver.as_ref(), value)
             .await
             .context("Failed to set incoming video constraint")
     }
 
-    async fn set_video_max_concurrent_tracks_inner(&self, value: VideoMaxConcurrentTracks) -> Result<()> {
-        info!(participant = %self.participant_name(), %value, "Changing max concurrent video tracks");
-        set_video_max_concurrent_tracks(self.context.driver.as_ref(), OwnOrDefault::Own(value))
+    async fn set_video_max_concurrent_tracks_inner(&self, value: Option<usize>) -> Result<()> {
+        info!(participant = %self.participant_name(), ?value, "Changing max concurrent video tracks");
+        set_video_max_concurrent_tracks(self.context.driver.as_ref(), value)
             .await
             .context("Failed to set max concurrent video tracks")
     }
@@ -267,7 +256,7 @@ impl ParticipantInner {
     async fn toggle_auto_gain_control_inner(&self) -> Result<()> {
         let driver = self.context.driver.as_ref();
         let auto_gain_control = get_auto_gain_control(driver).await?;
-        set_auto_gain_control(driver, OwnOrDefault::Own(!auto_gain_control))
+        set_auto_gain_control(driver, !auto_gain_control)
             .await
             .context("Failed to set auto gain control")?;
         Ok(())
@@ -276,7 +265,7 @@ impl ParticipantInner {
     async fn toggle_background_blur_inner(&self) -> Result<()> {
         let driver = self.context.driver.as_ref();
         let background_blur = get_background_blur(driver).await?;
-        set_background_blur(driver, OwnOrDefault::Own(!background_blur))
+        set_background_blur(driver, !background_blur)
             .await
             .context("Failed to set background blur")?;
         Ok(())

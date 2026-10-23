@@ -6,12 +6,10 @@ use client_simulator_browser::participant::{
 use client_simulator_config::{
     Config,
     NoiseSuppression,
-    OwnOrDefault,
     ParticipantBackendKind,
     TransportMode,
     TuiArgs,
     VideoConstraint,
-    VideoMaxConcurrentTracks,
 };
 use eyre::{
     Context as _,
@@ -51,9 +49,8 @@ pub struct HeadlessArgs {
     #[clap(long = "screenshare-enabled", value_parser = clap::builder::BoolishValueParser::new())]
     pub screenshare_enabled: Option<bool>,
 
-    /// Volume normalization: true, false, or default to leave it to hyper.video.
-    #[clap(long = "auto-gain-control", value_name = "ON")]
-    pub auto_gain_control: Option<OwnOrDefault<bool>>,
+    #[clap(long = "auto-gain-control", value_parser = clap::builder::BoolishValueParser::new())]
+    pub auto_gain_control: Option<bool>,
 
     /// Noise suppression model: none or hyper-voice. Cloudflare participants always run with none.
     #[clap(long = "noise-suppression", value_name = "MODEL")]
@@ -62,21 +59,17 @@ pub struct HeadlessArgs {
     #[clap(long, value_name = "MODE")]
     pub transport: Option<TransportMode>,
 
-    /// Outgoing webcam resolution limit, such as 720p, none for no limit, or default to leave it to hyper.video.
     #[clap(long = "video-constraint-publish-webcam", value_name = "CONSTRAINT")]
-    pub video_constraint_publish_webcam: Option<OwnOrDefault<VideoConstraint>>,
+    pub video_constraint_publish_webcam: Option<VideoConstraint>,
 
-    /// Incoming video resolution limit, with the values of --video-constraint-publish-webcam.
     #[clap(long = "video-constraint-subscribe", value_name = "CONSTRAINT")]
-    pub video_constraint_subscribe: Option<OwnOrDefault<VideoConstraint>>,
+    pub video_constraint_subscribe: Option<VideoConstraint>,
 
-    /// Video track limit: a number of tracks, unlimited, or default to leave it to hyper.video.
     #[clap(long = "video-max-concurrent-tracks", value_name = "TRACKS")]
-    pub video_max_concurrent_tracks: Option<OwnOrDefault<VideoMaxConcurrentTracks>>,
+    pub video_max_concurrent_tracks: Option<usize>,
 
-    /// Background blur: true, false, or default to leave it to hyper.video.
-    #[clap(long, value_name = "ON")]
-    pub blur: Option<OwnOrDefault<bool>>,
+    #[clap(long, value_parser = clap::builder::BoolishValueParser::new())]
+    pub blur: Option<bool>,
 
     #[clap(long = "participant", value_name = "JSON")]
     pub participants: Vec<String>,
@@ -92,13 +85,13 @@ struct ParticipantOverride {
     audio_enabled: Option<bool>,
     video_enabled: Option<bool>,
     screenshare_enabled: Option<bool>,
-    auto_gain_control: Option<OwnOrDefault<bool>>,
+    auto_gain_control: Option<bool>,
     noise_suppression: Option<NoiseSuppression>,
     transport: Option<TransportMode>,
-    video_constraint_publish_webcam: Option<OwnOrDefault<VideoConstraint>>,
-    video_constraint_subscribe: Option<OwnOrDefault<VideoConstraint>>,
-    video_max_concurrent_tracks: Option<OwnOrDefault<VideoMaxConcurrentTracks>>,
-    blur: Option<OwnOrDefault<bool>>,
+    video_constraint_publish_webcam: Option<VideoConstraint>,
+    video_constraint_subscribe: Option<VideoConstraint>,
+    video_max_concurrent_tracks: Option<usize>,
+    blur: Option<bool>,
 }
 
 pub async fn run(args: HeadlessArgs, filter: EnvFilter) -> Result<i32> {
@@ -170,7 +163,7 @@ fn apply_cli_overrides(config: &mut Config, args: &HeadlessArgs) {
         config.video_constraint_subscribe = value;
     }
     if let Some(value) = args.video_max_concurrent_tracks {
-        config.video_max_concurrent_tracks = value;
+        config.video_max_concurrent_tracks = Some(value);
     }
     if let Some(blur) = args.blur {
         config.blur = blur;
@@ -215,7 +208,7 @@ fn apply_participant_override(mut config: Config, override_: ParticipantOverride
         config.video_constraint_subscribe = value;
     }
     if let Some(value) = override_.video_max_concurrent_tracks {
-        config.video_max_concurrent_tracks = value;
+        config.video_max_concurrent_tracks = Some(value);
     }
     if let Some(blur) = override_.blur {
         config.blur = blur;
@@ -442,52 +435,10 @@ mod tests {
         ]);
         let args = cli.args;
 
-        assert_eq!(
-            args.video_constraint_publish_webcam,
-            Some(OwnOrDefault::Own(VideoConstraint::P480))
-        );
-        assert_eq!(
-            args.video_constraint_subscribe,
-            Some(OwnOrDefault::Own(VideoConstraint::P720))
-        );
-        assert_eq!(
-            args.video_max_concurrent_tracks,
-            Some(OwnOrDefault::Own(VideoMaxConcurrentTracks::Limit(2)))
-        );
+        assert_eq!(args.video_constraint_publish_webcam, Some(VideoConstraint::P480));
+        assert_eq!(args.video_constraint_subscribe, Some(VideoConstraint::P720));
+        assert_eq!(args.video_max_concurrent_tracks, Some(2));
         assert_eq!(args.participants.len(), 1);
-    }
-
-    #[test]
-    fn cli_parsing_accepts_unlimited_video_max_concurrent_tracks() {
-        let cli = TestHeadlessCli::parse_from(["headless", "--video-max-concurrent-tracks", "unlimited"]);
-
-        assert_eq!(
-            cli.args.video_max_concurrent_tracks,
-            Some(OwnOrDefault::Own(VideoMaxConcurrentTracks::Unlimited))
-        );
-    }
-
-    /// The CLI and `--participant` JSON take `default` to leave a setting to hyper.video, next to explicit values.
-    #[test]
-    fn cli_and_participant_json_take_default() {
-        let cli = TestHeadlessCli::parse_from(["headless", "--blur", "default", "--auto-gain-control", "false"]);
-
-        assert_eq!(cli.args.blur, Some(OwnOrDefault::Default));
-        assert_eq!(cli.args.auto_gain_control, Some(OwnOrDefault::Own(false)));
-
-        let global_config = Config {
-            video_constraint_subscribe: OwnOrDefault::Own(VideoConstraint::P720),
-            ..Default::default()
-        };
-
-        let configs = build_participant_configs(
-            global_config,
-            &[r#"{"video_constraint_subscribe":"default","blur":true}"#.to_string()],
-        )
-        .expect("participant configs");
-
-        assert_eq!(configs[0].video_constraint_subscribe, OwnOrDefault::Default);
-        assert_eq!(configs[0].blur, OwnOrDefault::Own(true));
     }
 
     #[test]
@@ -533,9 +484,9 @@ mod tests {
     #[test]
     fn participant_json_overrides_video_constraints_and_treats_null_tracks_as_absent() {
         let global_config = Config {
-            video_constraint_publish_webcam: OwnOrDefault::Own(VideoConstraint::P720),
-            video_constraint_subscribe: OwnOrDefault::Own(VideoConstraint::P720),
-            video_max_concurrent_tracks: OwnOrDefault::Own(VideoMaxConcurrentTracks::Limit(2)),
+            video_constraint_publish_webcam: VideoConstraint::P720,
+            video_constraint_subscribe: VideoConstraint::P720,
+            video_max_concurrent_tracks: Some(2),
             ..Default::default()
         };
 
@@ -546,45 +497,23 @@ mod tests {
         .expect("participant configs");
 
         // publish overridden; subscribe omitted -> inherits global;
-        // max tracks null is treated as absent -> inherits global 2.
-        assert_eq!(
-            configs[0].video_constraint_publish_webcam,
-            OwnOrDefault::Own(VideoConstraint::P360)
-        );
-        assert_eq!(
-            configs[0].video_constraint_subscribe,
-            OwnOrDefault::Own(VideoConstraint::P720)
-        );
-        assert_eq!(
-            configs[0].video_max_concurrent_tracks,
-            OwnOrDefault::Own(VideoMaxConcurrentTracks::Limit(2))
-        );
+        // max tracks null is treated as absent -> inherits global Some(2).
+        assert_eq!(configs[0].video_constraint_publish_webcam, VideoConstraint::P360);
+        assert_eq!(configs[0].video_constraint_subscribe, VideoConstraint::P720);
+        assert_eq!(configs[0].video_max_concurrent_tracks, Some(2));
     }
 
     #[test]
-    fn participant_json_tracks_override_global() {
+    fn participant_json_numeric_tracks_override_global() {
         let global_config = Config {
-            video_max_concurrent_tracks: OwnOrDefault::Default,
+            video_max_concurrent_tracks: None,
             ..Default::default()
         };
 
-        let configs = build_participant_configs(
-            global_config,
-            &[
-                r#"{"video_max_concurrent_tracks":3}"#.to_string(),
-                r#"{"video_max_concurrent_tracks":"unlimited"}"#.to_string(),
-            ],
-        )
-        .expect("participant configs");
+        let configs = build_participant_configs(global_config, &[r#"{"video_max_concurrent_tracks":3}"#.to_string()])
+            .expect("participant configs");
 
-        assert_eq!(
-            configs[0].video_max_concurrent_tracks,
-            OwnOrDefault::Own(VideoMaxConcurrentTracks::Limit(3))
-        );
-        assert_eq!(
-            configs[1].video_max_concurrent_tracks,
-            OwnOrDefault::Own(VideoMaxConcurrentTracks::Unlimited)
-        );
+        assert_eq!(configs[0].video_max_concurrent_tracks, Some(3));
     }
 
     #[test]

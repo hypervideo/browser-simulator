@@ -1,7 +1,6 @@
 use client_simulator_config::{
     NoiseSuppression,
     VideoConstraint,
-    VideoMaxConcurrentTracks,
 };
 use std::fmt;
 
@@ -17,7 +16,7 @@ pub enum ParticipantMessage {
     SetNoiseSuppression(NoiseSuppression),
     SetVideoConstraintPublishWebcam(VideoConstraint),
     SetVideoConstraintSubscribe(VideoConstraint),
-    SetVideoMaxConcurrentTracks(VideoMaxConcurrentTracks),
+    SetVideoMaxConcurrentTracks(Option<usize>),
     ToggleBackgroundBlur,
 }
 

@@ -457,7 +457,7 @@ impl Participant {
         self.send_message(ParticipantMessage::SetVideoConstraintSubscribe(value));
     }
 
-    pub fn set_video_max_concurrent_tracks(&self, value: client_simulator_config::VideoMaxConcurrentTracks) {
+    pub fn set_video_max_concurrent_tracks(&self, value: Option<usize>) {
         self.send_message(ParticipantMessage::SetVideoMaxConcurrentTracks(value));
     }
 

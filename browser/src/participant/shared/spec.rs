@@ -1,10 +1,8 @@
 use client_simulator_config::{
     NoiseSuppression,
-    OwnOrDefault,
     ParticipantConfig,
     TransportMode,
     VideoConstraint,
-    VideoMaxConcurrentTracks,
 };
 use url::Url;
 
@@ -30,13 +28,13 @@ pub(in crate::participant) struct ParticipantSettings {
     pub(in crate::participant) audio_enabled: bool,
     pub(in crate::participant) video_enabled: bool,
     pub(in crate::participant) screenshare_enabled: bool,
-    pub(in crate::participant) auto_gain_control: OwnOrDefault<bool>,
+    pub(in crate::participant) auto_gain_control: bool,
     pub(in crate::participant) noise_suppression: NoiseSuppression,
     pub(in crate::participant) transport: TransportMode,
-    pub(in crate::participant) video_constraint_publish_webcam: OwnOrDefault<VideoConstraint>,
-    pub(in crate::participant) video_constraint_subscribe: OwnOrDefault<VideoConstraint>,
-    pub(in crate::participant) video_max_concurrent_tracks: OwnOrDefault<VideoMaxConcurrentTracks>,
-    pub(in crate::participant) blur: OwnOrDefault<bool>,
+    pub(in crate::participant) video_constraint_publish_webcam: VideoConstraint,
+    pub(in crate::participant) video_constraint_subscribe: VideoConstraint,
+    pub(in crate::participant) video_max_concurrent_tracks: Option<usize>,
+    pub(in crate::participant) blur: bool,
 }
 
 impl From<&ParticipantConfig> for ParticipantSettings {
@@ -93,11 +91,9 @@ mod tests {
     use client_simulator_config::{
         Config,
         NoiseSuppression,
-        OwnOrDefault,
         ParticipantConfig,
         TransportMode,
         VideoConstraint,
-        VideoMaxConcurrentTracks,
     };
     use url::Url;
 
@@ -110,13 +106,13 @@ mod tests {
                 audio_enabled: true,
                 video_enabled: false,
                 screenshare_enabled: true,
-                auto_gain_control: OwnOrDefault::Own(true),
+                auto_gain_control: true,
                 noise_suppression: NoiseSuppression::HyperVoice,
                 transport: TransportMode::WebRTC,
-                video_constraint_publish_webcam: OwnOrDefault::Own(VideoConstraint::P480),
-                video_constraint_subscribe: OwnOrDefault::Default,
-                video_max_concurrent_tracks: OwnOrDefault::Own(VideoMaxConcurrentTracks::Limit(2)),
-                blur: OwnOrDefault::Own(true),
+                video_constraint_publish_webcam: VideoConstraint::P480,
+                video_constraint_subscribe: VideoConstraint::P720,
+                video_max_concurrent_tracks: Some(2),
+                blur: true,
                 ..Default::default()
             },
         };
@@ -129,18 +125,12 @@ mod tests {
         assert!(spec.settings.audio_enabled);
         assert!(!spec.settings.video_enabled);
         assert!(spec.settings.screenshare_enabled);
-        assert_eq!(spec.settings.auto_gain_control, OwnOrDefault::Own(true));
+        assert!(spec.settings.auto_gain_control);
         assert_eq!(spec.settings.noise_suppression, NoiseSuppression::HyperVoice);
         assert_eq!(spec.settings.transport, TransportMode::WebRTC);
-        assert_eq!(
-            spec.settings.video_constraint_publish_webcam,
-            OwnOrDefault::Own(VideoConstraint::P480)
-        );
-        assert_eq!(spec.settings.video_constraint_subscribe, OwnOrDefault::Default);
-        assert_eq!(
-            spec.settings.video_max_concurrent_tracks,
-            OwnOrDefault::Own(VideoMaxConcurrentTracks::Limit(2))
-        );
-        assert_eq!(spec.settings.blur, OwnOrDefault::Own(true));
+        assert_eq!(spec.settings.video_constraint_publish_webcam, VideoConstraint::P480);
+        assert_eq!(spec.settings.video_constraint_subscribe, VideoConstraint::P720);
+        assert_eq!(spec.settings.video_max_concurrent_tracks, Some(2));
+        assert!(spec.settings.blur);
     }
 }

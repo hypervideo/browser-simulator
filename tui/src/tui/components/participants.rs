@@ -16,7 +16,6 @@ use client_simulator_browser::participant::ParticipantStore;
 use client_simulator_config::{
     Config,
     NoiseSuppression,
-    OwnOrDefault,
     VideoConstraint,
     VideoMaxConcurrentTracksPreset,
 };
@@ -275,15 +274,10 @@ impl Component for Participants {
                                     ));
                                 }
                                 VideoSetting::MaxTracks => {
-                                    // A running participant's list offers explicit limits only, and preselects the
-                                    // limit that applies.
                                     self.video_max_concurrent_tracks_list = Some(EnumListInput::new(
                                         "Max concurrent webcam tracks",
-                                        VideoMaxConcurrentTracksPreset::iter()
-                                            .filter(|preset| *preset != VideoMaxConcurrentTracksPreset::Default),
-                                        VideoMaxConcurrentTracksPreset::from_setting(OwnOrDefault::Own(
-                                            state.video_max_concurrent_tracks,
-                                        )),
+                                        VideoMaxConcurrentTracksPreset::iter(),
+                                        VideoMaxConcurrentTracksPreset::from_option(state.video_max_concurrent_tracks),
                                     ));
                                 }
                             }
@@ -350,9 +344,9 @@ impl Component for Participants {
         if let Some(mut list) = self.video_max_concurrent_tracks_list.take() {
             match key.code {
                 KeyCode::Enter => {
-                    if let Some(value) = list.finish().ok().and_then(|preset| preset.to_setting().own()) {
+                    if let Ok(value) = list.finish() {
                         if let Some(participant) = self.selected.as_ref().and_then(|s| self.participants.get(s)) {
-                            participant.set_video_max_concurrent_tracks(value);
+                            participant.set_video_max_concurrent_tracks(value.to_option());
                         }
                     }
                     return Ok(Some(Action::Activate(ActivateAction::Participants)));
@@ -525,7 +519,6 @@ impl Component for Participants {
                 let subscribe = state.video_constraint_subscribe.to_string();
                 let tracks = state
                     .video_max_concurrent_tracks
-                    .limit()
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "∞".to_string());
                 let video_constraints = format!("out:{publish} in:{subscribe} t:{tracks}");

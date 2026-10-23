@@ -8,10 +8,6 @@ use crate::participant::shared::{
     ParticipantLaunchSpec,
     ParticipantState,
 };
-use client_simulator_config::{
-    VideoConstraint,
-    VideoMaxConcurrentTracks,
-};
 use eyre::Result;
 use futures::{
     future::BoxFuture,
@@ -47,8 +43,6 @@ impl ParticipantDriverSession for RemoteStubSession {
 
     fn start(&mut self) -> BoxFuture<'_, Result<()>> {
         async move {
-            // The stub applies none of hyper.video's settings, so a setting that the participant leaves to hyper.video
-            // reports hyper.video's default, and the track limit no limit.
             self.state = ParticipantState {
                 username: self.launch_spec.username.clone(),
                 running: true,
@@ -56,28 +50,13 @@ impl ParticipantDriverSession for RemoteStubSession {
                 joined: true,
                 muted: !self.launch_spec.settings.audio_enabled,
                 video_activated: self.launch_spec.settings.video_enabled,
-                auto_gain_control: self.launch_spec.settings.auto_gain_control.own().unwrap_or(true),
+                auto_gain_control: self.launch_spec.settings.auto_gain_control,
                 noise_suppression: self.launch_spec.settings.noise_suppression,
                 transport_mode: self.launch_spec.settings.transport,
-                video_constraint_publish_webcam: self
-                    .launch_spec
-                    .settings
-                    .video_constraint_publish_webcam
-                    .own()
-                    .unwrap_or(VideoConstraint::None),
-                video_constraint_subscribe: self
-                    .launch_spec
-                    .settings
-                    .video_constraint_subscribe
-                    .own()
-                    .unwrap_or(VideoConstraint::None),
-                video_max_concurrent_tracks: self
-                    .launch_spec
-                    .settings
-                    .video_max_concurrent_tracks
-                    .own()
-                    .unwrap_or(VideoMaxConcurrentTracks::Unlimited),
-                background_blur: self.launch_spec.settings.blur.own().unwrap_or(false),
+                video_constraint_publish_webcam: self.launch_spec.settings.video_constraint_publish_webcam,
+                video_constraint_subscribe: self.launch_spec.settings.video_constraint_subscribe,
+                video_max_concurrent_tracks: self.launch_spec.settings.video_max_concurrent_tracks,
+                background_blur: self.launch_spec.settings.blur,
                 screenshare_activated: self.launch_spec.settings.screenshare_enabled,
             };
 
@@ -135,7 +114,7 @@ impl ParticipantDriverSession for RemoteStubSession {
                     self.state.video_max_concurrent_tracks = value;
                     self.log_message(
                         "debug",
-                        format!("remote stub set max concurrent video tracks to {value}"),
+                        format!("remote stub set max concurrent video tracks to {value:?}"),
                     );
                 }
                 ParticipantMessage::ToggleBackgroundBlur => {
