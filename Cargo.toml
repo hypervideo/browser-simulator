@@ -47,7 +47,9 @@ signal-hook = "0.4.4"
 strip-ansi-escapes = "0.2.1"
 strum = { version = "0.28.0", features = ["derive"] }
 temp-dir = "0.2.0"
-thirtyfour = "0.36"
+# The default features minus `manager`, which downloads and unpacks local WebDriver binaries. thirtyfour only drives the
+# remote Device Farm sessions, and local clients run Chrome through chromiumoxide.
+thirtyfour = { version = "0.36", default-features = false, features = ["component", "reqwest", "rustls"] }
 tokio = { version = "1.52.2", default-features = false, features = ["macros", "rt-multi-thread", "sync", "signal"] }
 tokio-util = "0.7.18"
 tracing = "0.1.44"
